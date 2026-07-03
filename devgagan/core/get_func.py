@@ -833,6 +833,10 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                 await edit.edit("🔇 **Video is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
                 return
+            if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith(('.html', '.htm')) and not await is_enabled(sender, "html"):
+                await edit.edit("🔇 **HTML Files are turned OFF in settings. Skipping...**")
+                await edit.delete(2)
+                return
             if msg.document and not await is_enabled(sender, "document"):
                 await edit.edit("🔇 **Document is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
@@ -977,6 +981,8 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         # Upload media
         # await edit.edit("**Checking file...**")
         if msg.video and not await is_enabled(sender, "video"):
+            return
+        if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith(('.html', '.htm')) and not await is_enabled(sender, "html"):
             return
         if msg.document and not await is_enabled(sender, "document"):
             return
@@ -1193,6 +1199,8 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
         elif msg.media:
             if msg.video and not await is_enabled(sender, "video"):
                 return True
+            if msg.document and msg.document.file_name and msg.document.file_name.lower().endswith(('.html', '.htm')) and not await is_enabled(sender, "html"):
+                return True
             if msg.document and not await is_enabled(sender, "document"):
                 return True
             if msg.photo and not await is_enabled(sender, "photo"):
@@ -1241,7 +1249,14 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             topic_id = extract_message_topic_id(msg)
 
         if msg.media:
-            result = await send_media_message(app, target_chat_id, msg, final_caption, topic_id, sender)
+            try:
+                result = await send_media_message(client_to_use, target_chat_id, msg, final_caption, topic_id, sender)
+            except Exception as e:
+                if client_to_use != app:
+                    print(f"Fast copy with client_to_use failed: {e}. Retrying with app...")
+                    result = await send_media_message(app, target_chat_id, msg, final_caption, topic_id, sender)
+                else:
+                    raise e
         elif msg.text:
             cleaned_text = clean_text_message(msg.text.markdown if hasattr(msg.text, 'markdown') else str(msg.text), sender)
             if not cleaned_text.strip():
@@ -1470,6 +1485,7 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
     if is_keep_original:
         if not original_caption:
             original_caption = ""
+        original_caption = re.sub(r'@\w+', '', original_caption)
         if original_caption.strip():
             return f"{original_caption}\n\n> **{branding_tag}**"
         elif filename:

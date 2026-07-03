@@ -42,6 +42,8 @@ def get_filters_keyboard(user_data):
          InlineKeyboardButton(f"{toggle_text('document')} Document", callback_data="toggle_document")],
         [InlineKeyboardButton(f"{toggle_text('audio')} Audio", callback_data="toggle_audio"),
          InlineKeyboardButton(f"{toggle_text('photo')} Photo", callback_data="toggle_photo")],
+        [InlineKeyboardButton(f"{toggle_text('sticker')} Sticker", callback_data="toggle_sticker"),
+         InlineKeyboardButton(f"{toggle_text('html')} HTML", callback_data="toggle_html")],
         [InlineKeyboardButton(f"{toggle_text('text')} Text", callback_data="toggle_text"),
          InlineKeyboardButton("🔄 Reset", callback_data="reset_filters")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
@@ -436,7 +438,9 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
 
 # ────── Filter & Reset Actions ──────
 
-@app.on_callback_query(filters.regex(r"^toggle_(video|document|audio|photo|text)$"))
+@app.on_message(filters.private)
+# Note: we need to adjust regex below to support sticker and html
+@app.on_callback_query(filters.regex(r"^toggle_(video|document|audio|photo|text|sticker|html)$"))
 async def toggle_filter(client, callback_query: CallbackQuery):
     media_type = callback_query.data.split("_")[1]
     user_id = callback_query.from_user.id
@@ -456,7 +460,7 @@ async def reset_actions_callback(client, callback_query: CallbackQuery):
     data = callback_query.data
     
     if data == "reset_filters":
-        for media_type in ["video", "document", "audio", "photo", "text"]:
+        for media_type in ["video", "document", "audio", "photo", "text", "sticker", "html"]:
             await db.set_filter(user_id, media_type, True)
         await callback_query.answer("Filters reset")
     elif data == "reset_all_settings":
