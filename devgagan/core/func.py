@@ -25,7 +25,10 @@ import asyncio, subprocess, re, os, time
 from PIL import Image
 async def chk_user(message, user_id):
     user = await premium_users()
-    if user_id in user or user_id in OWNER_ID:
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    user_strings = [str(u) for u in user]
+    owner_strings = [str(o) for o in owner_list]
+    if str(user_id) in owner_strings or str(user_id) in user_strings:
         return 0
     else:
         return 1
