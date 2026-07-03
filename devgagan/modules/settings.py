@@ -89,7 +89,14 @@ def get_cleaning_keyboard(user_data):
 def get_tag_keyboard(user_id):
     current_tag = get_user_branding_tag(user_id)
     custom_tags = get_user_custom_tags(user_id)
+    
+    from devgagan.core.get_func import load_user_data
+    is_keep_original = load_user_data(user_id, "keep_original_caption", False)
+    
     buttons = []
+    
+    # 0) Raw Caption Toggle
+    buttons.append([InlineKeyboardButton(f"🔗 Raw Caption (No Clean): {'ON ✅' if is_keep_original else 'OFF ❌'}", callback_data="toggle_keep_original")])
     
     # 1) Stolen Happiness Preset
     is_sh_selected = (current_tag == "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝")
@@ -360,12 +367,19 @@ async def cleaning_actions_callback(client, callback_query: CallbackQuery):
 
 # ────── Branding Tag Actions ──────
 
-@app.on_callback_query(filters.regex(r"^(set_tag_stolenhappiness|set_tag_add|set_tag_select_\d+|set_tag_delete_\d+)$"))
+@app.on_callback_query(filters.regex(r"^(set_tag_stolenhappiness|set_tag_add|set_tag_select_\d+|set_tag_delete_\d+|toggle_keep_original)$"))
 async def tag_actions_callback(client, callback_query: CallbackQuery):
     data = callback_query.data
     user_id = callback_query.from_user.id
 
-    if data == "set_tag_stolenhappiness":
+    if data == "toggle_keep_original":
+        from devgagan.core.get_func import save_user_data, load_user_data
+        current_val = load_user_data(user_id, "keep_original_caption", False)
+        new_val = not current_val
+        save_user_data(user_id, "keep_original_caption", new_val)
+        await callback_query.answer(f"Raw Caption Mode: {'Enabled' if new_val else 'Disabled'}")
+
+    elif data == "set_tag_stolenhappiness":
         set_user_branding_tag(user_id, "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝")
         await callback_query.answer("Branding tag set to Stolen Happiness Preset")
         

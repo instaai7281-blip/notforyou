@@ -201,6 +201,11 @@ def clean_text_message(text, sender=None):
     """Clean text messages - remove links, mentions, hashtags, unwanted branding."""
     if not text:
         return text
+        
+    if sender:
+        is_keep_original = load_user_data(sender, "keep_original_caption", False)
+        if is_keep_original:
+            return text
     
     # Remove zero-width characters
     text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
@@ -1459,9 +1464,21 @@ def replace_fancy_and_emoji(text: str) -> str:
     return ''.join(result)
 
 def format_caption(original_caption, sender, custom_caption, filename=None):
+    branding_tag = get_user_branding_tag(sender)
+    is_keep_original = load_user_data(sender, "keep_original_caption", False)
+
+    if is_keep_original:
+        if not original_caption:
+            original_caption = ""
+        if original_caption.strip():
+            return f"{original_caption}\n\n> **{branding_tag}**"
+        elif filename:
+            return f"> **{filename}**\n\n> **{branding_tag}**"
+        else:
+            return f"> **{branding_tag}**"
+
     delete_words = load_delete_words(sender)
     replacements = load_replacement_words(sender)
-    branding_tag = get_user_branding_tag(sender)
 
     if not original_caption:
         original_caption = ""
