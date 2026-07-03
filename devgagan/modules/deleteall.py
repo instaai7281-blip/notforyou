@@ -70,30 +70,52 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
     # Confirm delete all
     await callback_query.message.edit_text("⌛ **Initializing mass deletion...**")
     
+    userbot = None
     try:
-        current_id = callback_query.message.id
-        # Generate message IDs from current_id - 1 down to 1 (limit to 10,000 messages)
-        start_id = current_id - 1
-        end_id = max(1, current_id - 10000)
+        # Inline import to avoid circular dependency issues
+        from devgagan.modules.main import initialize_userbot
+        userbot = await initialize_userbot(user_id)
         
-        message_ids = list(range(start_id, end_id - 1, -1))
+        client_to_use = userbot if userbot else app
+        client_name = "Userbot" if userbot else "Bot"
+        
+        await callback_query.message.edit_text(f"🔍 **Scanning messages using {client_name}...**")
+        
+        # Collect message IDs
+        message_ids = []
+        async for msg in client_to_use.get_chat_history(chat_id, limit=10000):
+            if msg.id != callback_query.message.id:
+                message_ids.append(msg.id)
+                
+        if not message_ids:
+            await callback_query.message.edit_text("📋 **No messages found to delete.**")
+            if userbot:
+                await userbot.stop()
+            return
+            
+        await callback_query.message.edit_text(f"🗑️ **Deleting {len(message_ids)} messages using {client_name}...**")
+        
         deleted_count = 0
         batch_size = 100
-        
-        # Sequentially delete the IDs in batches
         for k in range(0, len(message_ids), batch_size):
             batch = message_ids[k:k+batch_size]
             try:
-                await app.delete_messages(chat_id, batch)
+                await client_to_use.delete_messages(chat_id, batch)
                 deleted_count += len(batch)
-                await asyncio.sleep(0.3)  # Simple delay to avoid rate limits
+                await asyncio.sleep(0.5)  # Simple delay to avoid rate limits
             except Exception:
                 pass
-
+                
         await callback_query.message.edit_text(
-            "✅ **Success!**\n\n"
-            "Wiped the chat/channel history successfully."
+            f"✅ **Success!**\n\n"
+            f"Wiped `{deleted_count}` messages successfully using {client_name}."
         )
         
     except Exception as e:
         await callback_query.message.edit_text(f"❌ **An error occurred during deletion:** `{str(e)}`")
+    finally:
+        if userbot:
+            try:
+                await userbot.stop()
+            except Exception:
+                pass
