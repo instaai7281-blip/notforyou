@@ -205,6 +205,10 @@ def clean_text_message(text, sender=None):
     if sender:
         is_keep_original = load_user_data(sender, "keep_original_caption", False)
         if is_keep_original:
+            text = re.sub(r'tg://\S+', '', text)
+            text = re.sub(r'\[[^\]]*\]\((?:tg://|https?://(?:t\.me|telegram\.(?:me|dog)))\S*\)', '', text)
+            text = re.sub(r'[*_`\[\](]*@\w+[*_`\])(]*', '', text)
+            text = re.sub(r'@\w+', '', text)
             return text
     
     # Remove zero-width characters
@@ -213,10 +217,15 @@ def clean_text_message(text, sender=None):
     # Remove HTML tags
     text = re.sub(r'<[^>]+>', '', text)
     
+    # Remove tg:// links and markdown links to telegram domains first
+    text = re.sub(r'tg://\S+', '', text)
+    text = re.sub(r'\[[^\]]*\]\((?:tg://|https?://(?:t\.me|telegram\.(?:me|dog)))\S*\)', '', text)
+    
     # Remove ALL URLs
     text = re.sub(r'https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+', '', text)
     
-    # Remove @mentions
+    # Remove @mentions (with formatting)
+    text = re.sub(r'[*_`\[\](]*@\w+[*_`\])(]*', '', text)
     text = re.sub(r'@\w+', '', text)
     
     # Remove hashtags
@@ -1485,6 +1494,10 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
     if is_keep_original:
         if not original_caption:
             original_caption = ""
+        # Remove @mentions and telegram/tg links even in raw mode
+        original_caption = re.sub(r'tg://\S+', '', original_caption)
+        original_caption = re.sub(r'\[[^\]]*\]\((?:tg://|https?://(?:t\.me|telegram\.(?:me|dog)))\S*\)', '', original_caption)
+        original_caption = re.sub(r'[*_`\[\](]*@\w+[*_`\])(]*', '', original_caption)
         original_caption = re.sub(r'@\w+', '', original_caption)
         if original_caption.strip():
             return f"{original_caption}\n\n> **{branding_tag}**"
@@ -1532,11 +1545,16 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
     # Remove all hashtags
     original_caption = re.sub(r'#\S+', '', original_caption)
 
-    # Remove ALL @mentions
-    original_caption = re.sub(r'@\w+', '', original_caption)
+    # Remove tg:// links and markdown links to telegram domains first
+    original_caption = re.sub(r'tg://\S+', '', original_caption)
+    original_caption = re.sub(r'\[[^\]]*\]\((?:tg://|https?://(?:t\.me|telegram\.(?:me|dog)))\S*\)', '', original_caption)
 
     # Remove ALL URLs
     original_caption = re.sub(r'https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+', '', original_caption)
+
+    # Remove ALL @mentions (with formatting)
+    original_caption = re.sub(r'[*_`\[\](]*@\w+[*_`\])(]*', '', original_caption)
+    original_caption = re.sub(r'@\w+', '', original_caption)
 
     # Replace "Extracted/Downloaded/Uploaded By" patterns
     original_caption = re.sub(
