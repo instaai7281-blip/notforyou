@@ -26,17 +26,8 @@ from pyrogram.enums import ChatType
 
 @app.on_message(filters.private, group=-1)
 async def restrict_unauthorized_users(client, message: Message):
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    from devgagan.core.func import chk_user
-    if await chk_user(message, user_id) == 1:
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💬 Contact Owner", url="https://t.me/CHOSEN_ONEx_bot")
-        ]])
-        await message.reply_text(
-            "❌ **Access Denied:** Please contact @CHOSEN_ONEx_bot to get access.",
-            reply_markup=markup
-        )
-        message.stop_propagation()
+    # Authorization checks disabled - all commands and features unlocked for all users!
+    return
 
 
 @app.on_message(filters.command("set"))

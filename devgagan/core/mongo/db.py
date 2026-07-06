@@ -143,4 +143,68 @@ async def load_all_thumbnails(thumbnail_dir):
         print(f"[INFO] Restored {count} custom thumbnails from MongoDB.")
     except Exception as e:
         print(f"[ERROR] Failed to restore custom thumbnails: {e}")
- 
+
+# Collection for global configuration settings
+config_db = mongo.user_data.global_config
+
+async def get_broadcast_config():
+    doc = await config_db.find_one({"_id": "scheduled_broadcast"})
+    if not doc:
+        default = {
+            "_id": "scheduled_broadcast",
+            "message": "Hello! This is a scheduled broadcast message.",
+            "interval_mins": 60,
+            "is_active": False,
+            "last_run": None
+        }
+        await config_db.insert_one(default)
+        return default
+    return doc
+
+async def update_broadcast_config(update_dict):
+    await config_db.update_one(
+        {"_id": "scheduled_broadcast"},
+        {"$set": update_dict},
+        upsert=True
+    )
+
+# Collection for tracking auto-deletion of sent broadcast messages
+deletions_db = mongo.user_data.scheduled_broadcast_deletions
+
+async def add_broadcast_deletion(chat_id, message_id, delete_at):
+    await deletions_db.insert_one({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "delete_at": delete_at
+    })
+
+async def get_pending_deletions():
+    cursor = deletions_db.find({})
+    deletions = []
+    async for doc in cursor:
+        deletions.append(doc)
+    return deletions
+
+async def remove_broadcast_deletion(doc_id):
+    await deletions_db.delete_one({"_id": doc_id})
+
+# Collection for tracking chats (groups/channels) where the bot is active
+joined_chats_db = mongo.user_data.joined_chats
+
+async def add_joined_chat(chat_id, title):
+    import datetime
+    await joined_chats_db.update_one(
+        {"_id": chat_id},
+        {"$set": {"title": title, "updated_at": datetime.datetime.now()}},
+        upsert=True
+    )
+
+async def get_all_joined_chats():
+    cursor = joined_chats_db.find({})
+    chats = []
+    async for doc in cursor:
+        chats.append({"chat_id": doc["_id"], "title": doc.get("title", "Unknown")})
+    return chats
+
+async def remove_joined_chat(chat_id):
+    await joined_chats_db.delete_one({"_id": chat_id})

@@ -16,7 +16,9 @@ async def delete_all_cmd(_, message):
     # 2. Check authorization of the sender (if sent by a user)
     if message.from_user:
         user_id = message.from_user.id
-        if user_id not in OWNER_ID:
+        owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+        is_owner = str(user_id) in [str(o) for o in owner_list]
+        if not is_owner:
             # Check if they are admin in this chat
             try:
                 member = await app.get_chat_member(chat_id, user_id)
@@ -49,7 +51,9 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
     
     # Verify clicker's rights (Must be chat owner, chat administrator, or global bot owner)
     authorized = False
-    if user_id in OWNER_ID:
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    is_owner = str(user_id) in [str(o) for o in owner_list]
+    if is_owner:
         authorized = True
     else:
         try:

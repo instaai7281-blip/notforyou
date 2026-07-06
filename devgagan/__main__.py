@@ -72,6 +72,107 @@ async def daily_plans_broadcast_task():
     except Exception as e:
         print(f"[DAILY BROADCAST] Error: {e}")
 
+async def schedule_broadcast_task():
+    import datetime
+    from devgagan import app
+    from devgagan.core.mongo.db import (
+        get_broadcast_config, 
+        update_broadcast_config, 
+        get_pending_deletions, 
+        remove_broadcast_deletion
+    )
+    
+    while True:
+        try:
+            # 1) Handle pending auto-deletions first
+            pending_deletions = await get_pending_deletions()
+            now = datetime.datetime.now()
+            for deletion in pending_deletions:
+                delete_at = deletion.get("delete_at")
+                if delete_at and now >= delete_at:
+                    chat_id = deletion["chat_id"]
+                    message_id = deletion["message_id"]
+                    # Try to delete using userbot if available, fallback to bot app
+                    from devgagan.core.get_func import get_client
+                    pro_client = get_client()
+                    client_to_use = pro_client if pro_client else app
+                    try:
+                        await client_to_use.delete_messages(chat_id, message_id)
+                    except Exception:
+                        if client_to_use != app:
+                            try:
+                                await app.delete_messages(chat_id, message_id)
+                            except Exception as de:
+                                print(f"[AUTO BROADCAST DELETION] Fallback delete failed: {de}")
+                    await remove_broadcast_deletion(deletion["_id"])
+                    await asyncio.sleep(0.1)
+
+            # 2) Handle sending new broadcasts
+            config = await get_broadcast_config()
+            if config and config.get("is_active"):
+                interval_mins = config.get("interval_mins", 60)
+                last_run = config.get("last_run")
+                max_runs = config.get("max_runs", 0)
+                run_count = config.get("run_count", 0)
+                
+                if max_runs > 0 and run_count >= max_runs:
+                    await update_broadcast_config({"is_active": False})
+                    print(f"[AUTO BROADCAST] Max run limit ({max_runs}) reached. Deactivating.")
+                    continue
+                
+                should_run = False
+                if not last_run:
+                    should_run = True
+                else:
+                    elapsed = (now - last_run).total_seconds() / 60.0
+                    if elapsed >= interval_mins:
+                        should_run = True
+                        
+                if should_run:
+                    new_run_count = run_count + 1
+                    await update_broadcast_config({
+                        "last_run": now,
+                        "run_count": new_run_count
+                    })
+                    
+                    if max_runs > 0 and new_run_count >= max_runs:
+                        await update_broadcast_config({"is_active": False})
+                        
+                    message_text = config.get("message")
+                    if message_text:
+                        from devgagan.modules.broadcast import send_auto_broadcast_to_all
+                        sent, failed = await send_auto_broadcast_to_all()
+                        print(f"[AUTO BROADCAST] Sent run #{new_run_count}. Sent: {sent}, Failed: {failed}.")
+                        
+                        # Send real-time progress/stats report to the owner(s)
+                        from config import OWNER_ID
+                        owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+                        for owner in owner_list:
+                            try:
+                                limit_str = f"{max_runs}" if max_runs > 0 else "Unlimited"
+                                delete_after_mins = config.get("delete_after_mins", 0)
+                                del_str = f"Yes (after {delete_after_mins} mins)" if delete_after_mins > 0 else "No (keep posts)"
+                                next_run = now + datetime.timedelta(minutes=interval_mins)
+                                next_run_str = next_run.strftime("%d-%m-%Y %I:%M:%S %p")
+                                
+                                report = (
+                                    f"📢 **[AUTO BROADCAST REPORT]** 📢\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                                    f"📊 **Runs Tracker:** `{new_run_count}` / `{limit_str}`\n"
+                                    f"📤 **Delivered to:** `{sent}` chats\n"
+                                    f"⚠️ **Failed/Skipped:** `{failed}` chats\n"
+                                    f"🗑️ **Auto-Delete Enabled:** `{del_str}`\n\n"
+                                    f"⏱️ **Next Scheduled Run:**\n"
+                                    f"📅 `{next_run_str}` (IST)\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                )
+                                await app.send_message(owner, report)
+                            except Exception as oe:
+                                print(f"Failed to send broadcast report to owner {owner}: {oe}")
+        except Exception as e:
+            print(f"[AUTO BROADCAST] Error in scheduler: {e}")
+        await asyncio.sleep(30)
+
 async def schedule_daily_plans_broadcast():
     import datetime
     last_sent_date = None
@@ -128,7 +229,8 @@ License: MIT License
 
     asyncio.create_task(schedule_expiry_check())
     asyncio.create_task(schedule_daily_plans_broadcast())
-    print("Auto removal and daily plans broadcast started ...")
+    asyncio.create_task(schedule_broadcast_task())
+    print("Auto removal, daily plans, and scheduled broadcasts started ...")
     await idle()
     print("Bot stopped...")
 
