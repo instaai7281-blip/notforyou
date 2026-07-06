@@ -1,207 +1,366 @@
-from devgagan import sex
-from telethon import events, functions
+import asyncio
+from pyrogram import filters
+from devgagan import app, sex
+from telethon import functions
 from telethon.tl.types import InputRichMessageMarkdown
 
-MATHS_TEXT = """
-# 📐 મુખ્ય સંદર્ભ મેનૂ (Master Reference)
+SIGNATURE = "\n\n---\n🛡️ **Owner:** [𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝](https://t.me/CHOSEN_ONEx_bot)"
 
-ફોર્મ્યુલા ડેટાબેઝમાં આપનું સ્વાગત છે. તમને જોઈતો વિભાગ પસંદ કરો:
-- `/algebra` — ઉચ્ચ ગણિત (બીજગણિત, કલનશાસ્ત્ર અને સંભાવના)
-- `/arithmetic` — અંકગણિત (ટકાવારી, ગુણોત્તર અને ચક્રવૃદ્ધિ વ્યાજ)
-- `/geometry` — ભૂમિતિ (દ્વિ-પરિમાણીય અને ત્રિ-પરિમાણીય આકારોના કોષ્ટકો)
-- `/cheatsheet` — વિજ્ઞાન ચીટ શીટ (ભૌતિકશાસ્ત્ર અને રસાયણશાસ્ત્ર)
-- `/timetable` — સાપ્તાહિક અભ્યાસ પત્રક (ટાઇમટેબલ)
-- `/checklist` — સિલેબસ પ્રગતિ ચેકલિસ્ટ
+START_TEXT = r"""
+# 🎓 Ultimate Study & Math Reference Bot
 
----
-સંકલનકર્તા: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
+Welcome! I'm formatted using **Telegram's Rich Markdown** (tables, LaTeX math, checklists, quotes, code).
 
-ALGEBRA_TEXT = """
-# 📐 ઉચ્ચ ગણિતના સૂત્રો (Higher Maths)
+Here is the directory of available reference commands:
 
-## ૧. બીજગણિત અને શ્રેણી (Algebra & Series)
-* **દ્વિઘાત સમીકરણનું સૂત્ર (Quadratic Formula):**
-  જો $ax^2 + bx + c = 0$ હોય, તો તેના ઉકેલ:
-  $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
-* **દ્વિપદી પ્રમેય (Binomial Theorem):**
-  $$(a+b)^n = \\sum_{k=0}^{n} \\binom{n}{k} a^{n-k} b^k$$
+- `/math` - Higher Mathematics (Algebra, Calculus, Statistics)
+- `/arithmetic` - Percentage, Ratio, Interest & Proportion formulas
+- `/geometry` - Area, Perimeter, and Volume of 2D/3D shapes
+- `/cheatsheet` - Formula quick reference table (Physics, Chemistry & Math)
+- `/reasoning` - Direction & Distance Reasoning Tricks & Formulas
+- `/coding` - Coding-Decoding Reasoning logic & Shift Diagram
+- `/chart` - Alphabet A-Z Position Reference Grid Chart
 
-## ૨. કલનશાસ્ત્ર (Calculus)
-* **વિકલનની વ્યાખ્યા (Derivative):**
-  $$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$
-* **ખંડશઃ સંકલન (Integration by Parts):**
-  $$\\int u\\,dv = uv - \\int v\\,du$$
+*Use these commands to quickly pull up study materials anytime!*""" + SIGNATURE
 
-## ૩. સંભાવના અને આંકડાશાસ્ત્ર (Probability & Stats)
-* **બેઝનું પ્રમેય (Bayes' Theorem):**
-  $$P(A|B) = \\frac{P(B|A) \\cdot P(A)}{P(B)}$$
-* **પ્રમાણિત વિચલન (Standard Deviation - Sample):**
-  $$s = \\sqrt{\\frac{\\sum_{i=1}^{n} (x_i - \\bar{x})^2}{n-1}}$$
+MATH_TEXT = r"""
+# 📐 Higher Mathematics Formulas
 
----
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
+## 1. Algebra & Series
 
-ARITHMETIC_TEXT = """
-# 🧮 અંકગણિત: ટકાવારી અને ગુણોત્તર
+* **Quadratic Formula:**
+  If $ax^2 + bx + c = 0$, then:
+  
+  $$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$
+  
+* **Binomial Theorem:**
+  $$(a+b)^n = \sum_{k=0}^{n} \binom{n}{k} a^{n-k} b^k$$
 
-## ૧. ટકાવારી (Percentages)
-* **ટકાવારીમાં ફેરફાર (Percentage Change):**
-  $$\\text{ટકાવારી ફેરફાર} = \\frac{\\text{નવી કિંમત} - \\text{જૂની કિંમત}}{\\text{જૂની કિંમત}} \\times 100\\%$$
-* **નફો અને નુકસાન ટકાવારી (Profit & Loss %):**
-  $$\\text{નફો \\%} = \\frac{\\text{વેચાણ કિંમત} - \\text{ખરીદ કિંમત}}{\\text{ખરીદ કિંમત}} \\times 100\\%$$
-  $$\\text{નુકસાન \\%} = \\frac{\\text{ખરીદ કિંમત} - \\text{વેચાણ કિંમત}}{\\text{ખરીદ કિંમત}} \\times 100\\%$$
-* **સાદું વ્યાજ (Simple Interest):**
-  $$I = \\frac{P \\cdot r \\cdot t}{100}$$
-* **ચક્રવૃદ્ધિ વ્યાજ (Compound Interest):**
-  $$A = P \\left(1 + \\frac{r}{n}\\right)^{nt}$$
-  _જ્યાં $A$ કુલ વ્યાજમુદ્દલ છે, $P$ મુદ્દલ છે, $r$ વ્યાજનો દર છે, $n$ વ્યાજ ગણતરીની ચક્રવૃદ્ધિ આવૃત્તિ છે, અને $t$ સમય છે._
+## 2. Calculus
 
-## ૨. ગુણોત્તર અને પ્રમાણ (Ratio & Proportion)
-* **ગુણોત્તર સમાનતા (Proportion):**
-  $$\\frac{a}{b} = \\frac{c}{d} \\implies a \\cdot d = b \\cdot c$$
-* **મિશ્ર ગુણોત્તર (Compound Ratio):**
-  $$a:b \\text{ અને } c:d \\text{ નો મિશ્ર ગુણોત્તર } (a \\cdot c) : (b \\cdot d) \\text{ થાય.}$$
-* **સમપ્રમાણ (Direct Variation):** $y = k \\cdot x$ (જ્યાં $k$ અચળાંક છે)
-* **વ્યસ્તપ્રમાણ (Inverse Variation):** $y = \\frac{k}{x} \\implies x \\cdot y = k$
+* **Derivative Definition:**
+  $$f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}$$
+  
+* **Integration by Parts:**
+  $$\int u\,dv = uv - \int v\,du$$
 
----
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
+## 3. Probability & Statistics
 
-GEOMETRY_TEXT = """
-# 📏 ભૂમિતિ: ક્ષેત્રફળ અને ઘનફળ
+* **Bayes' Theorem:**
+  $$P(A|B) = \frac{P(B|A) \cdot P(A)}{P(B)}$$
+  
+* **Standard Deviation (Sample):**
+  $$s = \sqrt{\frac{\sum_{i=1}^{n} (x_i - \bar{x})^2}{n-1}}$$""" + SIGNATURE
 
-## ૧. દ્વિ-પરિમાણીય આકારો (2D Shapes)
-* **વર્તુળ (Circle):**
-  * $\\text{ક્ષેત્રફળ} = \\pi r^2$
-  * $\\text{પરિધ} = 2\\pi r$
-* **ત્રિકોણ (Triangle):**
-  * $\\text{ક્ષેત્રફળ} = \\frac{1}{2} \\cdot \\text{પાયો} \\cdot \\text{વેધ}$
-  * $\\text{હેરોનનું સૂત્ર:} \\sqrt{s(s-a)(s-b)(s-c)} \\quad \\text{જ્યાં } s = \\frac{a+b+c}{2}$
+ARITHMETIC_TEXT = r"""
+# 🧮 Arithmetic: Percentages & Ratios
 
-## ૨. ત્રિ-પરિમાણીય આકારો (3D Solids)
-| આકાર | ઘનફળનું સૂત્ર (Volume) | કુલ પૃષ્ઠફળ (Surface Area) |
+## 1. Percentages
+
+* **Percentage Change:**
+  $$\text{Percentage Change} = \frac{\text{New Value} - \text{Old Value}}{\text{Old Value}} \times 100\%$$
+  
+* **Profit & Loss Percentage:**
+  $$\text{Profit \%} = \frac{\text{Selling Price} - \text{Cost Price}}{\text{Cost Price}} \times 100\%$$
+  
+  $$\text{Loss \%} = \frac{\text{Cost Price} - \text{Selling Price}}{\text{Cost Price}} \times 100\%$$
+  
+* **Simple Interest:**
+  $$I = \frac{P \cdot r \cdot t}{100}$$
+  
+* **Compound Interest:**
+  $$A = P \left(1 + \frac{r}{n}\right)^{nt}$$
+  
+  _Where $A$ is the total amount, $P$ is principal, $r$ is interest rate, $n$ is compounding frequency, and $t$ is time._
+
+## 2. Ratio & Proportion
+
+* **Ratio Equality (Proportion):**
+  $$\frac{a}{b} = \frac{c}{d} \implies a \cdot d = b \cdot c$$
+  
+* **Compound Ratio:**
+  $$\text{Compound of } a:b \text{ and } c:d \text{ is } (a \cdot c) : (b \cdot d)$$
+  
+* **Direct Variation:** $y = k \cdot x$ (where $k$ is constant)
+
+* **Inverse Variation:** $y = \frac{k}{x} \implies x \cdot y = k$""" + SIGNATURE
+
+GEOMETRY_TEXT = r"""
+# 📏 Geometry: Area & Volume Formulas
+
+## 1. 2D Shapes (Area & Perimeter)
+
+* **Circle:**
+  * $\text{Area} = \pi r^2$
+  * $\text{Circumference} = 2\pi r$
+  
+* **Triangle:**
+  * $\text{Area} = \frac{1}{2} \cdot b \cdot h$
+  * $\text{Heron's Formula:} \sqrt{s(s-a)(s-b)(s-c)} \quad \text{where } s = \frac{a+b+c}{2}$
+
+## 2. 3D Solids (Volume & Surface Area)
+
+| Solid Shape | Volume Formula | Total Surface Area (TSA) |
 |:---|:---:|:---|
-| **ગોળો (Sphere)** | $V = \\frac{4}{3}\\pi r^3$ | $A = 4\\pi r^2$ |
-| **નળાકાર (Cylinder)** | $V = \\pi r^2 h$ | $A = 2\\pi r(r + h)$ |
-| **શંકુ (Cone)** | $V = \\frac{1}{3}\\pi r^2 h$ | $A = \\pi r(r + \\sqrt{r^2 + h^2})$ |
-| **સમઘન (Cube)** | $V = a^3$ | $A = 6a^2$ |
-| **લંબઘન (Prism)** | $V = l \\cdot w \\cdot h$ | $A = 2(lw + lh + wh)$ |
+| **Sphere** | $V = \frac{4}{3}\pi r^3$ | $A = 4\pi r^2$ |
+| **Cylinder** | $V = \pi r^2 h$ | $A = 2\pi r(r + h)$ |
+| **Cone** | $V = \frac{1}{3}\pi r^2 h$ | $A = \pi r(r + \sqrt{r^2 + h^2})$ |
+| **Cube** | $V = a^3$ | $A = 6a^2$ |
+| **Rect. Prism** | $V = l \cdot w \cdot h$ | $A = 2(lw + lh + wh)$ |""" + SIGNATURE
 
----
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
+CHEATSHEET_TEXT = r"""
+# 📊 Subject Cheat Sheet
 
-CHEATSHEET_TEXT = """
-# 📊 વિજ્ઞાન ચીટ શીટ (Science Cheat Sheet)
-
-| વિષય | પ્રકરણ / ટોપિક | મુખ્ય સૂત્ર | ટૂંકી સમજૂતી |
+| Subject | Topic | Key Formula | Explanation |
 |:---|:---|:---:|:---|
-| **ભૌતિકશાસ્ત્ર** | ગુરુત્વાકર્ષણ | $F = G \\frac{m_1 m_2}{r^2}$ | સાર્વત્રિક ગુરુત્વાકર્ષણ બળ |
-| **ભૌતિકશાસ્ત્ર** | સાપેક્ષતા | $E = mc^2$ | દળ-ઊર્જા સમતુલ્યતા સૂત્ર |
-| **રસાયણશાસ્ત્ર**| આદર્શ વાયુ | $PV = nRT$ | દબાણ, કદ અને તાપમાન સંબંધ |
-| **રસાયણશાસ્ત્ર**| pH માપક્રમ | $\\text{pH} = -\\log_{10}[\\text{H}^+]$ | એસિડ અને બેઇઝનું માપ |
-| **ગણિત** | યુલર બહુકોણ | $V - E + F = 2$ | શિરોબિંદુ, ધાર અને ફલક સંબંધ |
-| **ગણિત** | યુલર આઇડેન્ટિટી| $e^{i\\pi} + 1 = 0$ | ૫ મુખ્ય ગાણિતિક અચળાંકો |
+| **Physics** | Gravity | $F = G \frac{m_1 m_2}{r^2}$ | Universal Gravitational Force |
+| **Physics** | Einstein | $E = mc^2$ | Mass-energy Equivalence |
+| **Chemistry**| Ideal Gas | $PV = nRT$ | Pressure, Vol, Temp relation |
+| **Chemistry**| pH Value | $\text{pH} = -\log_{10}[\text{H}^+]$ | Acidity/Alkalinity measure |
+| **Math** | Euler Poly | $V - E + F = 2$ | Vertices, Edges, Faces |
+| **Math** | Euler Identity| $e^{i\pi} + 1 = 0$ | Linking 5 major constants |""" + SIGNATURE
+
+REASONING_TEXT = r"""
+# 🧭 Direction & Distance Tricks & Formulas
+
+## 1. The 8 Main Directions
+
+```
+       N (North)
+    NW  │  NE
+      \ │ /
+W ──────┼────── E (East)
+(West) /│\
+      / │ \
+    SW  │  SE
+       S (South)
+```
+
+## 2. Key Rules & Tricks
+
+* **Pythagoras Theorem:** For finding the shortest distance:
+  $$H^2 = B^2 + P^2 \implies H = \sqrt{B^2 + P^2}$$
+  
+  _Where $H$ is the hypotenuse (shortest distance), $B$ is the base, and $P$ is the perpendicular._
+  
+* **Turn Angles:**
+  * Left turn = $90^\circ$ Counter-Clockwise (CCW)
+  * Right turn = $90^\circ$ Clockwise (CW)
+  
+* **Shadow Cases:**
+  * **Sunrise (East):** Shadow is always in the **West**.
+  * **Sunset (West):** Shadow is always in the **East**.
+  * **Noon (12 PM):** No shadow is formed.""" + SIGNATURE
+
+CODING_TEXT = r"""
+# 🔐 Coding-Decoding Reasoning Guide
+
+## ❓ Problem Example
+
+In a certain secret code language:
+> **"STUDY"** is coded as **"VwxgB"**
+
+**How will the word "SMART" be coded in that same language?**
 
 ---
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
 
-TIMETABLE_TEXT = """
-# 📅 સાપ્તાહિક અભ્યાસ પત્રક (Study Timetable)
+## 🗺️ Logic Shift Diagram
 
-| દિવસ | સવારે ૦૯:૦૦ - ૧૨:૦૦ | બપોરે ૧૪:૦૦ - ૧૭:૦૦ | સાંજે ૧૯:૦૦ - ૨૨:૦૦ |
-|:---|:---:|:---:|:---:|
-| **સોમવાર** | ગણિત (બીજગણિત) 📐 | ભૌતિકશાસ્ત્ર (મિકેનિક્સ) ⚛️ | પુનરાવર્તન અને હોમવર્ક 📝 |
-| **મંગળવાર** | રસાયણશાસ્ત્ર (ઓર્ગેનિક) 🧪| અંગ્રેજી સાહિત્ય 📖 | કોડિંગ પ્રેક્ટિસ 💻 |
-| **બુધવાર** | જીવવિજ્ઞાન (જીનેટિક્સ) 🌿 | ઇતિહાસ 🏛️ | મોક ટેસ્ટ પ્રેક્ટિસ ⏱️ |
-| **ગુરુવાર** | ગણિત (કલનશાસ્ત્ર) 📐 | ભૌતિકશાસ્ત્ર (ઓપ્ટિક્સ) ⚛️ | કોડિંગ પ્રેક્ટિસ 💻 |
-| **શુક્રવાર** | રસાયણશાસ્ત્ર (ઇનઓર્ગેનિક) 🧪| પુનરાવર્તન 📝 | પ્રોજેક્ટ વર્ક 🚀 |
-| **શનિવાર** | ફુલ મોક ટેસ્ટ 🏆 | પરિણામ વિશ્લેષણ 📊 | સામાન્ય જ્ઞાન (GK) 🌍 |
-| **રવિવાર** | રજા / આરામ 🏖️ | આવતા અઠવાડિયાનું આયોજન 📅 | પુસ્તક વાંચન 📚 |
+Here is how each letter shifts forward by **+3 positions** in the alphabet:
 
----
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
+```
+Input Word:  S   T   U   D   Y
+             │   │   │   │   │
+Shift Value: +3  +3  +3  +3  +3
+             ▼   ▼   ▼   ▼   ▼
+Coded Word:  V   W   X   G   B
+```
 
-CHECKLIST_TEXT = """
-# 📋 સિલેબસ પ્રગતિ ચેકલિસ્ટ
-
-## ૧. ગણિત (Mathematics)
-- [x] બીજગણિત: દ્વિઘાત સમીકરણો અને દ્વિપદી પ્રમેય
-- [x] કલનશાસ્ત્ર: વિકલનની વ્યાખ્યા અને મૂળભૂત નિયમો
-- [ ] સંકલન: નિયત અને અનિયત સંકલન
-- [ ] આંકડાશાસ્ત્ર: પ્રમાણિત વિચલન અને વિચરણ
-
-## ૨. અંકગણિત (Arithmetic)
-- [x] ગુણોત્તર અને પ્રમાણના નિયમો
-- [x] સાદું અને ચક્રવૃદ્ધિ વ્યાજ
-- [ ] ટકાવારી: નફો, નુકસાન અને વળતર
-
-## ૩. ભૌતિકશાસ્ત્ર (Physics)
-- [x] મિકેનિક્સ: ન્યૂટનના નિયમો અને ઘર્ષણ
-- [ ] ગુરુત્વાકર્ષણ અને ભ્રમણકક્ષા
-- [ ] થર્મોડાયનેમિક્સ અને હીટ ટ્રાન્સફર
+*(Note: For Y + 3, we wrap around: Y ➔ Z ➔ A ➔ B)*
 
 ---
-🛡️ માલિક: **𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝**
-"""
 
-@sex.on(events.NewMessage(pattern="/maths"))
-async def maths_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="મુખ્ય સંદર્ભ મેનૂ",
-        rich_message=InputRichMessageMarkdown(markdown=MATHS_TEXT),
-    ))
+## 💡 Step-by-Step Decoding for "SMART"
 
-@sex.on(events.NewMessage(pattern="/algebra"))
-async def algebra_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="બીજગણિતના સૂત્રો",
-        rich_message=InputRichMessageMarkdown(markdown=ALGEBRA_TEXT),
-    ))
+Applying the exact same **+3 shift** logic to each letter of **"SMART"**:
 
-@sex.on(events.NewMessage(pattern="/arithmetic"))
-async def arithmetic_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="અંકગણિતના સૂત્રો",
-        rich_message=InputRichMessageMarkdown(markdown=ARITHMETIC_TEXT),
-    ))
+| Letter | Shift Logic | Resulting Letter |
+|:---:|:---:|:---:|
+| **S** | S + 3 | **V** |
+| **M** | M + 3 | **P** |
+| **A** | A + 3 | **D** |
+| **R** | R + 3 | **U** |
+| **T** | T + 3 | **W** |
 
-@sex.on(events.NewMessage(pattern="/geometry"))
-async def geometry_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="ભૂમિતિના સૂત્રો",
-        rich_message=InputRichMessageMarkdown(markdown=GEOMETRY_TEXT),
-    ))
+### 📐 Final Coded Answer:
 
-@sex.on(events.NewMessage(pattern="/cheatsheet"))
-async def cheatsheet_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="વિજ્ઞાન ચીટ શીટ",
-        rich_message=InputRichMessageMarkdown(markdown=CHEATSHEET_TEXT),
-    ))
+> **"SMART"** ➔ **"VpdUW"**""" + SIGNATURE
 
-@sex.on(events.NewMessage(pattern="/timetable"))
-async def timetable_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="અભ્યાસ ટાઇમટેબલ",
-        rich_message=InputRichMessageMarkdown(markdown=TIMETABLE_TEXT),
-    ))
+CHART_TEXT = r"""
+# 🔠 Alphabet Position & Opposites Reference Chart
 
-@sex.on(events.NewMessage(pattern="/checklist"))
-async def checklist_handler(e):
-    await sex(functions.messages.SendMessageRequest(
-        peer=await e.get_input_chat(),
-        message="સિલેબસ ચેકલિસ્ટ",
-        rich_message=InputRichMessageMarkdown(markdown=CHECKLIST_TEXT),
-    ))
+### (1) English alphabets Position from left to right :-
+
+| **A** | **B** | **C** | **D** | **E** | **F** | **G** | **H** | **I** | **J** | **K** | **L** | **M** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `1` | `2` | `3` | `4` | `5` | `6` | `7` | `8` | `9` | `10` | `11` | `12` | `13` |
+
+| **N** | **O** | **P** | **Q** | **R** | **S** | **T** | **U** | **V** | **W** | **X** | **Y** | **Z** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `14` | `15` | `16` | `17` | `18` | `19` | `20` | `21` | `22` | `23` | `24` | `25` | `26` |
+
+---
+
+### (2) English alphabets position from Right to left :-
+
+| **Z** | **Y** | **X** | **W** | **V** | **U** | **T** | **S** | **R** | **Q** | **P** | **O** | **N** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `1` | `2` | `3` | `4` | `5` | `6` | `7` | `8` | `9` | `10` | `11` | `12` | `13` |
+
+| **M** | **L** | **K** | **J** | **I** | **H** | **G** | **F** | **E** | **D** | **C** | **B** | **A** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `14` | `15` | `16` | `17` | `18` | `19` | `20` | `21` | `22` | `23` | `24` | `25` | `26` |
+
+---
+
+### (3) Series of opposite English Alphabets :-
+
+| **A** | **B** | **C** | **D** | **E** | **F** | **G** | **H** | **I** | **J** | **K** | **L** | **M** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Z** | **Y** | **X** | **W** | **V** | **U** | **T** | **S** | **R** | **Q** | **P** | **O** | **N** |
+
+| **N** | **O** | **P** | **Q** | **R** | **S** | **T** | **U** | **V** | **W** | **X** | **Y** | **Z** |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **M** | **L** | **K** | **J** | **I** | **H** | **G** | **F** | **E** | **D** | **C** | **B** | **A** |
+
+> **Tip:** Memorizing this chart or writing it down quickly in exams will save you valuable time!""" + SIGNATURE
+
+@app.on_message(filters.command(["math", "maths"]))
+async def maths_menu_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Study Reference Menu",
+            rich_message=InputRichMessageMarkdown(markdown=START_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in maths_menu_handler: {ex}")
+
+@app.on_message(filters.command("algebra"))
+async def algebra_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Mathematics Formulas",
+            rich_message=InputRichMessageMarkdown(markdown=MATH_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in algebra_handler: {ex}")
+
+@app.on_message(filters.command("arithmetic"))
+async def arithmetic_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Arithmetic Formulas",
+            rich_message=InputRichMessageMarkdown(markdown=ARITHMETIC_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in arithmetic_handler: {ex}")
+
+@app.on_message(filters.command("geometry"))
+async def geometry_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Geometry Formulas",
+            rich_message=InputRichMessageMarkdown(markdown=GEOMETRY_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in geometry_handler: {ex}")
+
+@app.on_message(filters.command("cheatsheet"))
+async def cheatsheet_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Cheat Sheet",
+            rich_message=InputRichMessageMarkdown(markdown=CHEATSHEET_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in cheatsheet_handler: {ex}")
+
+@app.on_message(filters.command("reasoning"))
+async def reasoning_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Direction & Distance Reasoning",
+            rich_message=InputRichMessageMarkdown(markdown=REASONING_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in reasoning_handler: {ex}")
+
+@app.on_message(filters.command("coding"))
+async def coding_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Coding-Decoding Guide",
+            rich_message=InputRichMessageMarkdown(markdown=CODING_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in coding_handler: {ex}")
+
+@app.on_message(filters.command("chart"))
+async def chart_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Alphabet Position Reference Chart",
+            rich_message=InputRichMessageMarkdown(markdown=CHART_TEXT),
+        ))
+    except Exception as ex:
+        print(f"Error in chart_handler: {ex}")
+
+@app.on_message(filters.command("myrich"))
+async def myrich_handler(client, message):
+    chat_id = message.chat.id
+    text = ""
+    if message.text:
+        parts = message.text.split(None, 1)
+        if len(parts) > 1:
+            text = parts[1].strip()
+            
+    if not text:
+        help_text = (
+            "💡 **How to use `/myrich`:**\n\n"
+            "Send `/myrich` followed by your markdown text to generate a rich message.\n\n"
+            "**Example:**\n"
+            "```\n"
+            "/myrich # 📅 My Timetable\n"
+            "| Day | Subject |\n"
+            "|:---:|:---:|\n"
+            "| Mon | Physics |\n"
+            "| Tue | Math |\n"
+            "```"
+        )
+        await message.reply_text(help_text)
+        return
+        
+    try:
+        await sex(functions.messages.SendMessageRequest(
+            peer=chat_id,
+            message="Rich Message Preview",
+            rich_message=InputRichMessageMarkdown(markdown=text),
+        ))
+    except Exception as ex:
+        await message.reply_text(f"❌ **Error parsing markdown:** `{str(ex)}`")
