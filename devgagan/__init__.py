@@ -225,14 +225,8 @@ async def restrict_bot():
     except Exception as e:
         print(f"Failed to send startup message: {e}")
 
-    # Keep the event loop running
-    await asyncio.Event().wait()
-
 
 def get_client():
     return random.choice(pro_clients) if pro_clients else None
 
-if __name__ == "__main__":
-    loop.run_until_complete(restrict_bot())
-else:
-    loop.run_until_complete(restrict_bot())
+loop.run_until_complete(restrict_bot())
