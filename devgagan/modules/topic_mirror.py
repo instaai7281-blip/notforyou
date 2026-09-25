@@ -11,6 +11,7 @@ import asyncio
 import random
 from pyrogram import filters, Client, raw, types
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from devgagan import app, get_client, pro_clients
 from config import API_ID, API_HASH, OWNER_ID, LOG_GROUP, THUMBNAIL_DIR
 from devgagan.core.func import chk_user, humanbytes, TimeFormatter
@@ -143,6 +144,87 @@ async def apply_custom_caption(user_id: int, original_caption: str) -> str:
     return caption.strip()
 
 
+async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, max_limit: int = 5000):
+    """
+    Fetches all messages belonging to a topic using multiple strategies:
+    1. Pyrogram get_discussion_replies (topics are reply threads to the topic creation message).
+    2. Raw RPC messages.GetReplies.
+    3. Fallback: get_chat_history scanning for messages matching message_thread_id / reply_to_top_id.
+    """
+    collected_messages = []
+    seen_ids = set()
+
+    # Strategy 1: get_discussion_replies (Standard Telegram Forum Topic mechanism)
+    if topic_id and topic_id != 1:
+        try:
+            async for m in userbot.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
+                if m and m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    collected_messages.append(m)
+        except Exception as disc_err:
+            print(f"[TopicMirror] get_discussion_replies notice for topic {topic_id}: {disc_err}")
+
+    # Strategy 2: Raw RPC GetReplies if empty
+    if not collected_messages and topic_id and topic_id != 1:
+        try:
+            peer = await userbot.resolve_peer(src_chat_id)
+            offset_id = 0
+            while len(collected_messages) < max_limit:
+                res = await userbot.invoke(raw.functions.messages.GetReplies(
+                    peer=peer,
+                    msg_id=topic_id,
+                    offset_id=offset_id,
+                    offset_date=0,
+                    add_offset=0,
+                    limit=100,
+                    max_id=0,
+                    min_id=0,
+                    hash=0
+                ))
+                raw_msgs = getattr(res, "messages", [])
+                if not raw_msgs:
+                    break
+                new_found = 0
+                for rm in raw_msgs:
+                    parsed_m = await types.Message._parse(userbot, rm, {u.id: u for u in getattr(res, "users", [])}, {c.id: c for c in getattr(res, "chats", [])})
+                    if parsed_m and parsed_m.id not in seen_ids:
+                        seen_ids.add(parsed_m.id)
+                        collected_messages.append(parsed_m)
+                        new_found += 1
+                offset_id = raw_msgs[-1].id
+                if new_found == 0:
+                    break
+        except Exception as rpc_err:
+            print(f"[TopicMirror] Raw GetReplies notice for topic {topic_id}: {rpc_err}")
+
+    # Strategy 3: General topic or Fallback get_chat_history scan
+    if not collected_messages:
+        try:
+            async for m in userbot.get_chat_history(src_chat_id, limit=max_limit):
+                if not m or m.id in seen_ids:
+                    continue
+                # For General topic (id 1): only top-level messages without thread id or thread_id == 1
+                if topic_id == 1:
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    if m_thread in (None, 1) and (not reply_to or reply_to == 1):
+                        seen_ids.add(m.id)
+                        collected_messages.append(m)
+                else:
+                    # Check if message belongs to this topic
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    if m_thread == topic_id or reply_to == topic_id:
+                        seen_ids.add(m.id)
+                        collected_messages.append(m)
+        except Exception as scan_err:
+            print(f"[TopicMirror] get_chat_history scan notice for topic {topic_id}: {scan_err}")
+
+    # Sort messages chronologically (oldest first)
+    collected_messages.sort(key=lambda x: x.id)
+    return collected_messages
+
+
 async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int):
     """
     Attempts server-side copy first. If protected/restricted (CHAT_FORWARDS_RESTRICTED),
@@ -159,7 +241,6 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             )
             return True, "copied"
         except Exception as forward_err:
-            # If userbot couldn't forward to target (e.g. userbot not in target), try app copy
             err_str = str(forward_err).upper()
             if "CHAT_FORWARDS_RESTRICTED" not in err_str and "CHATFORWARDSRESTRICTED" not in err_str:
                 try:
@@ -181,12 +262,6 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
     except Exception as e:
         err_msg = str(e).upper()
-        # 2. Restricted / Protected Content Fallback: Download via userbot & Upload to topic
-        is_restricted = any(kw in err_msg for kw in [
-            "CHAT_FORWARDS_RESTRICTED", "CHATFORWARDSRESTRICTED", 
-            "FORWARDS_RESTRICTED", "RESTRICTED", "MESSAGE_ID_INVALID",
-            "USER_BANNED_IN_CHANNEL", "CHANNEL_PRIVATE"
-        ])
 
         # If pure text message without media:
         if msg.text:
@@ -317,6 +392,17 @@ async def cancel_mirror_cmd(_, message):
         await message.reply("ℹ️ You have no active topic mirroring process running.")
 
 
+@app.on_callback_query(filters.regex(r"^tmirror_cancel_(\d+)$"))
+async def cancel_mirror_callback(_, query: CallbackQuery):
+    req_uid = int(query.data.split("_")[2])
+    user_id = query.from_user.id
+    if user_id == req_uid or str(user_id) in [str(o) for o in (OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID])]:
+        active_mirrors[req_uid] = False
+        await query.answer("🛑 Cancelling topic mirror process...", show_alert=True)
+    else:
+        await query.answer("❌ You are not authorized to cancel this task.", show_alert=True)
+
+
 @app.on_message(filters.command(["topicmirror", "tmirror", "mirror"]))
 async def topic_mirror_cmd(client, message):
     if not message.from_user:
@@ -362,7 +448,6 @@ async def topic_mirror_cmd(client, message):
         return
 
     # STEP 2: Ask for Target Supergroup ID
-    # Check if default destination is set in user data
     user_db_data = await db.get_data(user_id)
     saved_target = user_db_data.get("chat_id") if user_db_data else None
 
@@ -415,9 +500,12 @@ async def topic_mirror_cmd(client, message):
         except Exception:
             mirror_all_topics = True
 
+    cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Cancel Mirroring", callback_data=f"tmirror_cancel_{user_id}")]])
+
     status_msg = await app.send_message(
         user_id,
-        "🔄 **Initializing Userbot Session & Verifying Group Access...**"
+        "🔄 **Initializing Userbot Session & Verifying Group Access...**",
+        reply_markup=cancel_btn
     )
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
@@ -466,7 +554,8 @@ async def topic_mirror_cmd(client, message):
         await status_msg.edit(
             f"🔍 **Phase 1: Scanning Source Topics & Pre-Creating Target Topics...**\n\n"
             f"📤 **Source:** `{src_title}`\n"
-            f"📥 **Target:** `{tgt_title}`"
+            f"📥 **Target:** `{tgt_title}`",
+            reply_markup=cancel_btn
         )
 
         # -------------------------------------------------------------
@@ -587,7 +676,8 @@ async def topic_mirror_cmd(client, message):
         await status_msg.edit(
             f"✅ **Phase 1 Complete:** Discovered & Mapped `{total_topics_count}` Topics!\n\n"
             f"🚀 **Starting Phase 2:** Extracting & Mirroring messages topic-by-topic...\n\n"
-            f"*(Send `/cancel_mirror` at any time to stop)*"
+            f"*(Click below or send `/cancel_mirror` at any time to stop)*",
+            reply_markup=cancel_btn
         )
         await asyncio.sleep(2)
 
@@ -608,27 +698,8 @@ async def topic_mirror_cmd(client, message):
             topic_title = topic_names.get(src_topic_id, f"Topic {src_topic_id}")
             topic_stats[src_topic_id] = {"copied": 0, "failed": 0, "title": topic_title}
 
-            # Fetch messages in this topic from source
-            messages_to_copy = []
-            try:
-                if src_topic_id == 1:
-                    # General chat history
-                    async for m in userbot.get_chat_history(src_chat_id, limit=3000):
-                        if not active_mirrors.get(user_id, False):
-                            break
-                        # Only messages without reply_to / top_message
-                        if getattr(m, "message_thread_id", None) in (None, 1):
-                            messages_to_copy.append(m)
-                else:
-                    async for m in userbot.get_chat_history(src_chat_id, limit=3000, message_thread_id=src_topic_id):
-                        if not active_mirrors.get(user_id, False):
-                            break
-                        messages_to_copy.append(m)
-            except Exception as fetch_err:
-                print(f"[TopicMirror] Fetch history error for topic {src_topic_id}: {fetch_err}")
-
-            # Reverse to process oldest to newest
-            messages_to_copy.reverse()
+            # Fetch messages in this topic using enhanced topic thread resolution
+            messages_to_copy = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id)
             total_msgs_in_topic = len(messages_to_copy)
 
             last_edit_time = time.time()
@@ -667,15 +738,15 @@ async def topic_mirror_cmd(client, message):
                     
                     status_text = (
                         f"⚡ **Topic Mirroring in Progress...**\n\n"
-                        f"📁 **Topic [{current_topic_index}/{total_topics_count}]:** `{topic_title}`\n"
+                        f"📁 **Active Topic [{current_topic_index}/{total_topics_count}]:** `{topic_title}`\n"
                         f"📊 **Topic Progress:** {progress_bar_str} `{percent}%` ({idx}/{total_msgs_in_topic})\n\n"
                         f"✅ **Total Copied:** `{overall_copied}`\n"
                         f"❌ **Total Failed:** `{overall_failed}`\n"
                         f"🛡️ **Protected Bypass:** Active\n\n"
-                        f"*(Send `/cancel_mirror` to abort)*"
+                        f"*(Click below or send `/cancel_mirror` to abort)*"
                     )
                     try:
-                        await status_msg.edit(status_text)
+                        await status_msg.edit(status_text, reply_markup=cancel_btn)
                     except Exception:
                         pass
 
