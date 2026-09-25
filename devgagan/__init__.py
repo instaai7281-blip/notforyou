@@ -147,6 +147,8 @@ async def restrict_bot():
         BotCommand("speedtest", "🚅 𝗦𝗽𝗲𝗲𝗱 𝘁𝗲𝘀𝘁"),
         BotCommand("get", "🗄️ 𝗘𝘅𝗽𝗼𝗿𝘁 𝘂𝘀𝗲𝗿 𝗱𝗮𝘁𝗮"),
         BotCommand("lock", "🔒 𝗣𝗿𝗼𝘁𝗲𝗰𝘁 𝗰𝗵𝗮𝗻𝗻𝗲𝗹"),
+        BotCommand("topicmirror", "📁 𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗙𝗼𝗿𝘂𝗺"),
+        BotCommand("cancel_mirror", "🛑 𝗖𝗮𝗻𝗰𝗲𝗹 𝗠𝗶𝗿𝗿𝗼𝗿"),
         BotCommand("gcast", "⚡ 𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝗺𝗲𝘀𝘀𝗮𝗴𝗲")
     ])
     if getme.last_name:
