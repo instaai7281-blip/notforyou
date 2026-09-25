@@ -12,49 +12,57 @@
 # License: MIT License
 # ---------------------------------------------------
 
+import datetime
 from config import MONGO_DB
 from motor.motor_asyncio import AsyncIOMotorClient as MongoCli
+
 mongo = MongoCli(MONGO_DB)
 db = mongo.user_data
 db = db.users_data_db
+
 async def get_data(user_id):
     x = await db.find_one({"_id": user_id})
     return x
+
 async def set_thumbnail(user_id, thumb):
     data = await get_data(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"thumb": thumb}})
     else:
         await db.insert_one({"_id": user_id, "thumb": thumb})
+
 async def set_caption(user_id, caption):
     data = await get_data(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"caption": caption}})
     else:
         await db.insert_one({"_id": user_id, "caption": caption})
+
 async def replace_caption(user_id, replace_txt, to_replace):
     data = await get_data(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"replace_txt": replace_txt, "to_replace": to_replace}})
     else:
         await db.insert_one({"_id": user_id, "replace_txt": replace_txt, "to_replace": to_replace})
+
 async def set_session(user_id, session):
     data = await get_data(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"session": session}})
     else:
         await db.insert_one({"_id": user_id, "session": session})
+
 async def clean_words(user_id, new_clean_words):
     data = await get_data(user_id)
     if data and data.get("_id"):
         existing_words = data.get("clean_words", [])
-         
         if existing_words is None:
             existing_words = []
         updated_words = list(set(existing_words + new_clean_words))
         await db.update_one({"_id": user_id}, {"$set": {"clean_words": updated_words}})
     else:
         await db.insert_one({"_id": user_id, "clean_words": new_clean_words})
+
 async def remove_clean_words(user_id, words_to_remove):
     data = await get_data(user_id)
     if data and data.get("_id"):
@@ -63,29 +71,35 @@ async def remove_clean_words(user_id, words_to_remove):
         await db.update_one({"_id": user_id}, {"$set": {"clean_words": updated_words}})
     else:
         await db.insert_one({"_id": user_id, "clean_words": []})
+
 async def set_channel(user_id, chat_id):
     data = await get_data(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"chat_id": chat_id, "target_chat_id": chat_id}})
     else:
         await db.insert_one({"_id": user_id, "chat_id": chat_id, "target_chat_id": chat_id})
+
 async def all_words_remove(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"clean_words": None}})
+
 async def remove_thumbnail(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"thumb": None}})
+
 async def remove_caption(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"caption": None}})
+
 async def remove_replace(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"replace_txt": None, "to_replace": None}})
  
 async def remove_session(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"session": None}})
+
 async def remove_channel(user_id):
     await db.update_one({"_id": user_id}, {"$set": {"chat_id": None, "target_chat_id": None}})
+
 async def set_filter(user_id, media_type, status):
     data = await get_data(user_id)
     if data and data.get("_id"):
-         
         filters = data.get("filters", {})
         filters[media_type] = status
         await db.update_one({"_id": user_id}, {"$set": {"filters": filters}})
@@ -144,7 +158,80 @@ async def load_all_thumbnails(thumbnail_dir):
     except Exception as e:
         print(f"[ERROR] Failed to restore custom thumbnails: {e}")
 
-# Collection for global configuration settings
+# Settings database helpers for global configs (e.g. auth channel)
+settings_db = mongo.user_data.settings
+
+async def get_auth_channels():
+    doc = await settings_db.find_one({"_id": "auth_channels_list"})
+    if doc:
+        return doc.get("chat_ids", [])
+    old = await settings_db.find_one({"_id": "auth_channel"})
+    if old and old.get("chat_id"):
+        return [old.get("chat_id")]
+    return []
+
+async def add_auth_channel(chat_id):
+    channels = await get_auth_channels()
+    if chat_id not in channels:
+        channels.append(chat_id)
+        await settings_db.update_one(
+            {"_id": "auth_channels_list"},
+            {"$set": {"chat_ids": channels}},
+            upsert=True
+        )
+
+async def remove_auth_channel(chat_id):
+    channels = await get_auth_channels()
+    if chat_id in channels:
+        channels.remove(chat_id)
+        await settings_db.update_one(
+            {"_id": "auth_channels_list"},
+            {"$set": {"chat_ids": channels}},
+            upsert=True
+        )
+
+async def clear_auth_channels():
+    await settings_db.update_one(
+        {"_id": "auth_channels_list"},
+        {"$set": {"chat_ids": []}},
+        upsert=True
+    )
+    await settings_db.delete_one({"_id": "auth_channel"})
+
+async def set_bio_channel(chat_id):
+    await settings_db.update_one(
+        {"_id": "bio_channel"},
+        {"$set": {"chat_id": chat_id}},
+        upsert=True
+    )
+
+async def get_bio_channel():
+    doc = await settings_db.find_one({"_id": "bio_channel"})
+    return doc.get("chat_id") if doc else None
+
+async def set_log_channel(chat_id):
+    await settings_db.update_one(
+        {"_id": "log_channel"},
+        {"$set": {"chat_id": chat_id}},
+        upsert=True
+    )
+
+async def get_log_channel():
+    doc = await settings_db.find_one({"_id": "log_channel"})
+    return doc.get("chat_id") if doc else None
+
+# Ban / Unban helpers
+async def ban_user(user_id):
+    await db.update_one({"_id": user_id}, {"$set": {"banned": True}}, upsert=True)
+
+async def unban_user(user_id):
+    await db.update_one({"_id": user_id}, {"$set": {"banned": False}}, upsert=True)
+
+async def is_user_banned(user_id):
+    x = await db.find_one({"_id": user_id})
+    return x.get("banned", False) if x else False
+
+# Collection for global broadcast configuration settings
 config_db = mongo.user_data.global_config
 
 async def get_broadcast_config():
@@ -155,7 +242,10 @@ async def get_broadcast_config():
             "message": "Hello! This is a scheduled broadcast message.",
             "interval_mins": 60,
             "is_active": False,
-            "last_run": None
+            "last_run": None,
+            "delete_after_mins": 0,
+            "max_runs": 0,
+            "run_count": 0
         }
         await config_db.insert_one(default)
         return default
@@ -192,7 +282,6 @@ async def remove_broadcast_deletion(doc_id):
 joined_chats_db = mongo.user_data.joined_chats
 
 async def add_joined_chat(chat_id, title):
-    import datetime
     await joined_chats_db.update_one(
         {"_id": chat_id},
         {"$set": {"title": title, "updated_at": datetime.datetime.now()}},
