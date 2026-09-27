@@ -3,12 +3,12 @@ import time
 import re
 from datetime import timedelta
 from pyrogram import filters, Client
-from devgagan import app, get_client
+from toxic import app, get_client
 from config import OWNER_ID, LOG_GROUP
 from pyrogram.errors import FloodWait
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from devgagan.core.func import chk_user
-from devgagan.core.mongo import db
+from toxic.core.func import chk_user
+from toxic.core.mongo import db
 
 def parse_tg_link(link):
     try:

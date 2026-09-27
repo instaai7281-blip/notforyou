@@ -3,16 +3,16 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
 # License: MIT License
 # ---------------------------------------------------
 
-print("DEBUG: devgagan/__init__.py started")
+print("DEBUG: toxic/__init__.py started")
 import asyncio
 import logging
 import re
@@ -190,7 +190,7 @@ async def restrict_bot():
             BotCommand("terms", "🥺 𝗧𝗲𝗿𝗺𝘀 & 𝗰𝗼𝗻𝗱𝗶𝘁𝗶𝗼𝗻𝘀"),
             BotCommand("speedtest", "🚅 𝗦𝗽𝗲𝗲𝗱 𝘁𝗲𝘀𝘁"),
             BotCommand("get", "🗄️ 𝗘𝘅𝗽𝗼𝗿𝘁 𝘂𝘀𝗲𝗿 𝗱𝗮𝘁𝗮"),
-            BotCommand("lock", "🔒 𝗣𝗿𝗼𝘁𝗲𝗰𝘁 𝗰𝗵𝗮𝗻𝗻𝗲ל"),
+            BotCommand("lock", "🔒 𝗣𝗿𝗼𝘁𝗲𝗰𝘁 𝗰𝗵𝗮𝗻𝗻𝗲𝗹"),
             BotCommand("topicmirror", "📁 𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗙𝗼𝗿𝘂𝗺"),
             BotCommand("cancel_mirror", "🛑 𝗖𝗮𝗻𝗰𝗲𝗹 𝗠𝗶𝗿𝗿𝗼𝗿"),
             BotCommand("gcast", "⚡ 𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝗺𝗲𝘀𝘀𝗮𝗴𝗲")

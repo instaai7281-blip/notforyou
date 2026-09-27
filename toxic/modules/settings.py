@@ -1,9 +1,9 @@
 import asyncio
 from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-from devgagan import app
-from devgagan.core.mongo import db
-from devgagan.core.get_func import get_user_branding_tag, set_user_branding_tag, get_user_custom_tags, add_user_custom_tag, delete_user_custom_tag, get_user_spoiler_preference, set_user_spoiler_preference
+from toxic import app
+from toxic.core.mongo import db
+from toxic.core.get_func import get_user_branding_tag, set_user_branding_tag, get_user_custom_tags, add_user_custom_tag, delete_user_custom_tag, get_user_spoiler_preference, set_user_spoiler_preference
 
 # ────── Keyboards ──────
 
@@ -92,7 +92,7 @@ def get_tag_keyboard(user_id):
     current_tag = get_user_branding_tag(user_id)
     custom_tags = get_user_custom_tags(user_id)
     
-    from devgagan.core.get_func import load_user_data
+    from toxic.core.get_func import load_user_data
     is_keep_original = load_user_data(user_id, "keep_original_caption", False)
     
     buttons = []
@@ -261,7 +261,7 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
         if ask.photo:
             import os
             from config import THUMBNAIL_DIR
-            from devgagan.core.func import optimize_thumbnail
+            from toxic.core.func import optimize_thumbnail
             thumbnail_path = os.path.join(THUMBNAIL_DIR, f"{user_id}.jpg")
             await ask.download(file_name=thumbnail_path)
             optimize_thumbnail(thumbnail_path)
@@ -309,7 +309,7 @@ async def chatid_actions_callback(client, callback_query: CallbackQuery):
             await ask.reply("Action cancelled.")
         else:
             val = ask.text.strip()
-            from devgagan.core.get_func import parse_target_chat
+            from toxic.core.get_func import parse_target_chat
             parsed_chat = parse_target_chat(val)
             
             chat_to_save = parsed_chat
@@ -375,7 +375,7 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
 
     if data == "toggle_keep_original":
-        from devgagan.core.get_func import save_user_data, load_user_data
+        from toxic.core.get_func import save_user_data, load_user_data
         current_val = load_user_data(user_id, "keep_original_caption", False)
         new_val = not current_val
         save_user_data(user_id, "keep_original_caption", new_val)
@@ -438,8 +438,6 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
 
 # ────── Filter & Reset Actions ──────
 
-@app.on_message(filters.private)
-# Note: we need to adjust regex below to support sticker and html
 @app.on_callback_query(filters.regex(r"^toggle_(video|document|audio|photo|text|sticker|html)$"))
 async def toggle_filter(client, callback_query: CallbackQuery):
     media_type = callback_query.data.split("_")[1]

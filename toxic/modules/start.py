@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -13,11 +13,11 @@
 # ---------------------------------------------------
 
 from pyrogram import filters
-from devgagan import app
+from toxic import app
 from config import OWNER_ID
-from devgagan.core.func import subscribe
+from toxic.core.func import subscribe
 import asyncio
-from devgagan.core.func import *
+from toxic.core.func import *
 from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message, BotCommand
 from pyrogram.raw.functions.bots import SetBotInfo
 from pyrogram.raw.types import InputUserSelf
@@ -117,7 +117,7 @@ help_pages = [
         "> 4. REPLACEWORDS : Can be used for words in deleted set via REMOVE WORDS\n"
         "> 5. RESET : To set the things back to default\n\n"
         "> You can set CUSTOM THUMBNAIL, PDF WATERMARK, VIDEO WATERMARK, SESSION-based login, etc. from settings\n\n"
-        "**__Powered by CHOSEN ONE ⚝__**"
+        "⚝__**"
     )
 ]
  
@@ -188,7 +188,7 @@ async def terms(client, message):
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/SRC_PRO_BOT")],
         ]
     )
     await message.reply_text(terms_text, reply_markup=buttons)
@@ -197,75 +197,82 @@ async def terms(client, message):
 @app.on_message(filters.command("plans") & filters.private)
 async def plan(client, message):
     plan_text = (
-        "⚡ **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦 𝗣𝗥𝗘𝗠𝗜𝗨𝗠** ⚡\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🚀 **PREMIUM BENEFITS:**\n"
-        "✦ **No Verification:** No captcha or ads ⏳\n"
-        "✦ **Bulk Uploads:** Queue up to **5000 files** at once 📂\n"
-        "✦ **No Waiting Time:** Instant extraction (0s cooldown) ⏱️\n"
-        "✦ **Unlimited Extraction:** From public/private chats 🎥\n"
-        "✦ **Custom Thumbnails:** Save personalized thumbnails 📸\n"
-        "✦ **Parallel Processing:** Max speed multi-chunk uploads ⚡\n\n"
-        "👑 **AVAILABLE PLANS:**\n"
-        "• **7-Day Plan:** ₹30 | $0.50 USDT\n"
-        "• **15-Day Plan:** ₹60 | $0.90 USDT\n"
-        "• **30-Day Plan:** ₹90 | $1.20 USDT (Max Speed 🚀)\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📲 **To Upgrade:** Contact @CHOSEN_ONEx_bot\n"
-        "💳 **Payments:** UPI, Amazon Gift Card, or USDT (Crypto)"
+        "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
+        "<b>🔥 Unlock Unlimited Power & High-Speed Extraction:</b>\n\n"
+        "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
+        "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
+        "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
+        "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
+        "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
+        "<i>Includes: High-Speed Batch (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
+        "<blockquote><b>🎛️ SPECIAL TOPIC MIRROR PLAN:</b>\n"
+        "• <b>👑 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "<i>Includes: Forum Topic Cloning (/mirror), Auto Topic Creation & Mapping, Instant Resume Checkpoints, Auto Group Bio & Disclaimer Tagging!</i>\n"
+        "⚠️ <b>Note:</b> Topic Mirroring is only accessible with this dedicated ₹299 plan. Standard premium users must purchase this plan to use topic cloning.</blockquote>\n\n"
+        "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
+        "• UPI (GPay / PhonePe / Paytm)\n"
+        "• Amazon Gift Cards\n"
+        "• Crypto (USDT BEP20/TRC20)</blockquote>\n\n"
+        "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
     )
    
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📜 See Terms", callback_data="see_terms")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
         ]
     )
-    await message.reply_text(plan_text, reply_markup=buttons)
- 
- 
+    await message.reply_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
 @app.on_callback_query(filters.regex("see_plan"))
 async def see_plan(client, callback_query):
     plan_text = (
-        "⚡ **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦 𝗣𝗥𝗘𝗠𝗜𝗨𝗠** ⚡\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💰 **Pricing & Upgrade Details:**\n"
-        "• **7 Days:** ₹30 | $0.50 USDT\n"
-        "• **15 Days:** ₹60 | $0.90 USDT\n"
-        "• **30 Days:** ₹90 | $1.20 USDT\n\n"
-        "🚀 **Key Features:**\n"
-        "• Queue up to **5000 files** in a single batch!\n"
-        "• Instant extraction (no cooldowns/captcha)\n"
-        "• Premium fast multi-threaded engine ⚡\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📲 **To Upgrade:** Contact @CHOSEN_ONEx_bot"
+        "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
+        "<b>🔥 Unlock Unlimited Power & High-Speed Extraction:</b>\n\n"
+        "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
+        "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
+        "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
+        "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
+        "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
+        "<i>Includes: High-Speed Batch (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
+        "<blockquote><b>🎛️ SPECIAL TOPIC MIRROR PLAN:</b>\n"
+        "• <b>👑 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "<i>Includes: Forum Topic Cloning (/mirror), Auto Topic Creation & Mapping, Instant Resume Checkpoints, Auto Group Bio & Disclaimer Tagging!</i>\n"
+        "⚠️ <b>Note:</b> Topic Mirroring is only accessible with this dedicated ₹299 plan. Standard premium users must purchase this plan to use topic cloning.</blockquote>\n\n"
+        "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
+        "• UPI (GPay / PhonePe / Paytm)\n"
+        "• Amazon Gift Cards\n"
+        "• Crypto (USDT BEP20/TRC20)</blockquote>\n\n"
+        "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
     )
      
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📜 See Terms", callback_data="see_terms")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
         ]
     )
-    await callback_query.message.edit_text(plan_text, reply_markup=buttons)
- 
- 
+    await callback_query.message.edit_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
 @app.on_callback_query(filters.regex("see_terms"))
 async def see_terms(client, callback_query):
     terms_text = (
-        "> 📜 **Terms and Conditions** 📜\n\n"
-        "✨ We are not responsible for user deeds, and we do not promote copyrighted content. If any user engages in such activities, it is solely their responsibility.\n"
-        "✨ Upon purchase, we do not guarantee the uptime, downtime, or the validity of the plan. __Authorization and banning of users are at our discretion; we reserve the right to ban or authorize users at any time.__\n"
-        "✨ Payment to us **__does not guarantee__** authorization for the /batch command. All decisions regarding authorization are made at our discretion and mood.\n"
+        "<blockquote><b>📜 TERMS AND CONDITIONS</b></blockquote>\n\n"
+        "<blockquote>• <b>Personal Use Only:</b> The bot services are intended strictly for personal utility and backup purposes.\n"
+        "• <b>Fair Usage:</b> Spamming or abusing system resources may result in authorization suspension.\n"
+        "• <b>No Refund Policy:</b> Payments are final once digital premium access is activated.\n"
+        "• <b>Compliance:</b> Users are responsible for ensuring compliance with Telegram's Terms of Service.</blockquote>"
     )
      
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan")],
+            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/SRC_PRO_BOT")],
         ]
     )
-    await callback_query.message.edit_text(terms_text, reply_markup=buttons)
+    await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 @app.on_message(filters.command("guide"))
 async def guide_command(_, message: Message):
@@ -296,7 +303,7 @@ async def guide_page_2(_, query: CallbackQuery):
         "💡 Use /login only for private source.\n"
         "Use /id to get user or chat ID.\n\n"
         "Use /batch to download multiple posts at once 💀\n\n"
-        "Powered by CHOSEN ONE ⚝",
+        "⚝",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Back", callback_data="guide_page_1")]
         ])

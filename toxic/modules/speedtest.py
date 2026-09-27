@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -16,8 +16,8 @@ from time import time
 from speedtest import Speedtest
 import math
 from telethon import events
-from devgagan import botStartTime
-from devgagan import sex as gagan
+from toxic import botStartTime
+from toxic import sex as gagan
 
 SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
 
@@ -85,7 +85,7 @@ async def speedtest(event):
 ├ <b>Country:</b> <code>{result['client']['country']}</code>
 ├ <b>ISP:</b> <code>{result['client']['isp']}</code>
 ├ <b>ISP Rating:</b> <code>{result['client']['isprating']}</code>
-╰ <b>Powered by CHOSEN ONE ⚝</b> 
+╰ <b>⚝</b> 
 '''
     try:
         await event.reply(string_speed,file=path,parse_mode='html')

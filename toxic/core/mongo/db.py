@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -297,3 +297,107 @@ async def get_all_joined_chats():
 
 async def remove_joined_chat(chat_id):
     await joined_chats_db.delete_one({"_id": chat_id})
+
+# Collection for persistent topic mirror mappings & checkpoints
+mirror_db = mongo.user_data.topic_mirror_sessions
+
+async def get_mirror_session(src_chat_id, tgt_chat_id):
+    """Retrieves saved topic mappings and progress for a source-target pair."""
+    doc = await mirror_db.find_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
+    return doc if doc else {}
+
+async def save_mirror_topic_mapping(src_chat_id, tgt_chat_id, src_topic_id, tgt_topic_id, title):
+    """Saves or updates a topic mapping between source and target."""
+    key = f"topics.{str(src_topic_id)}"
+    await mirror_db.update_one(
+        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+        {
+            "$set": {
+                f"{key}.tgt_topic_id": tgt_topic_id,
+                f"{key}.title": title,
+                "updated_at": datetime.datetime.now()
+            }
+        },
+        upsert=True
+    )
+
+async def update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, last_msg_id):
+    """Updates the highest message ID copied for a topic."""
+    key = f"topics.{str(src_topic_id)}.last_msg_id"
+    await mirror_db.update_one(
+        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+        {"$set": {key: last_msg_id, "updated_at": datetime.datetime.now()}},
+        upsert=True
+    )
+
+async def reset_mirror_session(src_chat_id, tgt_chat_id):
+    """Resets progress checkpoints for a source-target mirror session."""
+    await mirror_db.delete_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
+
+async def save_mirror_session_info(user_id, src_chat_id, tgt_chat_id, src_title, tgt_title):
+    """Saves session metadata for quick resume buttons."""
+    await mirror_db.update_one(
+        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+        {
+            "$set": {
+                "user_id": user_id,
+                "src_chat_id": src_chat_id,
+                "tgt_chat_id": tgt_chat_id,
+                "src_title": src_title,
+                "tgt_title": tgt_title,
+                "updated_at": datetime.datetime.now()
+            }
+        },
+        upsert=True
+    )
+
+async def get_user_mirror_sessions(user_id, limit=8):
+    """Retrieves all saved mirror sessions for a user, sorted by last updated."""
+    cursor = mirror_db.find(
+        {"$or": [{"user_id": user_id}, {"user_id": {"$exists": False}}]}
+    ).sort("updated_at", -1).limit(limit)
+    sessions = []
+    async for doc in cursor:
+        sessions.append(doc)
+    return sessions
+
+async def delete_mirror_session(src_chat_id, tgt_chat_id):
+    """Deletes a saved mirror session."""
+    await mirror_db.delete_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
+
+
+async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_chat_id, new_tgt_title=""):
+    """Updates the target chat ID and title for a saved mirror session."""
+    old_doc = await mirror_db.find_one({"_id": f"{src_chat_id}_{old_tgt_chat_id}"})
+    if old_doc:
+        old_doc["_id"] = f"{src_chat_id}_{new_tgt_chat_id}"
+        old_doc["tgt_chat_id"] = int(new_tgt_chat_id)
+        if new_tgt_title:
+            old_doc["tgt_title"] = new_tgt_title
+        old_doc["updated_at"] = datetime.datetime.now()
+        await mirror_db.delete_one({"_id": f"{src_chat_id}_{old_tgt_chat_id}"})
+        await mirror_db.insert_one(old_doc)
+        return True
+    return False
+
+
+DEFAULT_GROUP_BIO = (
+    "Don't DM to anyone ⚠️\n\n"
+    "https://telegra.ph/Disclaimer-cum-DMCA-09-13-2\n\n"
+    "Contact: @CHOSEN_ONEx_bot"
+)
+
+async def get_custom_group_bio() -> str:
+    """Retrieves configured global group bio/description from MongoDB, or default."""
+    doc = await db.find_one({"_id": "global_group_bio"})
+    if doc and doc.get("bio"):
+        return doc["bio"]
+    return DEFAULT_GROUP_BIO
+
+async def set_custom_group_bio(bio: str):
+    """Sets custom global group bio/description in MongoDB."""
+    await db.update_one({"_id": "global_group_bio"}, {"$set": {"bio": bio}}, upsert=True)
+
+async def reset_custom_group_bio():
+    """Resets global group bio to default."""
+    await db.delete_one({"_id": "global_group_bio"})

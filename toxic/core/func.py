@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -16,7 +16,7 @@ import math
 import time , re
 from pyrogram import enums
 from config import CHANNEL_ID, OWNER_ID, THUMBNAIL_DIR 
-from devgagan.core.mongo.plans_db import premium_users
+from toxic.core.mongo.plans_db import premium_users
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import cv2
 from pyrogram.errors import FloodWait, InviteHashInvalid, InviteHashExpired, UserAlreadyParticipant, UserNotParticipant
@@ -32,6 +32,19 @@ async def chk_user(message, user_id):
         return 0
     else:
         return 1
+
+async def chk_mirror_user(user_id):
+    """Checks if a user has active Topic Mirroring plan (or is Owner/Sudo). Returns 0 if authorized, 1 if not."""
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    owner_strings = [str(o) for o in owner_list]
+    if str(user_id) in owner_strings:
+        return 0
+    from toxic.core.mongo.plans_db import mirror_premium_users
+    mirror_users_list = await mirror_premium_users()
+    mirror_user_strings = [str(u) for u in mirror_users_list]
+    if str(user_id) in mirror_user_strings:
+        return 0
+    return 1
 async def gen_link(app,chat_id):
    link = await app.export_chat_invite_link(chat_id)
    return link
@@ -43,14 +56,14 @@ async def subscribe(app, message):
       try:
          user = await app.get_chat_member(update_channel, message.from_user.id)
          if user.status == "kicked":
-            await message.reply_text("You are Banned. Contact -- @CHOSEN_ONEx_bot")
+            await message.reply_text("You are Banned. Contact -- @SRC_PRO_BOT")
             return 1
       except UserNotParticipant:
         caption = f"**Join our channel to use the bot 😉\nAfter Join... /start Again**"
         await message.reply_photo(photo="https://postimg.cc/K133r7Vf",caption=caption, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join Now...", url=f"{url}")]]))
         return 1
       except Exception:
-         await message.reply_text("Something Went Wrong. Contact us @CHOSEN_ONEx_bot ...")
+         await message.reply_text("Something Went Wrong. Contact us @SRC_PRO_BOT ...")
          return 1
 async def get_seconds(time_string):
     def extract_value_and_unit(ts):
@@ -192,7 +205,7 @@ def get_link(string):
         return False
 
 def video_metadata(file):
-    default_values = {'width': 1, 'height': 1, 'duration': 1}
+    default_values = {'width': 0, 'height': 0, 'duration': 0}
     try:
         vcap = cv2.VideoCapture(file)
         if vcap.isOpened():
@@ -255,9 +268,9 @@ def video_metadata(file):
                         except ValueError:
                             pass
 
-        width = width or 1
-        height = height or 1
-        duration = duration or 1
+        width = width or 0
+        height = height or 0
+        duration = duration or 0
         return {'width': width, 'height': height, 'duration': duration}
     except Exception as e:
         print(f"Error in ffprobe fallback: {e}")
@@ -285,7 +298,7 @@ def optimize_thumbnail(image_path):
         print(f"[ERROR] Failed to optimize thumbnail {image_path}: {e}")
         return os.path.abspath(image_path) if image_path else None
 
-# REPLACE screenshot() function in devgagan/core/func.py (Line 221-257)
+# REPLACE screenshot() function in toxic/core/func.py (Line 221-257)
 
 async def screenshot(video, duration, sender):
     try:
@@ -506,7 +519,7 @@ async def progress_callback(current, total, progress_message):
     f">*┋ **__Progress:__** {percent:.2f}%\n"
     f">*┋ **__Uploaded:__** {current_mb:.2f} MB / {total_mb:.2f} MB\n\n"
     f"  ╚═══━━━─⚝─━━━═══╝\n\n"
-    f"**__Pwrd by CHOSEN ONE ⚝__**"
+    f"⚝__**"
         )
 
 async def prog_bar(current, total, ud_type, message, start):

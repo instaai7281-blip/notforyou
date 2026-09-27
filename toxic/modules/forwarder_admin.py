@@ -1,8 +1,8 @@
 import re
 from pyrogram import filters
-from devgagan import app
+from toxic import app
 from config import OWNER_ID
-from devgagan.core.mongo.db import add_forward_mapping, remove_forward_mapping, get_all_forward_mappings
+from toxic.core.mongo.db import add_forward_mapping, remove_forward_mapping, get_all_forward_mappings
 
 # Helper to check if sender is owner
 def is_owner(user_id):
@@ -34,7 +34,7 @@ async def add_forward_cmd(client, message):
         return
 
     target_chat = parts[2].strip()
-    from devgagan.core.get_func import parse_target_chat
+    from toxic.core.get_func import parse_target_chat
     parsed_chat = parse_target_chat(target_chat)
     if parsed_chat:
         target_chat = parsed_chat
@@ -91,7 +91,7 @@ async def list_forward_cmd(client, message):
 
 import asyncio
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from devgagan.core.mongo.db import get_forward_mapping
+from toxic.core.mongo.db import get_forward_mapping
 
 active_scan_results = {}
 

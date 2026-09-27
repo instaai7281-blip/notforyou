@@ -17,12 +17,12 @@ def main():
     # Give the web server a few seconds to initialize
     time.sleep(3)
 
-    print("--- Starting Telegram Bot module (devgagan) ---")
+    print("--- Starting Telegram Bot module (toxic) ---")
     try:
         while True:
             try:
-                ret = os.system("python3 -m devgagan")
-                print(f"[Main] devgagan exited with code {ret}. Restarting in 5 seconds...")
+                ret = os.system("python3 -m toxic")
+                print(f"[Main] toxic exited with code {ret}. Restarting in 5 seconds...")
                 time.sleep(5)
             except KeyboardInterrupt:
                 print("\nKeyboard interrupt received. Shutting down...")

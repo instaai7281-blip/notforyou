@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -16,8 +16,8 @@ import asyncio
 import importlib
 import gc
 from pyrogram import idle
-from devgagan.modules import ALL_MODULES
-from devgagan.core.mongo.plans_db import check_and_remove_expired_users
+from toxic.modules import ALL_MODULES
+from toxic.core.mongo.plans_db import check_and_remove_expired_users
 from aiojobs import create_scheduler
 
 # ----------------------------Bot-Start---------------------------- #
@@ -35,10 +35,10 @@ async def schedule_expiry_check():
 # Function to broadcast upgrade plans daily at 7 PM
 async def daily_plans_broadcast_task():
     try:
-        from devgagan.core.mongo.users_db import get_all_registered_users
-        from devgagan.core.func import chk_user
+        from toxic.core.mongo.users_db import get_all_registered_users
+        from toxic.core.func import chk_user
         from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        from devgagan import app
+        from toxic import app
         
         users = await get_all_registered_users()
         upgrade_msg = (
@@ -54,7 +54,7 @@ async def daily_plans_broadcast_task():
         buttons = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-                [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+                [InlineKeyboardButton("💬 Contact Now", url="https://t.me/SRC_PRO_BOT")],
             ]
         )
         
@@ -74,8 +74,8 @@ async def daily_plans_broadcast_task():
 
 async def schedule_broadcast_task():
     import datetime
-    from devgagan import app
-    from devgagan.core.mongo.db import (
+    from toxic import app
+    from toxic.core.mongo.db import (
         get_broadcast_config, 
         update_broadcast_config, 
         get_pending_deletions, 
@@ -93,7 +93,7 @@ async def schedule_broadcast_task():
                     chat_id = deletion["chat_id"]
                     message_id = deletion["message_id"]
                     # Try to delete using userbot if available, fallback to bot app
-                    from devgagan.core.get_func import get_client
+                    from toxic.core.get_func import get_client
                     pro_client = get_client()
                     client_to_use = pro_client if pro_client else app
                     try:
@@ -140,7 +140,7 @@ async def schedule_broadcast_task():
                         
                     message_text = config.get("message")
                     if message_text:
-                        from devgagan.modules.broadcast import send_auto_broadcast_to_all
+                        from toxic.modules.broadcast import send_auto_broadcast_to_all
                         sent, failed = await send_auto_broadcast_to_all()
                         print(f"[AUTO BROADCAST] Sent run #{new_run_count}. Sent: {sent}, Failed: {failed}.")
                         
@@ -188,7 +188,7 @@ async def schedule_daily_plans_broadcast():
 
 async def devggn_boot():
     # Restore custom thumbnails from DB on startup
-    from devgagan.core.mongo.db import load_all_thumbnails
+    from toxic.core.mongo.db import load_all_thumbnails
     from config import THUMBNAIL_DIR
     try:
         await load_all_thumbnails(THUMBNAIL_DIR)
@@ -196,7 +196,7 @@ async def devggn_boot():
         print(f"Failed to load thumbnails: {e}")
 
     for all_module in ALL_MODULES:
-        importlib.import_module("devgagan.modules." + all_module)
+        importlib.import_module("toxic.modules." + all_module)
 
     # Load Youtube downloader package modules dynamically
     import glob
@@ -213,17 +213,8 @@ async def devggn_boot():
 
     print("""
 ---------------------------------------------------
-Bot Deployed successfully ...
-Description: A Pyrogram bot for downloading files from Telegram channels or groups 
-                and uploading them back to Telegram.
-Author: Gagan
-GitHub: https://github.com/devgaganin/
-Telegram: https://t.me/team_spy_pro
-YouTube: https://youtube.com/@dev_gagan
-Created: 2025-01-11
-Last Modified: 2025-01-11
-Version: 2.0.5
-License: MIT License
+Restricted Content Saver & Topic Mirror Bot PRO
+Status: Running Successfully...
 ---------------------------------------------------
 """)
 

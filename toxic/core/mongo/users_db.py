@@ -3,9 +3,9 @@
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
 #              and uploading them back to Telegram.
 # Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
+
+
+
 # Created: 2025-01-11
 # Last Modified: 2025-01-11
 # Version: 2.0.5
@@ -62,7 +62,7 @@ async def del_user(user):
 async def get_all_registered_users():
   users = await get_users()
   try:
-    from devgagan.core.mongo.db import db as settings_db
+    from toxic.core.mongo.db import db as settings_db
     async for doc in settings_db.find({}):
       if "_id" in doc:
         try:

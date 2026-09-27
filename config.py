@@ -1,4 +1,3 @@
-# devgagan
 # Note if you are trying to deploy on vps then directly fill values in (".env") or set them as environment variables
 
 from os import getenv

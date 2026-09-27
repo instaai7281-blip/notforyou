@@ -3,9 +3,9 @@ import datetime
 from pyrogram import filters, Client
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, ChatMemberUpdated
 from pyrogram.enums import ChatType, ChatMemberStatus
-from devgagan import app
+from toxic import app
 from config import OWNER_ID
-from devgagan.core.mongo.db import (
+from toxic.core.mongo.db import (
     get_broadcast_config, 
     update_broadcast_config, 
     add_broadcast_deletion,
@@ -13,7 +13,11 @@ from devgagan.core.mongo.db import (
     get_all_joined_chats,
     remove_joined_chat,
     get_pending_deletions,
-    remove_broadcast_deletion
+    remove_broadcast_deletion,
+    get_custom_group_bio,
+    set_custom_group_bio,
+    reset_custom_group_bio,
+    DEFAULT_GROUP_BIO
 )
 
 # Helper to check if sender is owner
@@ -122,14 +126,14 @@ async def delete_all_active_broadcast_messages():
     owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
     for owner_id in owner_list:
         try:
-            from devgagan.modules.main import initialize_userbot
+            from toxic.modules.main import initialize_userbot
             owner_userbot = await initialize_userbot(int(owner_id))
             if owner_userbot:
                 break
         except Exception:
             pass
 
-    from devgagan.core.get_func import get_client
+    from toxic.core.get_func import get_client
     shared_client = get_client()
     
     pending = await get_pending_deletions()
@@ -177,7 +181,7 @@ async def send_auto_broadcast_to_all(manual=False):
     owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
     for owner_id in owner_list:
         try:
-            from devgagan.modules.main import initialize_userbot
+            from toxic.modules.main import initialize_userbot
             owner_userbot = await initialize_userbot(int(owner_id))
             if owner_userbot:
                 break
@@ -197,7 +201,7 @@ async def send_auto_broadcast_to_all(manual=False):
             print(f"Owner userbot get_dialogs failed: {e}")
 
     # Fallback to shared userbot client if owner userbot not logged in
-    from devgagan.core.get_func import get_client
+    from toxic.core.get_func import get_client
     shared_client = get_client()
     if not owner_userbot and shared_client:
         try:
@@ -440,6 +444,14 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
             if status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
                 await add_joined_chat(chat.id, chat.title or chat.username or "Group/Channel")
                 print(f"[AUTO DETECT] Bot added to chat: {chat.title or chat.id} (ID: {chat.id}). Added to broadcast list.")
+                
+                # Auto-update group description/bio with disclaimer & contact info
+                try:
+                    bio_text = await get_custom_group_bio()
+                    await client.set_chat_description(chat.id, bio_text)
+                    print(f"[AUTO BIO] Successfully updated bio for chat: {chat.title or chat.id} (ID: {chat.id})")
+                except Exception as bio_err:
+                    print(f"[AUTO BIO] Could not set bio for chat {chat.id}: {bio_err}")
             
             # If bot was kicked, banned, or left the chat
             elif status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
@@ -478,7 +490,22 @@ async def add_chat_cmd(client: Client, message: Message):
             return
 
     await add_joined_chat(chat_id, title)
-    await message.reply_text(f"✅ **Linked Chat Added!**\n\n• **Title:** `{title}`\n• **ID:** `{chat_id}`")
+    
+    # Auto-update bio
+    bio_status = "Skipped"
+    try:
+        bio_text = await get_custom_group_bio()
+        await client.set_chat_description(chat_id, bio_text)
+        bio_status = "Updated ✅"
+    except Exception as e:
+        bio_status = f"Failed ❌ ({e})"
+
+    await message.reply_text(
+        f"✅ **Linked Chat Added!**\n\n"
+        f"• **Title:** `{title}`\n"
+        f"• **ID:** `{chat_id}`\n"
+        f"• **Group Bio:** {bio_status}"
+    )
 
 @app.on_message(filters.command(["removechat"]) & filters.private)
 async def remove_chat_cmd(client: Client, message: Message):
@@ -519,3 +546,132 @@ async def list_chats_cmd(client: Client, message: Message):
         text += f"{i}. **{chat['title']}**\n   • ID: `{chat['chat_id']}`\n\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     await message.reply_text(text)
+
+
+# ────── Automatic Group Bio Management Commands ──────
+
+@app.on_message(filters.command(["setbio", "updatebio"]))
+async def set_group_bio_cmd(client: Client, message: Message):
+    """Updates group bio for the current chat or specified chat ID."""
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+
+    target_chat_id = message.chat.id
+    if len(message.command) > 1 and message.chat.type == ChatType.PRIVATE:
+        try:
+            target_chat_id = int(message.command[1])
+        except ValueError:
+            await message.reply_text("❌ **Error:** Please provide a valid integer Chat ID.\nUsage: `/setbio -10012345678`")
+            return
+
+    bio_text = await get_custom_group_bio()
+    try:
+        await client.set_chat_description(target_chat_id, bio_text)
+        await message.reply_text(
+            f"✅ **Group Bio Updated Successfully!**\n\n"
+            f"📍 **Chat ID:** `{target_chat_id}`\n\n"
+            f"📝 **Applied Bio:**\n```\n{bio_text}\n```"
+        )
+    except Exception as e:
+        await message.reply_text(
+            f"❌ **Failed to update group bio.**\n\n"
+            f"• **Reason:** `{e}`\n"
+            f"• *Make sure the bot is an Administrator with 'Change Group Info' permission in the group.*"
+        )
+
+
+@app.on_message(filters.command(["syncallbio", "updateallbio"]) & filters.private)
+async def sync_all_group_bios_cmd(client: Client, message: Message):
+    """Bulk updates group bio across all linked groups and saved mirror targets."""
+    user_id = message.from_user.id
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+
+    status_msg = await message.reply_text("⏳ **Starting automatic bio update across all linked groups...**")
+    
+    db_chats = await get_all_joined_chats()
+    if not db_chats:
+        await status_msg.edit("ℹ️ **No linked groups found in database.** Add groups using `/addchat` or let bot auto-detect them.")
+        return
+
+    bio_text = await get_custom_group_bio()
+    success_count = 0
+    fail_count = 0
+    
+    for chat in db_chats:
+        c_id = chat.get("chat_id")
+        try:
+            await client.set_chat_description(c_id, bio_text)
+            success_count += 1
+            await asyncio.sleep(1)  # Rate-limit protection
+        except Exception as err:
+            fail_count += 1
+            print(f"[SYNC BIO] Failed for chat {c_id}: {err}")
+
+    await status_msg.edit(
+        f"🎉 **Group Bio Sync Completed!**\n\n"
+        f"✅ **Successfully Updated:** `{success_count}`\n"
+        f"❌ **Failed / No Permission:** `{fail_count}`\n"
+        f"📊 **Total Chats Processed:** `{len(db_chats)}`\n\n"
+        f"📝 **Applied Bio Content:**\n```\n{bio_text}\n```"
+    )
+
+
+@app.on_message(filters.command(["custombio"]) & filters.private)
+async def custom_bio_cmd(client: Client, message: Message):
+    """Sets a custom global group bio template."""
+    user_id = message.from_user.id
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+
+    if len(message.text.split(None, 1)) < 2:
+        current_bio = await get_custom_group_bio()
+        await message.reply_text(
+            f"ℹ️ **Current Group Bio Template:**\n\n```\n{current_bio}\n```\n\n"
+            f"To set a new bio template, use:\n`/custombio <your new bio text>`\n\n"
+            f"To reset to default, use `/resetbio`"
+        )
+        return
+
+    new_bio = message.text.split(None, 1)[1].strip()
+    if len(new_bio) > 255:
+        await message.reply_text(f"❌ **Bio is too long!** Telegram description limit is 255 characters (Your text is {len(new_bio)} chars).")
+        return
+
+    await set_custom_group_bio(new_bio)
+    await message.reply_text(
+        f"✅ **Custom Group Bio Template Saved!**\n\n"
+        f"All new groups will automatically receive this bio.\n\n"
+        f"📝 **New Bio:**\n```\n{new_bio}\n```\n\n"
+        f"Run `/syncallbio` to apply this new bio to all existing groups immediately!"
+    )
+
+
+@app.on_message(filters.command(["getbio"]) & filters.private)
+async def get_bio_cmd(client: Client, message: Message):
+    """Displays current group bio template."""
+    current_bio = await get_custom_group_bio()
+    await message.reply_text(
+        f"📝 **Active Group Bio Template:**\n\n```\n{current_bio}\n```"
+    )
+
+
+@app.on_message(filters.command(["resetbio"]) & filters.private)
+async def reset_bio_cmd(client: Client, message: Message):
+    """Resets group bio template to default."""
+    user_id = message.from_user.id
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+
+    await reset_custom_group_bio()
+    default_bio = DEFAULT_GROUP_BIO
+    await message.reply_text(
+        f"🔄 **Group Bio Reset to Default!**\n\n"
+        f"📝 **Default Bio:**\n```\n{default_bio}\n```\n\n"
+        f"Run `/syncallbio` to update all connected groups."
+    )

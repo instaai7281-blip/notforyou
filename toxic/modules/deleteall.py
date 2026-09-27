@@ -1,7 +1,7 @@
 import asyncio
 from pyrogram import filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-from devgagan import app
+from toxic import app
 from config import OWNER_ID
 
 @app.on_message(filters.command("deleteall"))
@@ -77,7 +77,7 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
     userbot = None
     try:
         # Inline import to avoid circular dependency issues
-        from devgagan.modules.main import initialize_userbot
+        from toxic.modules.main import initialize_userbot
         userbot = await initialize_userbot(user_id)
         
         client_to_use = userbot if userbot else app
