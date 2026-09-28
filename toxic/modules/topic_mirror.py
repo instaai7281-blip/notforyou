@@ -573,8 +573,17 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
     """
     Transfers a single message using server-side copy first, with full extraction fallback
     (download, metadata extraction, auto-thumbnail, watermark, caption cleaning, and upload).
-    Checks user media filters and settings.
+    Checks user media filters and settings. Filters service/empty messages.
     """
+    # 0. Skip Service, Action, Topic-Created, Pinned & Empty Messages
+    if (getattr(msg, "service", False) or 
+        getattr(msg, "empty", False) or 
+        getattr(msg, "action", None) or 
+        getattr(msg, "forum_topic_created", None) or 
+        getattr(msg, "pinned_message", None) or 
+        (not msg.text and not msg.media and not getattr(msg, 'video', None) and not getattr(msg, 'document', None) and not getattr(msg, 'photo', None) and not getattr(msg, 'audio', None) and not getattr(msg, 'voice', None) and not getattr(msg, 'sticker', None) and not getattr(msg, 'animation', None))):
+        return True, "service_skipped"
+
     user_data = await db.get_data(user_id) or {}
 
     # Check Media Filters from Settings
@@ -931,11 +940,196 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
 def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int) -> InlineKeyboardMarkup:
     """Builds action options for a selected saved mirror session."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️ Continue / Update Mirror", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("🔍 Scan & Compare Groups", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("✏️ Modify Target Chat ID", callback_data=f"tm_edittgt_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🗑️ Delete This Session", callback_data=f"tm_delsess_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
     ])
+
+
+async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: int):
+    """
+    Scans source and target groups, compares total content per topic,
+    and returns a clean comparative report with pending message counts.
+    """
+    userbot, is_temp_userbot = await get_working_userbot(user_id)
+    if not userbot:
+        return "❌ **No working userbot session!** Please login via `/login` first."
+
+    try:
+        # Resolve chat titles
+        try:
+            src_chat = await userbot.get_chat(src_chat_id)
+            src_title = src_chat.title or str(src_chat_id)
+        except Exception:
+            src_title = str(src_chat_id)
+
+        try:
+            tgt_chat = await app.get_chat(tgt_chat_id)
+            tgt_title = tgt_chat.title or str(tgt_chat_id)
+        except Exception:
+            tgt_title = str(tgt_chat_id)
+
+        saved_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+        saved_topics = saved_session.get("topics", {})
+
+        # Fetch all source topics
+        source_topics = []
+        try:
+            async for forum_topic in userbot.get_forum_topics(src_chat_id):
+                source_topics.append({
+                    "id": forum_topic.message_thread_id,
+                    "title": forum_topic.title
+                })
+        except Exception:
+            try:
+                peer = await userbot.resolve_peer(src_chat_id)
+                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                    peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
+                ))
+                for t in getattr(res, "topics", []):
+                    source_topics.append({"id": t.id, "title": t.title})
+            except Exception:
+                source_topics = [{"id": 1, "title": "General"}]
+
+        if not source_topics:
+            source_topics = [{"id": 1, "title": "General"}]
+
+        total_src_msgs = 0
+        total_synced_msgs = 0
+        total_pending_msgs = 0
+
+        topic_lines = []
+
+        for st in source_topics:
+            st_id = st["id"]
+            st_title = st["title"].strip()
+            
+            # Check saved checkpoint in MongoDB
+            topic_info = saved_topics.get(str(st_id), {})
+            last_msg_id = topic_info.get("last_msg_id", 0)
+
+            # Rapidly fetch messages for topic
+            messages = await fetch_all_messages_for_topic(userbot, src_chat_id, st_id, min_msg_id=0, max_limit=5000)
+            
+            # Filter non-service messages
+            content_msgs = [m for m in messages if not (getattr(m, "service", False) or getattr(m, "empty", False) or getattr(m, "action", None) or getattr(m, "forum_topic_created", None) or getattr(m, "pinned_message", None) or not (m.text or m.media or getattr(m, "document", None) or getattr(m, "video", None) or getattr(m, "photo", None) or getattr(m, "audio", None)))]
+            
+            t_total = len(content_msgs)
+            
+            if last_msg_id > 0:
+                t_synced = len([m for m in content_msgs if m.id <= last_msg_id])
+            else:
+                t_synced = 0
+                
+            t_pending = max(0, t_total - t_synced)
+
+            total_src_msgs += t_total
+            total_synced_msgs += t_synced
+            total_pending_msgs += t_pending
+
+            if t_pending == 0 and t_total > 0:
+                status_str = "🌐 **Complete**"
+            elif t_pending > 0:
+                status_str = f"⏳ **Pending:** `{t_pending}` msgs"
+            else:
+                status_str = "ℹ️ **Empty**"
+
+            topic_lines.append(f"• **{st_title}**: Total: `{t_total}` | Synced: `{t_synced}` | {status_str}")
+
+        sync_percent = int((total_synced_msgs / total_src_msgs) * 100) if total_src_msgs > 0 else 100
+        bar_blocks = int(sync_percent // 10)
+        progress_bar = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
+
+        breakdown_str = "\n".join(topic_lines[:30])
+        if len(topic_lines) > 30:
+            breakdown_str += f"\n*...and {len(topic_lines) - 30} more topics*"
+
+        report = (
+            f"<blockquote><b>🔍 TOPIC MIRROR — LIVE SCAN & COMPARISON REPORT</b></blockquote>\n\n"
+            f"📤 **Source:** `{src_title}`\n"
+            f"📥 **Target:** `{tgt_title}`\n\n"
+            f"<blockquote><b>📊 OVERALL CONTENT SYNC METRICS:</b>\n"
+            f"• 📁 <b>Source Topics:</b> <code>{len(source_topics)}</code>\n"
+            f"• ✉️ <b>Total Source Messages:</b> <code>{total_src_msgs}</code>\n"
+            f"• ✅ <b>Synced in Target:</b> <code>{total_synced_msgs}</code>\n"
+            f"• ⏳ <b>Pending / Remaining:</b> <code>{total_pending_msgs}</code>\n"
+            f"• 📊 <b>Overall Sync Progress:</b> {progress_bar} <code>{sync_percent}%</code></blockquote>\n\n"
+            f"<blockquote><b>📂 TOPIC COMPARISON BREAKDOWN:</b>\n"
+            f"{breakdown_str}</blockquote>\n\n"
+            f"<i>Click <b>Sync & Update Pending Content</b> below to immediately copy all remaining content!</i>"
+        )
+        return report
+
+    finally:
+        if is_temp_userbot and userbot:
+            try:
+                await userbot.stop()
+            except Exception:
+                pass
+
+
+@app.on_callback_query(filters.regex(r"^tm_scan_(-?\d+)_(-?\d+)$"))
+async def scan_session_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_scan_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    await query.answer("🔍 Scanning groups and comparing content... Please wait...")
+    
+    try:
+        await query.message.edit_text("🔍 **Scanning Source & Target groups... Comparing message counts per topic...**")
+    except Exception:
+        pass
+    
+    report = await scan_and_compare_session(user_id, src_chat_id, tgt_chat_id)
+    html_text = format_caption_to_html(report)
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
+    ])
+
+    await query.message.edit_text(
+        html_text if html_text else report,
+        parse_mode=ParseMode.HTML,
+        reply_markup=buttons
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_sync_(-?\d+)_(-?\d+)$"))
+async def sync_session_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_sync_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+        return
+
+    await query.answer("🔄 Starting Sync & Update process...")
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=True,
+        detected_topic_id=None,
+        status_msg=query.message,
+        force_sync=True
+    )
 
 
 @app.on_message(filters.command(["cancel_mirror", "cancelmirror"]))
@@ -1335,8 +1529,8 @@ async def topic_mirror_cmd(client, message):
         await start_new_mirror_flow(user_id, message)
 
 
-async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, status_msg=None):
-    """Core execution engine for topic mirroring with instant resume and rapid extraction."""
+async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, status_msg=None, force_sync: bool = False):
+    """Core execution engine for topic mirroring with instant resume, rapid extraction, and force sync."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
@@ -1625,8 +1819,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             # Check last copied message ID from MongoDB checkpoint
             saved_checkpoint = saved_topics.get(str(src_topic_id), {}).get("last_msg_id", 0)
 
-            # Rapidly fetch messages for this topic with checkpoint cutoff
-            all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=saved_checkpoint)
+            # Rapidly fetch messages for this topic with checkpoint cutoff (0 if force_sync)
+            fetch_cutoff = 0 if force_sync else saved_checkpoint
+            all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff)
             
             # Filter pending messages to copy
             messages_to_copy = [m for m in all_topic_messages if m.id > saved_checkpoint]
@@ -1656,7 +1851,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     break
 
                 # Skip service/action messages
-                if getattr(msg, "service", False) or getattr(msg, "empty", False):
+                if getattr(msg, "service", False) or getattr(msg, "empty", False) or getattr(msg, "action", None) or getattr(msg, "forum_topic_created", None) or getattr(msg, "pinned_message", None):
                     await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
                     continue
 
@@ -1673,10 +1868,11 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 )
 
                 if success:
-                    overall_copied += 1
-                    topic_stats[src_topic_id]["copied"] += 1
-                    topic_copied_bytes += msg_size
-                    overall_transferred_bytes += msg_size
+                    if method != "service_skipped":
+                        overall_copied += 1
+                        topic_stats[src_topic_id]["copied"] += 1
+                        topic_copied_bytes += msg_size
+                        overall_transferred_bytes += msg_size
                 else:
                     if method != "skipped_filter":
                         overall_failed += 1
@@ -1759,11 +1955,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             f"⚝__**"
         )
 
+        final_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+            [InlineKeyboardButton("🔍 Scan & Compare Groups", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
+            [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
+        ])
+
         final_html = format_caption_to_html(final_report)
         try:
-            await status_msg.edit(final_html if final_html else final_report, parse_mode=ParseMode.HTML)
+            await status_msg.edit(final_html if final_html else final_report, parse_mode=ParseMode.HTML, reply_markup=final_kb)
         except Exception:
-            await app.send_message(user_id, final_html if final_html else final_report, parse_mode=ParseMode.HTML)
+            await app.send_message(user_id, final_html if final_html else final_report, parse_mode=ParseMode.HTML, reply_markup=final_kb)
 
         # Send Completion Report to LOG_GROUP
         log_chat = get_log_group()
