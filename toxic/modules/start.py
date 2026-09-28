@@ -282,6 +282,32 @@ async def see_terms(client, callback_query):
     await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
+@app.on_callback_query(filters.regex("check_subscription"))
+async def check_subscription_callback(client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    from config import CHANNEL_ID
+    if CHANNEL_ID:
+        try:
+            user = await client.get_chat_member(CHANNEL_ID, user_id)
+            if str(getattr(user, "status", "")).lower() in ["member", "administrator", "creator"]:
+                await callback_query.answer("✅ Thank you for joining! Access granted.", show_alert=True)
+                try:
+                    await callback_query.message.delete()
+                except Exception:
+                    pass
+                await callback_query.message.reply_text("🎉 **Welcome! Access granted. Send /start or any link to proceed!**")
+                return
+            elif str(getattr(user, "status", "")).lower() in ["kicked", "banned"]:
+                await callback_query.answer("❌ You are banned from using this bot.", show_alert=True)
+                return
+        except UserNotParticipant:
+            await callback_query.answer("❌ You have not joined the channel yet! Please join first.", show_alert=True)
+            return
+        except Exception as e:
+            print(f"Sub check err: {e}")
+    await callback_query.answer("✅ Access verified! Send /start to proceed.", show_alert=True)
+
+
 @app.on_message(filters.command("guide"))
 async def guide_command(_, message: Message):
     bot_username = get_bot_username()

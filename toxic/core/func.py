@@ -50,21 +50,55 @@ async def gen_link(app,chat_id):
    return link
 
 async def subscribe(app, message):
-   update_channel = CHANNEL_ID
-   url = await gen_link(app, update_channel)
-   if update_channel:
-      try:
-         user = await app.get_chat_member(update_channel, message.from_user.id)
-         if user.status == "kicked":
-            await message.reply_text("You are Banned. Contact -- @SRC_PRO_BOT")
+    update_channel = CHANNEL_ID
+    if not update_channel:
+        return 0
+    try:
+        url = await gen_link(app, update_channel)
+    except Exception as err:
+        print(f"⚠️ Failed to gen_link for channel {update_channel}: {err}")
+        return 0
+
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    first_name = message.from_user.first_name if (message.from_user and message.from_user.first_name) else "User"
+
+    try:
+        user = await app.get_chat_member(update_channel, user_id)
+        if str(getattr(user, "status", "")).lower() in ["kicked", "banned"]:
+            await message.reply_text(
+                "<blockquote><b>❌ ACCESS BANNED</b></blockquote>\n\n"
+                "You are banned from using this bot.\n"
+                "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot",
+                parse_mode=enums.ParseMode.HTML
+            )
             return 1
-      except UserNotParticipant:
-        caption = f"**Join our channel to use the bot 😉\nAfter Join... /start Again**"
-        await message.reply_photo(photo="https://postimg.cc/K133r7Vf",caption=caption, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join Now...", url=f"{url}")]]))
+        return 0
+    except UserNotParticipant:
+        caption = (
+            "<blockquote><b>🛑 ACCESS RESTRICTED — MUST JOIN CHANNEL 🛑</b></blockquote>\n\n"
+            f"<b>👋 Hello {first_name}!</b>\n\n"
+            "<blockquote><b>📢 To use this Bot, you must join our Official Updates Channel!</b>\n\n"
+            "<i>Due to high server load & security filters, access is reserved exclusively for our channel members.</i></blockquote>\n\n"
+            "<b>✨ Follow simple steps below to unlock:</b>\n"
+            "1️⃣ Click <b>📢 Join Official Channel</b> button below.\n"
+            "2️⃣ Click <b>Join Channel</b> in Telegram.\n"
+            "3️⃣ Come back & send <code>/start</code> again or click <b>🔄 Check Access</b>!\n\n"
+            "<blockquote><b>⚡ Fast & Free Save-Restricted Content Extraction!</b></blockquote>"
+        )
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Join Official Channel", url=f"{url}")],
+            [InlineKeyboardButton("🔄 Check Access / Try Again", callback_data="check_subscription")],
+            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        ])
+        photo_url = "https://freeimage.host/i/n7cbXDX"
+        try:
+            await message.reply_photo(photo=photo_url, caption=caption, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            await message.reply_text(caption, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
         return 1
-      except Exception:
-         await message.reply_text("Something Went Wrong. Contact us @SRC_PRO_BOT ...")
-         return 1
+    except Exception as e:
+        print(f"⚠️ Subscribe check exception: {e}")
+        return 0
 async def get_seconds(time_string):
     def extract_value_and_unit(ts):
         value = ""

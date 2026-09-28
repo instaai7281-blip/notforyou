@@ -209,20 +209,27 @@ async def restrict_bot():
             except Exception as pc_err:
                 print(f"⚠️ Pro client #{idx+1} failed to start: {pc_err}")
     
-    # Send startup message (disabled to prevent restart spam)
-    # try:
-    #     owner_id = OWNER_ID[0] if isinstance(OWNER_ID, list) and OWNER_ID else OWNER_ID
-    #     if owner_id:
-    #         print(f"Attempting to send startup message to owner: {owner_id}")
-    #         startup_msg = "✅ **Bot Started Successfully!**\n\n🛡️ **Features Active:**\n- PDF Watermark\n- Media Filters\n- Rebranding Tag\n- Topic Mirror & Save-Restricted Bypass"
-    #         await app.send_message(int(owner_id), startup_msg)
-    #         print("Startup message sent to owner.")
-    #     if LOG_GROUP:
-    #         print(f"Attempting to send startup message to log group: {LOG_GROUP}")
-    #         await app.send_message(int(LOG_GROUP), startup_msg)
-    #         print("Startup message sent to log group.")
-    # except Exception as e:
-    #     print(f"Failed to send startup message: {e}")
+    # Send clean startup notification on boot/restart
+    try:
+        owner_id = OWNER_ID[0] if isinstance(OWNER_ID, list) and OWNER_ID else OWNER_ID
+        startup_msg = (
+            "<blockquote><b>🚀 TOXIC BOT PRO ONLINE!</b></blockquote>\n\n"
+            "<b>✅ Status:</b> Bot & Telethon Clients Started Successfully\n"
+            "<b>🛡️ Active Features:</b>\n"
+            "• PDF & Video Watermarking\n"
+            "• High-Speed Save-Restricted Bypass\n"
+            "• Topic Mirror & Auto Forum Sync (v2.5)\n"
+            "• Real Speed Test & Dynamic UI\n\n"
+            "⚡ <i>Ready to process extraction & mirroring requests!</i>"
+        )
+        if owner_id:
+            await app.send_message(int(owner_id), startup_msg, parse_mode=enums.ParseMode.HTML)
+            print("[INFO] Startup message sent to owner.")
+        if LOG_GROUP:
+            await app.send_message(int(LOG_GROUP), startup_msg, parse_mode=enums.ParseMode.HTML)
+            print("[INFO] Startup message sent to log group.")
+    except Exception as e:
+        print(f"⚠️ Failed to send startup message: {e}")
 
 
 def get_client():
