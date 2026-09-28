@@ -167,6 +167,24 @@ async def restrict_bot():
     BOT_ID = getme.id
     BOT_USERNAME = getme.username
 
+    # 🔒 TOXIC_ID Security Lock Check
+    from config import TOXIC_ID
+    from toxic.core.mongo.plans_db import is_valid_toxic_id
+    import sys
+
+    print("\n🔍 Verifying TOXIC_ID Security Authorization Key...")
+    if not await is_valid_toxic_id(TOXIC_ID):
+        print("\n" + "=" * 65)
+        print("❌ [SECURITY LOCK ALERT] INVALID OR MISSING TOXIC_ID!")
+        print(f"   Provided TOXIC_ID: '{TOXIC_ID}'")
+        print("🛡️ This bot repository is protected. You need a valid TOXIC_ID key")
+        print("   provided by the Bot Owner to deploy or run this codebase.")
+        print("💬 Contact Admin @CHOSEN_ONEx_bot to request authorization.")
+        print("=" * 65 + "\n")
+        sys.exit(1)
+    else:
+        print("✅ [SECURITY PASSED] TOXIC_ID Key Verified Successfully! Access Granted.\n")
+
     # Set Bot Commands
     try:
         await app.set_bot_commands([

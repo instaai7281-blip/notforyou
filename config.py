@@ -33,6 +33,10 @@ if STRING and STRING not in STRINGS:
 
 YT_COOKIES = getenv("YT_COOKIES", YTUB_COOKIES)
 INSTA_COOKIES = getenv("INSTA_COOKIES", INST_COOKIES)
+# Security Lock: TOXIC_ID Authorization Key
+TOXIC_ID = getenv("TOXIC_ID", "TOXIC-PRO-77414")
+MASTER_TOXIC_ID = getenv("MASTER_TOXIC_ID", "TOXIC-PRO-77414")
+
 # Optimization: Number of concurrent tasks
 MAX_CONCURRENT_TASKS = int(getenv("MAX_CONCURRENT_TASKS", "10"))
 

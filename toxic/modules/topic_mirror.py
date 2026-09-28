@@ -940,8 +940,8 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
 def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int) -> InlineKeyboardMarkup:
     """Builds action options for a selected saved mirror session."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Scan & Compare Groups", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
-        [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("✏️ Modify Target Chat ID", callback_data=f"tm_edittgt_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🗑️ Delete This Session", callback_data=f"tm_delsess_{src_chat_id}_{tgt_chat_id}")],
@@ -1093,7 +1093,8 @@ async def scan_session_callback(_, query: CallbackQuery):
     html_text = format_caption_to_html(report)
 
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
     ])
@@ -1956,8 +1957,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         )
 
         final_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Sync & Update Pending Content", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
-            [InlineKeyboardButton("🔍 Scan & Compare Groups", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
+            [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
+            [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
             [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
         ])
 
@@ -1977,6 +1978,36 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 )
             except Exception as log_err:
                 print(f"[TopicMirror] Finish log notice: {log_err}")
+
+        # Send Stylish Completion Summary to Target Forum Group
+        try:
+            target_group_msg = (
+                "<blockquote><b>🎉 UPDATE COMPLETE BOSS! 🎉</b></blockquote>\n\n"
+                "<b>💎 TOXIC BOT PRO — TOPIC SYNC SUMMARY:</b>\n"
+                f"• <b>Source:</b> <code>{src_title}</code>\n"
+                f"• <b>Target Forum:</b> <code>{tgt_title}</code>\n"
+                f"• <b>Total New Uploaded/Updated:</b> ✅ <code>{overall_copied}</code> files\n"
+                f"• <b>Total Topics Processed:</b> 📂 <code>{len(topic_stats)}/{total_topics_count}</code>\n"
+                f"• <b>Total Data Volume:</b> 💾 <code>{humanbytes(overall_transferred_bytes)}</code>\n"
+                f"• <b>Duration:</b> ⏱️ <code>{total_time_taken}</code>\n\n"
+                "<blockquote><b>✅ All pending content has been successfully synced & updated!</b></blockquote>"
+            )
+            try:
+                await app.send_message(
+                    chat_id=tgt_chat_id,
+                    text=target_group_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=1
+                )
+            except Exception:
+                await app.send_message(
+                    chat_id=tgt_chat_id,
+                    text=target_group_msg,
+                    parse_mode=ParseMode.HTML
+                )
+            print(f"[TopicMirror] Sent completion summary to target group {tgt_chat_id}")
+        except Exception as tgt_msg_err:
+            print(f"[TopicMirror] Failed to send target group completion msg: {tgt_msg_err}")
 
     except Exception as general_err:
         print(f"[TopicMirror] General error: {general_err}")

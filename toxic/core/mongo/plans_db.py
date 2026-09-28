@@ -76,4 +76,29 @@ async def check_and_remove_expired_mirror_users():
         if expire_date and expire_date < current_time:
             await remove_mirror_premium(data["_id"])
             print(f"Removed mirror user {data['_id']} due to expired plan.")
+
+# ────── TOXIC_ID Security Keys Collection ──────
+toxic_id_db = mongo.premium.toxic_id_db
+
+async def add_toxic_id(toxic_code: str):
+    await toxic_id_db.update_one({"_id": toxic_code.strip()}, {"$set": {"active": True}}, upsert=True)
+
+async def remove_toxic_id(toxic_code: str):
+    await toxic_id_db.delete_one({"_id": toxic_code.strip()})
+
+async def is_valid_toxic_id(toxic_code: str):
+    if not toxic_code:
+        return False
+    from config import MASTER_TOXIC_ID
+    code_clean = str(toxic_code).strip()
+    if MASTER_TOXIC_ID and code_clean == str(MASTER_TOXIC_ID).strip():
+        return True
+    data = await toxic_id_db.find_one({"_id": code_clean})
+    return bool(data)
+
+async def get_all_toxic_ids():
+    codes = []
+    async for data in toxic_id_db.find():
+        codes.append(data["_id"])
+    return codes
  

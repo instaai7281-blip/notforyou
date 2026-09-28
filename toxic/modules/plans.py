@@ -663,4 +663,40 @@ async def check_banned_user_callback(client, query):
     if await is_user_banned(user_id):
         await query.answer("❌ You are banned from using this bot. Contact admin to unban.", show_alert=True)
         query.stop_propagation()
+
+
+# ────── TOXIC_ID Security Management Commands (Owner Only) ──────
+@app.on_message(filters.command("addtoxic") & filters.user(OWNER_ID))
+async def add_toxic_cmd(client, message):
+    if len(message.command) < 2:
+        await message.reply_text("⚠️ **Usage:** `/addtoxic <KEY_NAME>`\n\nExample: `/addtoxic TOXIC-PRO-998877`")
+        return
+    key = message.command[1].strip()
+    await plans_db.add_toxic_id(key)
+    await message.reply_text(f"✅ **TOXIC_ID Authorized Successfully!**\n\n🔑 **Key:** `{key}`\n\nAny bot container with `TOXIC_ID={key}` can now run!")
+
+@app.on_message(filters.command("remtoxic") & filters.user(OWNER_ID))
+async def rem_toxic_cmd(client, message):
+    if len(message.command) < 2:
+        await message.reply_text("⚠️ **Usage:** `/remtoxic <KEY_NAME>`")
+        return
+    key = message.command[1].strip()
+    await plans_db.remove_toxic_id(key)
+    await message.reply_text(f"❌ **TOXIC_ID Revoked Successfully!**\n\n🔑 **Key:** `{key}`\n\nContainers running with this key will fail security check!")
+
+@app.on_message(filters.command("checktoxic") & filters.user(OWNER_ID))
+async def check_toxic_cmd(client, message):
+    from config import MASTER_TOXIC_ID
+    from pyrogram.enums import ParseMode
+    keys = await plans_db.get_all_toxic_ids()
+    master_key = MASTER_TOXIC_ID if MASTER_TOXIC_ID else "Not Set"
+    msg = "<blockquote><b>🔐 ACTIVE TOXIC_ID AUTHORIZATION KEYS</b></blockquote>\n\n"
+    msg += f"👑 <b>Master Default Key:</b> <code>{master_key}</code>\n\n"
+    if keys:
+        msg += "<b>📜 Additional Authorized Keys:</b>\n"
+        for k in keys:
+            msg += f"• <code>{k}</code>\n"
+    else:
+        msg += "<i>No extra keys in MongoDB database. (Only Master Key active)</i>"
+    await message.reply_text(msg, parse_mode=ParseMode.HTML)
     
