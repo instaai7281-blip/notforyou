@@ -383,8 +383,66 @@ def normalize_topic_title(title: str) -> str:
     if not title:
         return ""
     clean = unicodedata.normalize('NFKD', str(title)).lower()
-    clean = re.sub(r'[\s_\-\.\:\(\)\[\]\/\#\*\+]+', ' ', clean).strip()
+    clean = re.sub(r'[\s_\-\.\:\(\)\[\]\/\#\*\+\,\!\?\'\"]+', ' ', clean).strip()
     return clean
+
+
+def alphanumeric_topic_title(title: str) -> str:
+    """Extracts purely letters and numbers for fail-safe topic matching."""
+    if not title:
+        return ""
+    return re.sub(r'[^a-zA-Z0-9]+', '', str(title)).lower()
+
+
+def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> int:
+    """Matches a source topic title against existing target topics using multi-level matching."""
+    if not st_title or not target_topics_by_title:
+        return None
+    
+    exact = st_title.strip().lower()
+    norm = normalize_topic_title(st_title)
+    alpha = alphanumeric_topic_title(st_title)
+
+    # 1. Exact match
+    if exact in target_topics_by_title:
+        return target_topics_by_title[exact]
+    
+    # 2. Normalized match
+    if norm in target_topics_by_title:
+        return target_topics_by_title[norm]
+    
+    # 3. Alphanumeric match
+    if alpha and alpha in target_topics_by_title:
+        return target_topics_by_title[alpha]
+    
+    # 4. Partial word-set match
+    st_words = set(re.findall(r'\w+', st_title.lower()))
+    if len(st_words) >= 2:
+        for key, tid in target_topics_by_title.items():
+            key_words = set(re.findall(r'\w+', str(key).lower()))
+            if st_words == key_words or (len(key_words) >= 2 and st_words.issubset(key_words)):
+                return tid
+
+    return None
+
+
+async def get_highest_topic_checkpoint(src_chat_id: int, src_topic_id: int, current_saved_checkpoint: int = 0) -> int:
+    """
+    Finds the highest last_msg_id checkpoint for a source topic across ALL MongoDB sessions
+    for this source chat ID, ensuring extraction never duplicates already copied posts.
+    """
+    highest = current_saved_checkpoint
+    try:
+        from toxic.core.mongo.db import mirror_db
+        async for doc in mirror_db.find({"src_chat_id": src_chat_id}):
+            topics = doc.get("topics", {})
+            st_info = topics.get(str(src_topic_id), {})
+            last_id = st_info.get("last_msg_id", 0)
+            if last_id > highest:
+                highest = last_id
+    except Exception as err:
+        print(f"[TopicMirror] Checkpoint lookup error: {err}")
+    return highest
 
 
 def get_msg_size(msg) -> int:
@@ -439,9 +497,17 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
         try:
             async for t in client.get_forum_topics(tgt_chat_id):
                 if t and getattr(t, "title", None) and getattr(t, "message_thread_id", None):
-                    norm = normalize_topic_title(t.title)
-                    topics_by_norm_title[norm] = t.message_thread_id
-                    topics_by_id[t.message_thread_id] = t.title
+                    t_title = t.title
+                    tid = t.message_thread_id
+                    norm = normalize_topic_title(t_title)
+                    alpha = alphanumeric_topic_title(t_title)
+                    exact = t_title.strip().lower()
+
+                    topics_by_norm_title[norm] = tid
+                    topics_by_norm_title[exact] = tid
+                    if alpha:
+                        topics_by_norm_title[alpha] = tid
+                    topics_by_id[tid] = t_title
         except Exception as e:
             print(f"[TopicMirror] client.get_forum_topics scan notice: {e}")
 
@@ -465,12 +531,19 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
                     if not getattr(t, "id", None):
                         continue
                     t_title = getattr(t, "title", "")
+                    tid = t.id
                     norm = normalize_topic_title(t_title)
-                    topics_by_norm_title[norm] = t.id
-                    topics_by_id[t.id] = t_title
+                    alpha = alphanumeric_topic_title(t_title)
+                    exact = t_title.strip().lower()
+
+                    topics_by_norm_title[norm] = tid
+                    topics_by_norm_title[exact] = tid
+                    if alpha:
+                        topics_by_norm_title[alpha] = tid
+                    topics_by_id[tid] = t_title
                     offset_date = getattr(t, "date", 0)
-                    offset_id = t.id
-                    offset_topic = t.id
+                    offset_id = tid
+                    offset_topic = tid
                 if len(topics) < 100:
                     break
         except Exception as rpc_err:
@@ -1007,9 +1080,12 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
             st_id = st["id"]
             st_title = st["title"].strip()
             
-            # Check saved checkpoint in MongoDB
+            # Check saved checkpoint in MongoDB (with cross-session failsafe)
             topic_info = saved_topics.get(str(st_id), {})
             last_msg_id = topic_info.get("last_msg_id", 0)
+            highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, st_id, last_msg_id)
+            if highest_ckpt > last_msg_id:
+                last_msg_id = highest_ckpt
 
             # Rapidly fetch messages for topic
             messages = await fetch_all_messages_for_topic(userbot, src_chat_id, st_id, min_msg_id=0, max_limit=5000)
@@ -1708,7 +1784,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             topic_names[st_id] = st_title
             norm_title = normalize_topic_title(st_title)
 
-            # 1. Already mapped from MongoDB
+            # 1. Already mapped from memory
             if st_id in topic_map:
                 continue
 
@@ -1725,14 +1801,22 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 topic_map[st_id] = existing_tgt_id
                 continue
 
-            # 4. Check if target group already has a topic with matching title
-            if norm_title in target_topics_by_title:
-                existing_tgt_id = target_topics_by_title[norm_title]
+            # 4. Check if target group already has a topic with matching title (Multi-level match)
+            existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
+            if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 5. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup
+            # 5. Fresh re-scan right before creating a new topic to prevent ANY duplicate topic creation
+            fresh_target_topics, _ = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics)
+            if existing_tgt_id:
+                topic_map[st_id] = existing_tgt_id
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
+                continue
+
+            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup
             new_tgt_topic_id = None
             try:
                 created = await app.create_forum_topic(
@@ -1742,8 +1826,6 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     icon_emoji_id=st.get("icon_emoji_id")
                 )
                 new_tgt_topic_id = created.message_thread_id
-                target_topics_by_title[norm_title] = new_tgt_topic_id
-                target_topics_by_id[new_tgt_topic_id] = st_title
             except Exception:
                 try:
                     peer = await app.resolve_peer(tgt_chat_id)
@@ -1759,14 +1841,14 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         elif hasattr(upd, "id"):
                             new_tgt_topic_id = upd.id
                             break
-                    if new_tgt_topic_id:
-                        target_topics_by_title[norm_title] = new_tgt_topic_id
-                        target_topics_by_id[new_tgt_topic_id] = st_title
                 except Exception as rpc_create_err:
                     print(f"[TopicMirror] Raw CreateForumTopic error for '{st_title}': {rpc_create_err}")
 
             final_mapped_id = new_tgt_topic_id if new_tgt_topic_id else 1
             topic_map[st_id] = final_mapped_id
+            if new_tgt_topic_id:
+                target_topics_by_title[norm_title] = new_tgt_topic_id
+                target_topics_by_title[st_title.strip().lower()] = new_tgt_topic_id
             await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, final_mapped_id, st_title)
 
         total_topics_count = len(topic_map)
@@ -1817,8 +1899,12 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             current_state["skip_topic"] = False
             topic_stats[src_topic_id] = {"copied": 0, "failed": 0, "skipped": 0, "title": topic_title}
 
-            # Check last copied message ID from MongoDB checkpoint
+            # Check last copied message ID from MongoDB checkpoint (with cross-session failsafe)
             saved_checkpoint = saved_topics.get(str(src_topic_id), {}).get("last_msg_id", 0)
+            if not force_sync:
+                highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, src_topic_id, saved_checkpoint)
+                if highest_ckpt > saved_checkpoint:
+                    saved_checkpoint = highest_ckpt
 
             # Rapidly fetch messages for this topic with checkpoint cutoff (0 if force_sync)
             fetch_cutoff = 0 if force_sync else saved_checkpoint
@@ -1981,16 +2067,32 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
         # Send Stylish Completion Summary to Target Forum Group
         try:
+            STUDY_QUOTES = [
+                "📖 <i>\"Success isn't given. It's earned. In the library, on the desk, with every page turned.\"</i> 💫",
+                "⚡ <i>\"Don't stop when you're tired. Stop when you're done! Keep grinding.\"</i> 🚀",
+                "🎯 <i>\"The expert in anything was once a beginner. Focus on your goal!\"</i> ✨",
+                "🔥 <i>\"Hard work beats talent when talent doesn't work hard. Study smart!\"</i> 💡",
+                "📚 <i>\"Your future self is watching you right now through memories. Make them proud!\"</i> 👑",
+                "🏆 <i>\"Push yourself, because no one else is going to do it for you.\"</i> 🌟",
+                "🚀 <i>\"Dream big, work hard, stay focused, and surround yourself with good energy.\"</i> 💎",
+                "🧠 <i>\"Consistency is the key to mastering any subject. Small steps daily!\"</i> 🎓",
+                "📖 <i>\"Work hard in silence, let your success be your noise.\"</i> 💬",
+                "🌟 <i>\"The beautiful thing about learning is that nobody can take it away from you.\"</i> ⚡",
+                "🎓 <i>\"Discipline is choosing between what you want now and what you want most.\"</i> 🎯",
+                "💫 <i>\"Believe in yourself and all that you are. Great things take time.\"</i> 🔮",
+                "🔥 <i>\"Doubt kills more dreams than failure ever will. Believe & Achieve!\"</i> 🦁",
+                "✨ <i>\"Study like there is no tomorrow, so you can live tomorrow like you always wanted!\"</i> 🚀",
+                "👑 <i>\"The harder you work for something, the greater you'll feel when you achieve it.\"</i> 🏆"
+            ]
+            random_quote = random.choice(STUDY_QUOTES)
             target_group_msg = (
-                "<blockquote><b>🎉 UPDATE COMPLETE BOSS! 🎉</b></blockquote>\n\n"
-                "<b>💎 TOXIC BOT PRO — TOPIC SYNC SUMMARY:</b>\n"
-                f"• <b>Source:</b> <code>{src_title}</code>\n"
-                f"• <b>Target Forum:</b> <code>{tgt_title}</code>\n"
+                "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b></blockquote>\n\n"
                 f"• <b>Total New Uploaded/Updated:</b> ✅ <code>{overall_copied}</code> files\n"
                 f"• <b>Total Topics Processed:</b> 📂 <code>{len(topic_stats)}/{total_topics_count}</code>\n"
                 f"• <b>Total Data Volume:</b> 💾 <code>{humanbytes(overall_transferred_bytes)}</code>\n"
                 f"• <b>Duration:</b> ⏱️ <code>{total_time_taken}</code>\n\n"
-                "<blockquote><b>✅ All pending content has been successfully synced & updated!</b></blockquote>"
+                "<blockquote><b>✅ All pending content has been successfully synced & updated!</b></blockquote>\n\n"
+                f"<b>💡 Daily Motivation:</b>\n{random_quote}"
             )
             try:
                 await app.send_message(
