@@ -194,32 +194,39 @@ async def terms(client, message):
     await message.reply_text(terms_text, reply_markup=buttons)
  
  
-@app.on_message(filters.command("plans") & filters.private)
+def get_bot_username():
+    if hasattr(app, "me") and app.me and app.me.username:
+        return f"@{app.me.username}"
+    return "@bot"
+
+
+@app.on_message(filters.command(["plan", "plans"]))
 async def plan(client, message):
+    bot_username = get_bot_username()
     plan_text = (
         "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
-        "<b>🔥 Unlock Unlimited Power & High-Speed Extraction:</b>\n\n"
+        "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
         "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
         "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
         "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
         "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
         "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
-        "<i>Includes: High-Speed Batch (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
-        "<blockquote><b>🎛️ SPECIAL TOPIC MIRROR PLAN:</b>\n"
-        "• <b>👑 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
-        "<i>Includes: Forum Topic Cloning (/mirror), Auto Topic Creation & Mapping, Instant Resume Checkpoints, Auto Group Bio & Disclaimer Tagging!</i>\n"
-        "⚠️ <b>Note:</b> Topic Mirroring is only accessible with this dedicated ₹299 plan. Standard premium users must purchase this plan to use topic cloning.</blockquote>\n\n"
+        "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
+        "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
+        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
+        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires the dedicated ₹299 plan. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
         "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
-        "• UPI (GPay / PhonePe / Paytm)\n"
-        "• Amazon Gift Cards\n"
-        "• Crypto (USDT BEP20/TRC20)</blockquote>\n\n"
+        "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
+        "• Crypto (USDT BEP20 / TRC20 / TON)\n"
+        "• Amazon Gift Cards</blockquote>\n\n"
         "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
     )
    
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
-            [InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
+            [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
         ]
     )
     await message.reply_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
@@ -227,30 +234,31 @@ async def plan(client, message):
 
 @app.on_callback_query(filters.regex("see_plan"))
 async def see_plan(client, callback_query):
+    bot_username = get_bot_username()
     plan_text = (
         "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
-        "<b>🔥 Unlock Unlimited Power & High-Speed Extraction:</b>\n\n"
+        "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
         "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
         "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
         "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
         "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
         "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
-        "<i>Includes: High-Speed Batch (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
-        "<blockquote><b>🎛️ SPECIAL TOPIC MIRROR PLAN:</b>\n"
-        "• <b>👑 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
-        "<i>Includes: Forum Topic Cloning (/mirror), Auto Topic Creation & Mapping, Instant Resume Checkpoints, Auto Group Bio & Disclaimer Tagging!</i>\n"
-        "⚠️ <b>Note:</b> Topic Mirroring is only accessible with this dedicated ₹299 plan. Standard premium users must purchase this plan to use topic cloning.</blockquote>\n\n"
+        "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
+        "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
+        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
+        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires the dedicated ₹299 plan. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
         "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
-        "• UPI (GPay / PhonePe / Paytm)\n"
-        "• Amazon Gift Cards\n"
-        "• Crypto (USDT BEP20/TRC20)</blockquote>\n\n"
+        "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
+        "• Crypto (USDT BEP20 / TRC20 / TON)\n"
+        "• Amazon Gift Cards</blockquote>\n\n"
         "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
     )
      
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
-            [InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
+            [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
         ]
     )
     await callback_query.message.edit_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
@@ -269,83 +277,118 @@ async def see_terms(client, callback_query):
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/SRC_PRO_BOT")],
+            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
         ]
     )
     await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
+
 @app.on_message(filters.command("guide"))
 async def guide_command(_, message: Message):
-    image_url = "https://i.postimg.cc/BXkchVpY/image.jpg"  # Direct image URL from PostImage
-    await message.reply_photo(
-        photo=image_url,
-        caption=(
-            "📘 **How to Use Save Restricted Bot**\n\n"
-            "If you want to Download Posts From Public Channels/Groups Just Send me **Post Link**\n"        
-            "🔓 I'll unlock content from restricted channels or groups.\n\n"
-            "Use /settings for Settings 🌝\n\n"
-            "Use Next Button For Private Channels/Groups Guide 👇"
-        ),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Next", callback_data="guide_page_1")]
-        ]),
-        quote=True
+    bot_username = get_bot_username()
+    guide_p1_text = (
+        f"<blockquote><b>📘 USER GUIDE — SAVE RESTRICTED CONTENT (1/3)</b></blockquote>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        "<blockquote><b>✨ 1. PUBLIC CHANNEL / GROUP POSTS:</b>\n"
+        f"Send any public Telegram post link directly to <code>{bot_username}</code>.\n"
+        "<i>Example:</i> <code>https://t.me/public_channel/1234</code></blockquote>\n\n"
+        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (SAVE-RESTRICTED):</b>\n"
+        f"1️⃣ Send <code>/login</code> to <code>{bot_username}</code>.\n"
+        "2️⃣ Enter your phone number with country code: <code>+91XXXXXXXXXX</code>\n"
+        "3️⃣ Check Telegram official chat for your OTP code.\n"
+        "4️⃣ Enter OTP with <b>spaces between digits</b> (e.g., for OTP <code>54321</code> ➡️ enter <code>5 4 3 2 1</code>).\n"
+        "5️⃣ Once logged in, send private links <code>https://t.me/c/123456789/55</code> or use <code>/batch</code> for bulk extraction!</blockquote>\n\n"
+        "<blockquote><b>🇮🇳 हिंदी गाइड:</b>\n"
+        f"1️⃣ <code>{bot_username}</code> को <code>/login</code> भेजें।\n"
+        "2️⃣ अपना नंबर <code>+91XXXXXXXXXX</code> टाइप करें।\n"
+        "3️⃣ Telegram ऐप पर आया हुआ OTP <b>स्पेस देकर</b> लिखें (जैसे: <code>5 4 3 2 1</code>)।\n"
+        "4️⃣ लॉगिन के बाद लिंक भेजें या <code>/batch</code> का उपयोग करें।</blockquote>"
     )
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📁 Topic Mirror Guide ➡️", callback_data="guide_page_2")],
+        [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+    ])
+    await message.reply_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
-# Second page callback handler
-@app.on_callback_query(filters.regex("^guide_page_2$"))  # ^ and $ ensure exact match
-async def guide_page_2(_, query: CallbackQuery):
-    await query.message.edit_text(
-        "🛠️ **More Features 😎**\n\n"
-        "✅ Supported post formats:\n\n"
-        "Public Link:\n `https://t.me/public_channel/1234`\n\n"
-        "Private Link:\n `https://t.me/c/123456789/55`\n\n"
-        "💡 Use /login only for private source.\n"
-        "Use /id to get user or chat ID.\n\n"
-        "Use /batch to download multiple posts at once 💀\n\n"
-        "⚝",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back", callback_data="guide_page_1")]
-        ])
-    )
 
-# Back to first page
-@app.on_callback_query(filters.regex("^guide_page_1$"))  # ^ and $ ensure exact match
+@app.on_callback_query(filters.regex("^guide_page_1$"))
 async def guide_page_1(_, query: CallbackQuery):
-    await query.message.edit_text(
-        "**📘 How to Use @SRC_PRO_BOT Guide 👇**\n\n"
-        "💡 **For Private Channels/Groups**\n\n"
-        "**How to download or forward posts from Private Channel/Groups Where Save is Restricted 💀**\n"
-        "────────────────────\n"
-        "➡️ Send /start\n"
-        "➡️ Send /login\n"
-        "────────────────────\n"
-        "**Now 📲 Enter your mobile number\n like:**\n"
-        "`+91XXXXXXXXXX`\n\n"
-        "📨 You’ll get an OTP from Telegram official chat.\n"
-        "────────────────────\n"
-        "**🔢 Enter the OTP with spaces between digits.**\n"
-        "Example: If OTP is `54321`,\n enter: `5 4 3 2 1`\n\n"
-        "✅ You’ll be logged in successfully!\n"
-        "────────────────────\n"
-        "⚡ Now use /batch to download multiple posts.\n"
-        "▭▭▭▭▭▭▭▭▭▭▭▭▭▭▭\n\n"
-        "**हिंदी में 👇**\n\n"
-        "**@SRC_PRO_BOT** का कैसे उपयोग करें\n"
-        "/start कमांड भेजें फिर\n"
-        "/login कमांड भेजें\n"
-        "────────────────────\n"
-        "📲 अब अपना मोबाइल नंबर दर्ज करें:\n"
-        "`+91XXXXXXXXXX`\n\n"
-        "────────────────────\n"
-        "📨 Telegram की official चैट से OTP आएगा\n"     
-        "🔢 OTP को स्पेस के साथ दर्ज करें\n"
-        "उदाहरण: 5 4 3 2 1\n\n"
-        "✅ अब आप सफलतापूर्वक बॉट में लॉग इन हो जाएंगे\n"
-        "────────────────────\n"
-        "⚡ एक बार में कई पोस्ट डाउनलोड करने के लिए /batch का उपयोग करें।"
-        "▭▭▭▭▭▭▭▭▭▭▭▭▭▭▭\n\n",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("More Features 😎", callback_data="guide_page_2")]
-        ])
-)
+    bot_username = get_bot_username()
+    guide_p1_text = (
+        f"<blockquote><b>📘 USER GUIDE — SAVE RESTRICTED CONTENT (1/3)</b></blockquote>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        "<blockquote><b>✨ 1. PUBLIC CHANNEL / GROUP POSTS:</b>\n"
+        f"Send any public Telegram post link directly to <code>{bot_username}</code>.\n"
+        "<i>Example:</i> <code>https://t.me/public_channel/1234</code></blockquote>\n\n"
+        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (SAVE-RESTRICTED):</b>\n"
+        f"1️⃣ Send <code>/login</code> to <code>{bot_username}</code>.\n"
+        "2️⃣ Enter your phone number with country code: <code>+91XXXXXXXXXX</code>\n"
+        "3️⃣ Check Telegram official chat for your OTP code.\n"
+        "4️⃣ Enter OTP with <b>spaces between digits</b> (e.g., for OTP <code>54321</code> ➡️ enter <code>5 4 3 2 1</code>).\n"
+        "5️⃣ Once logged in, send private links <code>https://t.me/c/123456789/55</code> or use <code>/batch</code> for bulk extraction!</blockquote>\n\n"
+        "<blockquote><b>🇮🇳 हिंदी गाइड:</b>\n"
+        f"1️⃣ <code>{bot_username}</code> को <code>/login</code> भेजें।\n"
+        "2️⃣ अपना नंबर <code>+91XXXXXXXXXX</code> टाइप करें।\n"
+        "3️⃣ Telegram ऐप पर आया हुआ OTP <b>स्पेस देकर</b> लिखें (जैसे: <code>5 4 3 2 1</code>)।\n"
+        "4️⃣ लॉगिन के बाद लिंक भेजें या <code>/batch</code> का उपयोग करें।</blockquote>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📁 Topic Mirror Guide ➡️", callback_data="guide_page_2")],
+        [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+    ])
+    await query.message.edit_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
+@app.on_callback_query(filters.regex("^guide_page_2$"))
+async def guide_page_2(_, query: CallbackQuery):
+    bot_username = get_bot_username()
+    guide_p2_text = (
+        f"<blockquote><b>📁 USER GUIDE — TOPIC MIRROR FORUM SYNC (2/3)</b></blockquote>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        "<blockquote><b>👑 EXCLUSIVE TOPIC MIRROR FEATURE (₹299 PLAN):</b>\n"
+        "Clones entire Forum Groups with automatic folder/topic creation, target mapping, instant resume checkpoints, and 1-click update sync!</blockquote>\n\n"
+        "<blockquote><b>🛠️ STEP-BY-STEP SETUP:</b>\n"
+        "1️⃣ Enable <b>Topics</b> in your Target Telegram Group settings.\n"
+        f"2️⃣ Add <code>{bot_username}</code> to your Target Group and make it <b>Admin</b> with <i>Manage Topics</i> & <i>Send Messages</i> rights.\n"
+        f"3️⃣ Send <code>/topicmirror</code> in <code>{bot_username}</code> private chat.\n"
+        "4️⃣ Send Source Channel/Group Link & select Target Forum Group.</blockquote>\n\n"
+        "<blockquote><b>🔎 LIVE SCAN & 1-CLICK SYNC (UPDATE MISSING CONTENT):</b>\n"
+        "• <b>Scan & Compare (<code>/scan_mirror</code>):</b> Scans source & target groups, showing exact extracted vs remaining missing content per topic.\n"
+        "• <b>1-Click Sync (<code>/sync_mirror</code>):</b> Automatically extracts missing posts without duplicating existing content!</blockquote>\n\n"
+        "⚠️ <i>Note: Requires active ₹299 Topic Mirror Plan. Contact Admin via /plans to enable access.</i>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Restricted Guide", callback_data="guide_page_1"), InlineKeyboardButton("Extra Features ➡️", callback_data="guide_page_3")],
+        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+    ])
+    await query.message.edit_text(guide_p2_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
+@app.on_callback_query(filters.regex("^guide_page_3$"))
+async def guide_page_3(_, query: CallbackQuery):
+    bot_username = get_bot_username()
+    guide_p3_text = (
+        f"<blockquote><b>⚡ USER GUIDE — COMMANDS & ADVANCED UTILITIES (3/3)</b></blockquote>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        "<blockquote><b>🛠️ KEY COMMANDS:</b>\n"
+        "• <code>/batch</code> — Extract range of posts (up to 5000 files in one go)\n"
+        "• <code>/cancel</code> — Stop active batch download task\n"
+        "• <code>/topicmirror</code> — Start Topic Mirror Forum Sync (₹299 Plan)\n"
+        "• <code>/cancel_mirror</code> — Stop active Topic Mirroring process\n"
+        "• <code>/scan_mirror</code> — Live scan & compare topic content differences\n"
+        "• <code>/sync_mirror</code> — 1-Click update missing topic files\n"
+        "• <code>/speedtest</code> — Display exact download/upload server speeds\n"
+        "• <code>/settings</code> — Customize thumbnail, watermarks, caption & metadata\n"
+        "• <code>/myplan</code> — Check subscription validity & plan details\n"
+        "• <code>/plans</code> — View premium plans & purchase details\n"
+        "• <code>/id</code> — Get Telegram User ID or Chat ID\n"
+        "• <code>/login</code> / <code>/logout</code> — Manage active user session</blockquote>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Topic Mirror Guide", callback_data="guide_page_2")],
+        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+    ])
+    await query.message.edit_text(guide_p3_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
