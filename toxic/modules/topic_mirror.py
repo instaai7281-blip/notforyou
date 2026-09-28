@@ -712,57 +712,59 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         getattr(msg, "forum_topic_created", None) or 
         getattr(msg, "pinned_message", None) or 
         (not msg.text and not msg.media and not getattr(msg, 'video', None) and not getattr(msg, 'document', None) and not getattr(msg, 'photo', None) and not getattr(msg, 'audio', None) and not getattr(msg, 'voice', None) and not getattr(msg, 'sticker', None) and not getattr(msg, 'animation', None))):
-        return True, "service_skipped"
+        return True, "service_skipped", None
 
     user_data = await db.get_data(user_id) or {}
 
     # Check Media Filters from Settings
     if msg.video and not is_media_type_enabled(user_data, "video"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
     if msg.document and not is_media_type_enabled(user_data, "document"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
     if msg.photo and not is_media_type_enabled(user_data, "photo"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
     if msg.audio and not is_media_type_enabled(user_data, "audio"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
     if msg.sticker and not is_media_type_enabled(user_data, "sticker"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
     if msg.text and not is_media_type_enabled(user_data, "text"):
-        return False, "skipped_filter"
+        return False, "skipped_filter", None
 
     # 1. First Attempt: Fast server-side copy via userbot or app
     try:
         try:
-            await userbot.copy_message(
+            copied_m = await userbot.copy_message(
                 chat_id=tgt_chat_id,
                 from_chat_id=src_chat_id,
                 message_id=msg.id,
                 reply_to_message_id=tgt_topic_id
             )
+            sent_id = getattr(copied_m, 'id', None)
             log_chat = get_log_group()
             if log_chat:
                 try:
                     await app.copy_message(chat_id=log_chat, from_chat_id=src_chat_id, message_id=msg.id)
                 except Exception:
                     pass
-            return True, "copied"
+            return True, "copied", sent_id
         except Exception as forward_err:
             err_str = str(forward_err).upper()
             if "CHAT_FORWARDS_RESTRICTED" not in err_str and "CHATFORWARDSRESTRICTED" not in err_str:
                 try:
-                    await app.copy_message(
+                    copied_m = await app.copy_message(
                         chat_id=tgt_chat_id,
                         from_chat_id=src_chat_id,
                         message_id=msg.id,
                         reply_to_message_id=tgt_topic_id
                     )
+                    sent_id = getattr(copied_m, 'id', None)
                     log_chat = get_log_group()
                     if log_chat:
                         try:
                             await app.copy_message(chat_id=log_chat, from_chat_id=src_chat_id, message_id=msg.id)
                         except Exception:
                             pass
-                    return True, "copied"
+                    return True, "copied", sent_id
                 except Exception:
                     pass
             raise forward_err
@@ -785,19 +787,21 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True
                 )
+                sent_id = getattr(sent_txt, 'id', None)
                 log_chat = get_log_group()
                 if log_chat and sent_txt:
                     try:
                         await sent_txt.copy(log_chat)
                     except Exception:
                         pass
-                return True, "text_sent"
+                return True, "text_sent", sent_id
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
                 return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
             except Exception as txt_err:
                 print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
-                return False, str(txt_err)
+                return False, str(txt_err), None
+
 
         # If message contains media:
         temp_file = None
@@ -1018,14 +1022,16 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 except Exception as log_err:
                     print(f"[TopicMirror] Media log copy notice: {log_err}")
 
-            return True, "download_uploaded"
+            sent_id = getattr(sent_media, 'id', None)
+            return True, "download_uploaded", sent_id
 
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
             return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
         except Exception as dl_up_err:
             print(f"[TopicMirror] Save-Restricted extraction error for msg {msg.id}: {dl_up_err}")
-            return False, str(dl_up_err)
+            return False, str(dl_up_err), None
+
         finally:
             if temp_file and os.path.isfile(temp_file):
                 try:
@@ -2330,7 +2336,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                 msg_size = get_msg_size(msg)
 
-                success, method = await transfer_single_message(
+                success, method, sent_msg_id = await transfer_single_message(
                     userbot=userbot,
                     app=app,
                     src_chat_id=src_chat_id,
@@ -2346,10 +2352,23 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         topic_stats[src_topic_id]["copied"] += 1
                         topic_copied_bytes += msg_size
                         overall_transferred_bytes += msg_size
+
+                        # Auto-pin the FIRST transferred message of this topic
+                        if topic_stats[src_topic_id]["copied"] == 1 and sent_msg_id:
+                            try:
+                                await app.pin_chat_message(
+                                    chat_id=tgt_chat_id,
+                                    message_id=sent_msg_id,
+                                    disable_notification=True
+                                )
+                                print(f"[TopicMirror] 📌 Auto-pinned first message ({sent_msg_id}) in topic {tgt_topic_id}")
+                            except Exception as pin_err:
+                                print(f"[TopicMirror] First message auto-pin notice for topic {tgt_topic_id}: {pin_err}")
                 else:
                     if method != "skipped_filter":
                         overall_failed += 1
                         topic_stats[src_topic_id]["failed"] += 1
+
 
                 # Update checkpoint in MongoDB immediately after message is processed
                 await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
@@ -2510,3 +2529,19 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await userbot.stop()
             except Exception:
                 pass
+
+
+@app.on_message(filters.group & filters.service)
+async def auto_delete_group_service_messages(_, message):
+    """
+    Auto-deletes all group service messages:
+    - New Member Join / Leave notifications (new_chat_members, left_chat_member)
+    - Pinned Message notifications
+    - Forum Topic created / edited / closed / reopened notifications
+    - Group title / photo change notifications
+    """
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
