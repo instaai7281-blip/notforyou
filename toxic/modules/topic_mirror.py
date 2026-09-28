@@ -1794,12 +1794,15 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
-            # 3. Check persistent MongoDB session FIRST (Absolute priority)
+            # 3. Check persistent MongoDB session FIRST (Priority 1, rejecting bad fallback 1s for non-general topics)
             saved_info = saved_topics.get(str(st_id))
             if saved_info and saved_info.get("tgt_topic_id"):
                 existing_tgt_id = saved_info["tgt_topic_id"]
-                topic_map[st_id] = existing_tgt_id
-                continue
+                if existing_tgt_id == 1 and st_id != 1 and norm_title not in ("general", "1"):
+                    print(f"[TopicMirror] Correcting bad saved mapping (1) for non-general topic '{st_title}'...")
+                else:
+                    topic_map[st_id] = existing_tgt_id
+                    continue
 
             # 4. Check if target group already has a topic with matching title (Multi-level match)
             existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
@@ -1844,12 +1847,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 except Exception as rpc_create_err:
                     print(f"[TopicMirror] Raw CreateForumTopic error for '{st_title}': {rpc_create_err}")
 
-            final_mapped_id = new_tgt_topic_id if new_tgt_topic_id else 1
-            topic_map[st_id] = final_mapped_id
             if new_tgt_topic_id:
+                topic_map[st_id] = new_tgt_topic_id
                 target_topics_by_title[norm_title] = new_tgt_topic_id
                 target_topics_by_title[st_title.strip().lower()] = new_tgt_topic_id
-            await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, final_mapped_id, st_title)
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, new_tgt_topic_id, st_title)
+            else:
+                if st_id == 1 or norm_title in ("general", "1"):
+                    topic_map[st_id] = 1
+                    await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
+                else:
+                    print(f"[TopicMirror] ⚠️ Topic '{st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
 
         total_topics_count = len(topic_map)
         await status_msg.edit(
@@ -1889,6 +1897,11 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         start_overall_time = time.time()
 
         for src_topic_id, tgt_topic_id in topic_map.items():
+            if not tgt_topic_id:
+                continue
+            if tgt_topic_id == 1 and src_topic_id != 1 and normalize_topic_title(topic_names.get(src_topic_id, "")) not in ("general", "1"):
+                print(f"[TopicMirror] ⚠️ Skipping extraction for topic '{topic_names.get(src_topic_id)}' mapped improperly to General topic.")
+                continue
             current_state = active_mirrors.get(user_id, {})
             if not current_state.get("running", False):
                 break
