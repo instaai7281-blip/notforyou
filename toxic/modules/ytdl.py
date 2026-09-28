@@ -30,7 +30,13 @@ from telethon.sync import TelegramClient
 from telethon.tl.types import DocumentAttributeVideo
 from toxic.core.func import screenshot, video_metadata, progress_bar, optimize_thumbnail
 from telethon.tl.functions.messages import EditMessageRequest
-from toxictools import fast_upload
+try:
+    from toxic.core.toxictools import fast_upload
+except ImportError:
+    try:
+        from toxictools import fast_upload
+    except ImportError:
+        from toxic.core.fast_pyro import fast_upload
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp 
 from toxic import app
