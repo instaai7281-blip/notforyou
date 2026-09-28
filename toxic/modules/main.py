@@ -261,7 +261,7 @@ async def prompt_new_batch(user_id, message):
     for attempt in range(3):
         await app.send_photo(
             user_id,
-            photo="https://i.postimg.cc/BXkchVpY/image.jpg",
+            photo="https://freeimage.host/i/n7cbXDX",
             caption="Just Copy Post Link And Send it To Me.\n\nजहाँ से शुरू करना है उस पोस्ट का लिंक भेजो\n\nMake sure the link is correct!"
         )
         start = await app.ask(user_id, "🎯 Send The Link For Where I Need To Start Process From \n\n> You Have Only 3 Tries")

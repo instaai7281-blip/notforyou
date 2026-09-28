@@ -308,7 +308,17 @@ async def guide_command(_, message: Message):
         [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
         [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
     ])
-    await message.reply_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    image_url = "https://freeimage.host/i/n7cbXDX"
+    try:
+        await message.reply_photo(
+            photo=image_url,
+            caption=guide_p1_text,
+            reply_markup=buttons,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as err:
+        print(f"⚠️ Failed to send guide photo: {err}")
+        await message.reply_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("^guide_page_1$"))
@@ -337,7 +347,10 @@ async def guide_page_1(_, query: CallbackQuery):
         [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
         [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
     ])
-    await query.message.edit_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    try:
+        await query.message.edit_caption(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        await query.message.edit_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("^guide_page_2$"))
@@ -362,7 +375,10 @@ async def guide_page_2(_, query: CallbackQuery):
         [InlineKeyboardButton("⬅️ Restricted Guide", callback_data="guide_page_1"), InlineKeyboardButton("Extra Features ➡️", callback_data="guide_page_3")],
         [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
     ])
-    await query.message.edit_text(guide_p2_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    try:
+        await query.message.edit_caption(guide_p2_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        await query.message.edit_text(guide_p2_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("^guide_page_3$"))
@@ -390,4 +406,7 @@ async def guide_page_3(_, query: CallbackQuery):
         [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
         [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
     ])
-    await query.message.edit_text(guide_p3_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    try:
+        await query.message.edit_caption(guide_p3_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        await query.message.edit_text(guide_p3_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
