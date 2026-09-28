@@ -394,7 +394,9 @@ async def guide_page_2(_, query: CallbackQuery):
         "4️⃣ Send Source Channel/Group Link & select Target Forum Group.</blockquote>\n\n"
         "<blockquote><b>🔎 LIVE SCAN & 1-CLICK SYNC (UPDATE MISSING CONTENT):</b>\n"
         "• <b>Scan & Compare (<code>/scan_mirror</code>):</b> Scans source & target groups, showing exact extracted vs remaining missing content per topic.\n"
-        "• <b>1-Click Sync (<code>/sync_mirror</code>):</b> Automatically extracts missing posts without duplicating existing content!</blockquote>\n\n"
+        "• <b>1-Click Sync (<code>/sync_mirror</code>):</b> Automatically extracts missing posts without duplicating existing content!\n"
+        "• <b>Topic Link Mirror (<code>/topiclink</code>):</b> Mirror content from one specific source topic link directly to another target topic link!</blockquote>\n\n"
+
         "⚠️ <i>Note: Requires active ₹299 Topic Mirror Plan. Contact Admin via /plans to enable access.</i>"
     )
     buttons = InlineKeyboardMarkup([

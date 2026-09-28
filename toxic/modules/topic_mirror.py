@@ -346,6 +346,63 @@ def parse_source_link(link: str):
     return None, None, None
 
 
+def parse_topic_link(link: str):
+    """
+    Parses a Telegram topic link to extract (chat_id, topic_id).
+    Supports:
+    - https://t.me/c/1234567890/100/500 -> (-1001234567890, 100)
+    - https://t.me/c/1234567890/100 -> (-1001234567890, 100)
+    - https://t.me/username/100/500 -> ('username', 100)
+    - https://t.me/username/100 -> ('username', 100)
+    - tg://openmessage?chat_id=-1001234567890&topic_id=100 -> (-1001234567890, 100)
+    """
+    if not link:
+        return None, None
+    try:
+        clean_link = link.strip()
+        if "tg://openmessage" in clean_link:
+            chat_match = re.search(r'chat_id=(-?\d+)', clean_link)
+            topic_match = re.search(r'topic_id=(\d+)', clean_link)
+            msg_match = re.search(r'message_id=(\d+)', clean_link)
+            chat_id = int(chat_match.group(1)) if chat_match else None
+            topic_id = int(topic_match.group(1)) if topic_match else (int(msg_match.group(1)) if msg_match else 1)
+            return chat_id, topic_id
+
+        clean_link = re.sub(r'https?://(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)/', '', clean_link)
+        parts = [p for p in clean_link.split('/') if p]
+        if not parts:
+            return None, None
+
+        if parts[0] == 'c':
+            chat_id = int("-100" + parts[1])
+            if len(parts) >= 4:
+                return chat_id, int(parts[2])
+            elif len(parts) == 3:
+                return chat_id, int(parts[2])
+            elif len(parts) == 2:
+                return chat_id, 1
+        else:
+            chat_id = parts[0]
+            if len(parts) >= 3 and parts[1].isdigit():
+                return chat_id, int(parts[1])
+            elif len(parts) == 2 and parts[1].isdigit():
+                return chat_id, int(parts[1])
+    except Exception as e:
+        print(f"[TopicMirror] parse_topic_link error: {e}")
+    return None, None
+
+
+def format_topic_title_with_diamond(title: str) -> str:
+    """Formats topic title with 💎 diamond emoji at the beginning."""
+    if not title:
+        return "💎 Topic"
+    clean = str(title).strip()
+    if clean.startswith("💎"):
+        return clean
+    return f"💎 {clean}"
+
+
+
 async def get_working_userbot(user_id: int):
     """Returns an authenticated Pyrogram Client for the user session or pool client."""
     user_data = await db.get_data(user_id)
@@ -1005,7 +1062,10 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
             
         buttons.append([InlineKeyboardButton(f"📁 {src_t} ➔ {tgt_t}", callback_data=f"tm_opt_{src_id}_{tgt_id}")])
         
-    buttons.append([InlineKeyboardButton("➕ Start New Mirror", callback_data="tm_new")])
+    buttons.append([
+        InlineKeyboardButton("➕ Start Group Mirror", callback_data="tm_new"),
+        InlineKeyboardButton("🔗 Link Mirror (Topic ➔ Topic)", callback_data="tm_topiclink")
+    ])
     buttons.append([InlineKeyboardButton("🗑️ Clear All Saved Sessions", callback_data="tm_clear")])
     return InlineKeyboardMarkup(buttons)
 
@@ -1015,11 +1075,17 @@ def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int) -> InlineK
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
+        [
+            InlineKeyboardButton("🎯 Mirror 1 Topic", callback_data=f"tm_picktopic_{src_chat_id}_{tgt_chat_id}"),
+            InlineKeyboardButton("🔄 Re-Upload Topic", callback_data=f"tm_reuploadtopic_{src_chat_id}_{tgt_chat_id}")
+        ],
+        [InlineKeyboardButton("🔗 Mirror via Topic Links (Link ➔ Link)", callback_data="tm_topiclink")],
         [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("✏️ Modify Target Chat ID", callback_data=f"tm_edittgt_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🗑️ Delete This Session", callback_data=f"tm_delsess_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
     ])
+
 
 
 async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: int):
@@ -1568,6 +1634,286 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
     )
 
 
+async def start_topic_link_flow(user_id: int, message, is_callback: bool = False):
+    """Interactive prompt flow for mirroring from ONE specific topic link to ANOTHER topic link."""
+    if await chk_mirror_user(user_id) != 0:
+        err_msg = (
+            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
+            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan (₹299/month)</b>.\n\n"
+            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+        )
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan (₹299)", url="https://t.me/CHOSEN_ONEx_bot")]])
+        if is_callback:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        err_active = "⚠️ **A mirroring operation is already running!** Send `/cancel_mirror` to abort it first."
+        if is_callback:
+            await app.send_message(user_id, err_active)
+        else:
+            await message.reply(err_active)
+        return
+
+    # STEP 1: Ask for SOURCE Topic Link
+    try:
+        prompt_1 = await app.ask(
+            user_id,
+            "🔗 **Send the SOURCE Topic link:**\n\n"
+            "*(e.g., `https://t.me/c/1234567890/100/500` or `https://t.me/c/1234567890/100`)*\n\n"
+            "Send `/cancel` to abort.",
+            timeout=180
+        )
+    except Exception as e:
+        err_text = "❌ **Interactive Prompt Failed:**\nPlease start the bot first in private DM (@" + (await app.get_me()).username + ")!"
+        if is_callback:
+            await app.send_message(user_id, err_text)
+        else:
+            await message.reply(err_text)
+        return
+
+    if prompt_1.text == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    src_link = prompt_1.text.strip()
+    src_chat_id, src_topic_id = parse_topic_link(src_link)
+
+    if not src_chat_id or not src_topic_id:
+        await app.send_message(user_id, "❌ **Invalid Source Topic link format.** Could not extract Group ID or Topic ID.")
+        return
+
+    # STEP 2: Ask for TARGET Topic Link
+    try:
+        prompt_2 = await app.ask(
+            user_id,
+            "🎯 **Send the TARGET Topic link (where content should be sent):**\n\n"
+            "*(e.g., `https://t.me/c/9876543210/200/50` or `https://t.me/c/9876543210/200`)*\n\n"
+            "Send `/cancel` to abort.",
+            timeout=180
+        )
+    except Exception as e:
+        await app.send_message(user_id, f"❌ Session timed out or error: {e}")
+        return
+
+    if prompt_2.text == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    tgt_link = prompt_2.text.strip()
+    tgt_chat_id, tgt_topic_id = parse_topic_link(tgt_link)
+
+    if not tgt_chat_id or not tgt_topic_id:
+        await app.send_message(user_id, "❌ **Invalid Target Topic link format.** Could not extract Target Group ID or Topic ID.")
+        return
+
+    userbot, _ = await get_working_userbot(user_id)
+    if isinstance(src_chat_id, str) and userbot:
+        try:
+            c = await userbot.get_chat(src_chat_id)
+            src_chat_id = c.id
+        except Exception:
+            pass
+
+    if isinstance(tgt_chat_id, str):
+        try:
+            c = await app.get_chat(tgt_chat_id)
+            tgt_chat_id = c.id
+        except Exception:
+            pass
+
+    await app.send_message(
+        user_id,
+        f"🚀 **Direct Topic-to-Topic Link Mirror Initialized!**\n\n"
+        f"📤 **Source Chat:** `{src_chat_id}` | **Topic ID:** `{src_topic_id}`\n"
+        f"📥 **Target Chat:** `{tgt_chat_id}` | **Topic ID:** `{tgt_topic_id}`\n\n"
+        f"Starting extraction..."
+    )
+
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=False,
+        detected_topic_id=src_topic_id,
+        forced_tgt_topic_id=tgt_topic_id
+    )
+
+
+@app.on_message(filters.command(["topiclink", "linkmirror", "topicmirrorlink"]))
+async def topic_link_cmd(client, message):
+    if not message.from_user:
+        await message.reply("❌ **Error:** This command must be sent by a user.")
+        return
+    user_id = message.from_user.id
+    await start_topic_link_flow(user_id, message, is_callback=False)
+
+
+@app.on_callback_query(filters.regex(r"^tm_topiclink$"))
+async def topic_link_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        return
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+        return
+    await query.answer()
+    await start_topic_link_flow(user_id, query.message, is_callback=True)
+
+
+@app.on_callback_query(filters.regex(r"^tm_picktopic_(-?\d+)_(-?\d+)$"))
+async def pick_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_picktopic_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    await query.answer("🔍 Fetching topics...")
+    userbot, is_temp = await get_working_userbot(user_id)
+    if not userbot:
+        await query.message.reply("❌ No userbot session available!")
+        return
+
+    topics = []
+    try:
+        async for t in userbot.get_forum_topics(src_chat_id):
+            topics.append((t.message_thread_id, t.title))
+    except Exception:
+        topics = [(1, "General")]
+
+    if is_temp and userbot:
+        try:
+            await userbot.stop()
+        except Exception:
+            pass
+
+    if not topics:
+        topics = [(1, "General")]
+
+    buttons = []
+    for tid, ttitle in topics[:40]:
+        t_label = ttitle[:20] if len(ttitle) > 20 else ttitle
+        buttons.append([InlineKeyboardButton(f"🎯 {t_label}", callback_data=f"tm_dosingle_{src_chat_id}_{tgt_chat_id}_{tid}")])
+
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"tm_opt_{src_chat_id}_{tgt_chat_id}")])
+
+    await query.message.edit_text(
+        "🎯 **Select the single topic you want to mirror:**",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_dosingle_(-?\d+)_(-?\d+)_(\d+)$"))
+async def do_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_dosingle_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    topic_id = int(match.group(3))
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ Mirror task already running!", show_alert=True)
+        return
+
+    await query.answer("🚀 Starting single topic mirror...")
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=False,
+        detected_topic_id=topic_id,
+        status_msg=query.message
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_reuploadtopic_(-?\d+)_(-?\d+)$"))
+async def reupload_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_reuploadtopic_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    await query.answer("🔍 Fetching topics for re-upload...")
+    userbot, is_temp = await get_working_userbot(user_id)
+    if not userbot:
+        await query.message.reply("❌ No userbot session available!")
+        return
+
+    topics = []
+    try:
+        async for t in userbot.get_forum_topics(src_chat_id):
+            topics.append((t.message_thread_id, t.title))
+    except Exception:
+        topics = [(1, "General")]
+
+    if is_temp and userbot:
+        try:
+            await userbot.stop()
+        except Exception:
+            pass
+
+    if not topics:
+        topics = [(1, "General")]
+
+    buttons = []
+    for tid, ttitle in topics[:40]:
+        t_label = ttitle[:20] if len(ttitle) > 20 else ttitle
+        buttons.append([InlineKeyboardButton(f"🔄 Re-upload {t_label}", callback_data=f"tm_doreupload_{src_chat_id}_{tgt_chat_id}_{tid}")])
+
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"tm_opt_{src_chat_id}_{tgt_chat_id}")])
+
+    await query.message.edit_text(
+        "🔄 **Select the topic to RE-UPLOAD from scratch (resets checkpoint to 0):**",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_doreupload_(-?\d+)_(-?\d+)_(\d+)$"))
+async def do_reupload_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_doreupload_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    topic_id = int(match.group(3))
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ Mirror task already running!", show_alert=True)
+        return
+
+    await query.answer("🔄 Resetting topic checkpoint & re-uploading from post #1...")
+    await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, topic_id, 0)
+
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=False,
+        detected_topic_id=topic_id,
+        status_msg=query.message,
+        force_sync=True
+    )
+
+
+
 @app.on_message(filters.command(["topicmirror", "tmirror", "mirror"]))
 async def topic_mirror_cmd(client, message):
     if not message.from_user:
@@ -1606,7 +1952,7 @@ async def topic_mirror_cmd(client, message):
         await start_new_mirror_flow(user_id, message)
 
 
-async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, status_msg=None, force_sync: bool = False):
+async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False):
     """Core execution engine for topic mirroring with instant resume, rapid extraction, and force sync."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
@@ -1731,6 +2077,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 except Exception:
                     pass
 
+        # If forced_tgt_topic_id is set (Direct Topic Link Mirroring)
+        if forced_tgt_topic_id is not None and detected_topic_id is not None:
+            st_title = f"Topic {detected_topic_id}"
+            try:
+                async for forum_topic in userbot.get_forum_topics(src_chat_id):
+                    if forum_topic.message_thread_id == detected_topic_id:
+                        st_title = forum_topic.title
+                        break
+            except Exception:
+                pass
+            topic_map[detected_topic_id] = forced_tgt_topic_id
+            topic_names[detected_topic_id] = st_title
+            await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, detected_topic_id, forced_tgt_topic_id, st_title)
+
         source_topics = []
         try:
             async for forum_topic in userbot.get_forum_topics(src_chat_id):
@@ -1819,13 +2179,14 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup
+            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with 💎 Diamond title and color
             new_tgt_topic_id = None
+            diamond_st_title = format_topic_title_with_diamond(st_title)
             try:
                 created = await app.create_forum_topic(
                     chat_id=tgt_chat_id,
-                    title=st_title,
-                    icon_color=st.get("icon_color"),
+                    title=diamond_st_title,
+                    icon_color=0x6FB9F0,
                     icon_emoji_id=st.get("icon_emoji_id")
                 )
                 new_tgt_topic_id = created.message_thread_id
@@ -1834,7 +2195,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     peer = await app.resolve_peer(tgt_chat_id)
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(
                         peer=peer,
-                        title=st_title,
+                        title=diamond_st_title,
+                        icon_color=0x6FB9F0,
                         random_id=random.randint(1000000, 9999999)
                     ))
                     for upd in getattr(res, "updates", []):
@@ -1845,7 +2207,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             new_tgt_topic_id = upd.id
                             break
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] Raw CreateForumTopic error for '{st_title}': {rpc_create_err}")
+                    print(f"[TopicMirror] Raw CreateForumTopic error for '{diamond_st_title}': {rpc_create_err}")
 
             if new_tgt_topic_id:
                 topic_map[st_id] = new_tgt_topic_id
@@ -1858,6 +2220,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 else:
                     print(f"[TopicMirror] ⚠️ Topic '{st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
+
+        # Ensure ALL mapped target topics in target supergroup have 💎 diamond title format
+        for s_id, t_id in topic_map.items():
+            if t_id and t_id != 1:
+                t_title = topic_names.get(s_id, f"Topic {s_id}")
+                diamond_name = format_topic_title_with_diamond(t_title)
+                try:
+                    await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=diamond_name)
+                except Exception:
+                    pass
+
 
         total_topics_count = len(topic_map)
         await status_msg.edit(
