@@ -2284,10 +2284,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup matching source title
+            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with clean title & 💎 Diamond custom emoji icon
             new_tgt_topic_id = None
-            clean_st_title = st_title.strip()
-            src_icon_emoji = st.get("icon_emoji_id") or DIAMOND_EMOJI_ID
+            clean_st_title = clean_topic_title(st_title)
+            src_icon_emoji = DIAMOND_EMOJI_ID
             try:
                 created = await app.create_forum_topic(
                     chat_id=tgt_chat_id,
@@ -2328,7 +2328,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 else:
                     print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
 
-        # Asynchronously update target topic titles & icons in background so Phase 1 finishes in <0.05s!
+        # Asynchronously update target topic titles (removing 💎 text) & setting 💎 custom emoji icon in background!
         async def background_topic_icon_update():
             for s_id, t_id in topic_map.items():
                 if t_id and t_id != 1:
@@ -2341,14 +2341,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             title=t_title,
                             icon_emoji_id=DIAMOND_EMOJI_ID
                         ))
-                        await asyncio.sleep(0.1)
                     except Exception:
                         try:
-                            await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=t_title)
-                        except Exception:
-                            pass
+                            await app.edit_forum_topic(
+                                chat_id=tgt_chat_id,
+                                message_thread_id=t_id,
+                                title=t_title,
+                                icon_emoji_id=DIAMOND_EMOJI_ID
+                            )
+                        except Exception as py_err:
+                            print(f"[TopicMirror] Topic {t_id} icon update notice: {py_err}")
+                    await asyncio.sleep(0.1)
 
         asyncio.create_task(background_topic_icon_update())
+
 
 
 
