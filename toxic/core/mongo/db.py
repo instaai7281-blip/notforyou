@@ -365,6 +365,20 @@ async def delete_mirror_session(src_chat_id, tgt_chat_id):
     """Deletes a saved mirror session."""
     await mirror_db.delete_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
 
+async def get_mirror_sessions_by_chat(chat_id):
+    """Retrieves all saved mirror sessions associated with a target or source group ID."""
+    try:
+        c_id = int(chat_id)
+        cursor = mirror_db.find({"$or": [{"tgt_chat_id": c_id}, {"src_chat_id": c_id}]})
+        sessions = []
+        async for doc in cursor:
+            sessions.append(doc)
+        return sessions
+    except Exception as e:
+        print(f"[MongoDB] get_mirror_sessions_by_chat error: {e}")
+        return []
+
+
 
 async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_chat_id, new_tgt_title=""):
     """Updates the target chat ID and title for a saved mirror session."""

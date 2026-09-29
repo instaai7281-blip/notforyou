@@ -402,6 +402,70 @@ def format_topic_title_with_diamond(title: str) -> str:
     return f"💎 {clean}"
 
 
+def extract_caption_content_ids(text: str) -> set:
+    """
+    Extracts standardized numeric content IDs from message caption text
+    (e.g., PDF ID: 123, Video ID: 456, Lecture ID: 789, [ID: 101], ID: 55).
+    """
+    if not text:
+        return set()
+    patterns = [
+        r'(?i)(?:pdf|video|doc|lecture|file|item|content|msg)[\s_]*id[\s_]*[:\-#]?[\s_]*(\d+)',
+        r'(?i)id[\s_]*[:\-#][\s_]*(\d+)',
+        r'\[(?:ID|id)[\s:]*(\d+)\]',
+        r'\((?:ID|id)[\s:]*(\d+)\)'
+    ]
+    extracted_ids = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, str(text)):
+            try:
+                extracted_ids.add(int(match.group(1)))
+            except Exception:
+                pass
+    return extracted_ids
+
+
+async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topic_id: int, max_limit: int = 1500) -> set:
+    """
+    Scans existing target topic messages to extract all already-synced caption content IDs
+    (e.g., PDF ID, Video ID, etc.) for robust deduplication & seamless continuation.
+    """
+    synced_ids = set()
+    if not tgt_chat_id or not tgt_topic_id:
+        return synced_ids
+
+    clients_to_try = []
+    if app:
+        clients_to_try.append(app)
+    if userbot and userbot not in clients_to_try:
+        clients_to_try.append(userbot)
+
+    for client in clients_to_try:
+        try:
+            if tgt_topic_id and tgt_topic_id != 1:
+                async for m in client.get_discussion_replies(tgt_chat_id, tgt_topic_id, limit=max_limit):
+                    cap = (m.caption or m.text or "") if m else ""
+                    if cap:
+                        c_ids = extract_caption_content_ids(cap)
+                        synced_ids.update(c_ids)
+            else:
+                async for m in client.get_chat_history(tgt_chat_id, limit=max_limit):
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    if m_thread in (None, 1) and (not reply_to or reply_to == 1):
+                        cap = (m.caption or m.text or "") if m else ""
+                        if cap:
+                            c_ids = extract_caption_content_ids(cap)
+                            synced_ids.update(c_ids)
+            if synced_ids:
+                break
+        except Exception as err:
+            print(f"[TopicMirror] scan_target_topic_content_ids notice for {tgt_topic_id}: {err}")
+
+    return synced_ids
+
+
+
 
 userbot_sessions = {} # user_id -> Client instance
 
@@ -2354,6 +2418,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     print(f"[TopicMirror] Topic '{topic_title}' already up to date ({already_done_count} msgs). Skipping.")
                     continue
 
+                # Scan target topic content IDs for smart deduplication & zero-skip continuation
+                synced_caption_ids = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
+
                 # Instant Extraction Start without heavy pre-loop file sizing
                 topic_copied_bytes = 0
                 last_edit_time = time.time()
@@ -2374,14 +2441,24 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
                         continue
 
+                    # Check caption content ID match (PDF ID, Video ID, etc.) for seamless continuation
+                    msg_cap = (msg.caption or msg.text or "") if msg else ""
+                    src_content_ids = extract_caption_content_ids(msg_cap)
+                    if src_content_ids and synced_caption_ids and src_content_ids.issubset(synced_caption_ids):
+                        print(f"[TopicMirror] Source msg {msg.id} content IDs {src_content_ids} already synced in target topic {tgt_topic_id}. Resuming next.")
+                        topic_stats[src_topic_id]["skipped"] += 1
+                        overall_skipped += 1
+                        await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                        continue
+
                     msg_size = get_msg_size(msg)
 
-                    # Auto-retry transfer up to 3 times on transient errors or FloodWaits
+                    # Auto-retry transfer up to 5 times on transient errors or FloodWaits
                     success = False
                     method = "failed"
                     sent_msg_id = None
 
-                    for attempt in range(1, 4):
+                    for attempt in range(1, 6):
                         try:
                             await ensure_userbot_connected(userbot)
                             success, method, sent_msg_id = await transfer_single_message(
@@ -2399,11 +2476,12 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             print(f"[TopicMirror] FloodWait {fw.value}s on msg {msg.id}. Sleeping...")
                             await asyncio.sleep(fw.value + 1)
                         except Exception as transfer_err:
-                            print(f"[TopicMirror] Message {msg.id} transfer attempt {attempt}/3 error: {transfer_err}")
-                            if attempt < 3:
+                            print(f"[TopicMirror] Message {msg.id} transfer attempt {attempt}/5 error: {transfer_err}")
+                            if attempt < 5:
                                 await asyncio.sleep(2)
                             else:
                                 success, method, sent_msg_id = False, str(transfer_err), None
+
 
                     if success:
                         if method != "service_skipped":
@@ -2606,4 +2684,34 @@ async def auto_delete_group_service_messages(_, message):
         await message.delete()
     except Exception:
         pass
+
+
+@app.on_chat_member_updated()
+async def on_group_member_update(_, event):
+    """
+    Automatically tracks when bot joins or is made Admin in a group,
+    logging the group and updating active target sessions in MongoDB.
+    """
+    try:
+        if not event or not event.chat:
+            return
+        chat = event.chat
+        if chat.type in (types.ChatType.GROUP, types.ChatType.SUPERGROUP):
+            chat_id = chat.id
+            title = chat.title or str(chat_id)
+            new_member = event.new_chat_member
+            if new_member and new_member.user and new_member.user.is_self:
+                if new_member.status in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.MEMBER):
+                    await db.add_joined_chat(chat_id, title)
+                    # Check if group bio auto-update is applicable
+                    try:
+                        from toxic.core.mongo.db import get_custom_group_bio
+                        target_bio = await get_custom_group_bio()
+                        await app.set_chat_description(chat_id, target_bio)
+                    except Exception:
+                        pass
+                    print(f"[GroupEvents] ✅ Bot active in group: '{title}' ({chat_id})")
+    except Exception as e:
+        print(f"[GroupEvents] on_group_member_update notice: {e}")
+
 
