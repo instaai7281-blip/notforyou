@@ -229,21 +229,46 @@ async def restrict_bot():
             except Exception as pc_err:
                 print(f"⚠️ Pro client #{idx+1} failed to start: {pc_err}")
     
-    # Send clean startup notification on boot/restart
+    # Send clean startup notification on boot/restart to owner, log group, and all paid premium users
     try:
-        owner_id = OWNER_ID[0] if isinstance(OWNER_ID, list) and OWNER_ID else OWNER_ID
         startup_msg = (
             "<blockquote><b>⚡ I am restarted baby! 😎</b></blockquote>\n\n"
             "Press <b>/start</b> and continue your tasks with <b>/batch</b> or <b>/topicmirror</b>.\n"
-            "<i>Just give me tasks and go to rest! ☕🚀</i>"
+            "<i>Just give me tasks and go to rest! 😉🚀</i>"
         )
 
-        if owner_id:
+        recipients = set()
+        owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+        for o in owner_list:
+            if o:
+                try:
+                    recipients.add(int(o))
+                except Exception:
+                    pass
+
+        try:
+            from toxic.core.mongo.plans_db import premium_users, mirror_premium_users
+            p_users = await premium_users()
+            m_users = await mirror_premium_users()
+            for u in (p_users + m_users):
+                if u:
+                    try:
+                        recipients.add(int(u))
+                    except Exception:
+                        pass
+        except Exception as p_err:
+            print(f"⚠️ Failed to fetch premium users list for restart notification: {p_err}")
+
+        sent_count = 0
+        for uid in recipients:
             try:
-                await app.send_message(int(owner_id), startup_msg, parse_mode=ParseMode.HTML)
-                print("[INFO] Startup message sent to owner.")
-            except Exception as owner_err:
-                print(f"⚠️ Failed to send startup message to owner ({owner_id}): {owner_err}")
+                await app.send_message(uid, startup_msg, parse_mode=ParseMode.HTML)
+                sent_count += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+        print(f"[INFO] Startup message sent to {sent_count} owner & paid premium user(s).")
+
         if LOG_GROUP:
             try:
                 await app.send_message(int(LOG_GROUP), startup_msg, parse_mode=ParseMode.HTML)
@@ -252,6 +277,7 @@ async def restrict_bot():
                 print(f"⚠️ Failed to send startup message to log group ({LOG_GROUP}): {log_err}")
     except Exception as e:
         print(f"⚠️ Failed to send startup message: {e}")
+
 
 
 

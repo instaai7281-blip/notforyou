@@ -2686,7 +2686,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 pass
 
 
-@app.on_message((filters.group | filters.supergroup) & filters.service)
+@app.on_message(filters.service)
 async def auto_delete_group_service_messages(_, message):
     """
     Auto-deletes all group service messages:
@@ -2696,10 +2696,12 @@ async def auto_delete_group_service_messages(_, message):
     - Group title / photo change notifications
     """
     try:
-        await message.delete()
-        print(f"[ServiceMsgDelete] ✅ Auto-deleted service message {getattr(message, 'id', None)} in chat {message.chat.id}")
+        if message and message.chat and message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            await message.delete()
+            print(f"[ServiceMsgDelete] ✅ Auto-deleted service message {getattr(message, 'id', None)} in chat {message.chat.id}")
     except Exception as e:
-        print(f"[ServiceMsgDelete] Notice: Could not delete service msg: {e}")
+        pass
+
 
 
 
