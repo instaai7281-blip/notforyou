@@ -147,12 +147,15 @@ async def progress_bar(current, total, ud_type, message, start):
     diff = now - start
     
     # Update every 5 seconds or on completion to minimize API overhead
-    if not hasattr(progress_bar, "last_update"):
-        progress_bar.last_update = 0
+    if not hasattr(progress_bar, "last_updates"):
+        progress_bar.last_updates = {}
             
-    if (now - progress_bar.last_update) >= 5 or current == total:
-        progress_bar.last_update = now
-        percentage = current * 100 / total
+    msg_id = getattr(message, "id", id(message))
+    last_update = progress_bar.last_updates.get(msg_id, 0)
+
+    if (now - last_update) >= 5 or current == total:
+        progress_bar.last_updates[msg_id] = now
+        percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         
         # Avoid division by zero and handle tiny speeds
@@ -175,8 +178,9 @@ async def progress_bar(current, total, ud_type, message, start):
         )
         try:
             await message.edit(text=f"{ud_type} {tmp}")
-        except:
+        except Exception:
             pass
+
 
 def humanbytes(size):
     if not size:
@@ -334,6 +338,47 @@ def optimize_thumbnail(image_path):
 
 # REPLACE screenshot() function in toxic/core/func.py (Line 221-257)
 
+def _opencv_worker(video, out):
+    try:
+        vcap = cv2.VideoCapture(video)
+        if not vcap.isOpened():
+            return False
+        frame_count = vcap.get(cv2.CAP_PROP_FRAME_COUNT)
+        if frame_count <= 0:
+            vcap.release()
+            return False
+            
+        attempts = 20
+        seek_pcts = [i * 0.05 for i in range(1, attempts + 1)]
+        fallback_frame = None
+        success = False
+        
+        for pct in seek_pcts:
+            frame_no = int(frame_count * pct)
+            vcap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+            ret, frame = vcap.read()
+            if ret and frame is not None:
+                if fallback_frame is None:
+                    fallback_frame = frame.copy()
+                
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                mean_val = gray.mean()
+                if mean_val >= 10.0:
+                    cv2.imwrite(out, frame)
+                    success = True
+                    break
+        
+        if not success and fallback_frame is not None:
+            cv2.imwrite(out, fallback_frame)
+            success = True
+            
+        vcap.release()
+        return success
+    except Exception as e:
+        print(f"[ERROR] OpenCV worker failed: {e}")
+        return False
+
+
 async def screenshot(video, duration, sender):
     try:
         # Validate inputs
@@ -343,43 +388,14 @@ async def screenshot(video, duration, sender):
         out = f"thumb_{sender}_{int(time.time())}.jpg"
         success = False
         
-        # 1. Try OpenCV first (super fast and handles non-black detection efficiently)
+        # 1. Try OpenCV first (offloaded to background thread to avoid blocking loop)
         try:
             print(f"[DEBUG] Trying OpenCV screenshot for: {video}")
-            vcap = cv2.VideoCapture(video)
-            if vcap.isOpened():
-                frame_count = vcap.get(cv2.CAP_PROP_FRAME_COUNT)
-                if frame_count > 0:
-                    # Try 20 seek points from 5% to 100% of the video
-                    attempts = 20
-                    seek_pcts = [i * 0.05 for i in range(1, attempts + 1)]
-                    fallback_frame = None
-                    
-                    for pct in seek_pcts:
-                        frame_no = int(frame_count * pct)
-                        vcap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-                        ret, frame = vcap.read()
-                        if ret and frame is not None:
-                            if fallback_frame is None:
-                                fallback_frame = frame.copy()
-                            
-                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            mean_val = gray.mean()
-                            print(f"[DEBUG] OpenCV seek {pct*100:.1f}%: mean brightness = {mean_val:.2f}")
-                            if mean_val >= 10.0:
-                                cv2.imwrite(out, frame)
-                                success = True
-                                break
-                    
-                    if not success and fallback_frame is not None:
-                        print("[DEBUG] OpenCV all seek attempts below brightness threshold. Using fallback frame.")
-                        cv2.imwrite(out, fallback_frame)
-                        success = True
-                        
-                vcap.release()
+            success = await asyncio.to_thread(_opencv_worker, video, out)
         except Exception as e:
             print(f"[ERROR] OpenCV screenshot failed: {e}")
             success = False
+
             
         # 2. Fallback to FFmpeg if OpenCV failed or didn't generate a thumbnail
         if not success or not os.path.isfile(out) or os.path.getsize(out) == 0:
@@ -534,47 +550,57 @@ async def screenshot(video, duration, sender):
         
 last_update_time = time.time()
 async def progress_callback(current, total, progress_message):
-    percent = (current / total) * 100
+    percent = (current / total) * 100 if total > 0 else 0
     now = time.time()
-    if not hasattr(progress_callback, "last_update"):
-        progress_callback.last_update = 0
+    if not hasattr(progress_callback, "last_updates"):
+        progress_callback.last_updates = {}
 
-    if now - progress_callback.last_update >= 3 or percent % 10 == 0:
-        progress_callback.last_update = now
+    msg_id = getattr(progress_message, "id", id(progress_message))
+    last_update = progress_callback.last_updates.get(msg_id, 0)
+
+    if now - last_update >= 3 or percent % 10 == 0 or current == total:
+        progress_callback.last_updates[msg_id] = now
         completed_blocks = int(percent // 10)
         remaining_blocks = 10 - completed_blocks
-        progress_bar = "❤️" * completed_blocks + "🤍" * remaining_blocks
+        progress_bar_str = "❤️" * completed_blocks + "🤍" * remaining_blocks
         current_mb = current / (1024 * 1024)  
         total_mb = total / (1024 * 1024)      
-        await progress_message.edit(
-    f"╔══━⚡️Uploading⚡️━══╗\n"
-    f" ┉━┉━┉━┉┉━┉━┉━┉┉━┉━\n"
-    f">*┋ {progress_bar}\n\n"
-    f">*┋ **__Progress:__** {percent:.2f}%\n"
-    f">*┋ **__Uploaded:__** {current_mb:.2f} MB / {total_mb:.2f} MB\n\n"
-    f"  ╚═══━━━─⚝─━━━═══╝\n\n"
-    f"⚝__**"
-        )
+        try:
+            await progress_message.edit(
+                f"╔══━⚡️Uploading⚡️━══╗\n"
+                f" ┉━┉━┉━┉┉━┉━┉━┉┉━┉━\n"
+                f">*┋ {progress_bar_str}\n\n"
+                f">*┋ **__Progress:__** {percent:.2f}%\n"
+                f">*┋ **__Uploaded:__** {current_mb:.2f} MB / {total_mb:.2f} MB\n\n"
+                f"  ╚═══━━━─⚝─━━━═══╝\n\n"
+                f"⚝__**"
+            )
+        except Exception:
+            pass
 
 async def prog_bar(current, total, ud_type, message, start):
 
     now = time.time()
     diff = now - start
     
-    if not hasattr(prog_bar, "last_update"):
-        prog_bar.last_update = 0
-            
-    if (now - prog_bar.last_update) >= 3 or current == total:
-        prog_bar.last_update = now
+    if not hasattr(prog_bar, "last_updates"):
+        prog_bar.last_updates = {}
 
-        percentage = current * 100 / total
-        speed = current / diff
-        elapsed_time = round(diff) * 1000
-        time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
+    msg_id = getattr(message, "id", id(message))
+    last_update = prog_bar.last_updates.get(msg_id, 0)
 
-        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
+    if (now - last_update) >= 3 or current == total:
+        prog_bar.last_updates[msg_id] = now
+
+        percentage = current * 100 / total if total > 0 else 0
+        speed = current / diff if diff > 0 else 0
+        if speed > 0 and diff > 0:
+            elapsed_time = round(diff) * 1000
+            time_to_completion = round((total - current) / speed) * 1000
+            estimated_total_time = elapsed_time + time_to_completion
+            estimated_str = TimeFormatter(milliseconds=estimated_total_time)
+        else:
+            estimated_str = "Calculating..."
 
         progress = "{0}{1}".format(
             ''.join(["❤️" for i in range(math.floor(percentage / 10))]),
@@ -586,47 +612,60 @@ async def prog_bar(current, total, ud_type, message, start):
             humanbytes(total),
             humanbytes(speed),
 
-            estimated_total_time if estimated_total_time != '' else "0 s"
+            estimated_str if estimated_str != '' else "0 s"
         )
         try:
             await message.edit_text(
                 text="{}     {}".format(ud_type, tmp),)             
 
-        except:
+        except Exception:
             pass
 def thumbnail(sender):
     path = os.path.join(THUMBNAIL_DIR, f'{sender}.jpg')
     return path if os.path.exists(path) else None
 
 def add_pdf_watermark(pdf_path, watermark_text):
+    temp_pdf = None
     try:
         import fitz
+        import shutil
         if not watermark_text:
             return pdf_path
             
         abs_path = os.path.abspath(pdf_path)
+        temp_pdf = abs_path + ".tmp.pdf"
         doc = fitz.open(abs_path)
-        for page in doc:
-            rect = page.rect
-            width = rect.width
-            height = rect.height
-            
-            # Add watermark text at the bottom of all pages
-            footer_rect = fitz.Rect(0, height - 40, width, height - 10)
-            page.insert_textbox(
-                footer_rect,
-                watermark_text,
-                fontsize=14,
-                fontname="helv",
-                color=(0.5, 0.5, 0.5),  # Medium gray
-                fill_opacity=0.6,       # Opacity
-                align=1                 # Centered
-            )
-            
-        # Save modifications
-        doc.save(abs_path, incremental=False, encryption=fitz.PDF_ENCRYPT_KEEP)
-        doc.close()
+        try:
+            for page in doc:
+                rect = page.rect
+                width = rect.width
+                height = rect.height
+                
+                # Add watermark text at the bottom of all pages
+                footer_rect = fitz.Rect(0, height - 40, width, height - 10)
+                page.insert_textbox(
+                    footer_rect,
+                    watermark_text,
+                    fontsize=14,
+                    fontname="helv",
+                    color=(0.5, 0.5, 0.5),  # Medium gray
+                    fill_opacity=0.6,       # Opacity
+                    align=1                 # Centered
+                )
+            # Save modifications to temporary file, close doc, and move to destination
+            doc.save(temp_pdf, incremental=False, encryption=fitz.PDF_ENCRYPT_KEEP)
+        finally:
+            doc.close()
+
+        if os.path.exists(temp_pdf):
+            shutil.move(temp_pdf, abs_path)
         return abs_path
     except Exception as e:
         print(f"[ERROR] Failed to add watermark to PDF: {e}")
+        if temp_pdf and os.path.exists(temp_pdf):
+            try:
+                os.remove(temp_pdf)
+            except Exception:
+                pass
         return pdf_path
+

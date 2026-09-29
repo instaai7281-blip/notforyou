@@ -81,7 +81,11 @@ async def generate_session(_, message):
         
     user_id = message.chat.id   
     
-    number = await _.ask(user_id, 'Please enter your phone number with the country code. \nExample: +19876543210\n\n ⚠️ Use Extra Telegram Account (Number) For Login', filters=filters.text)   
+    try:
+        number = await _.ask(user_id, 'Please enter your phone number with the country code. \nExample: +19876543210\n\n ⚠️ Use Extra Telegram Account (Number) For Login', filters=filters.text, timeout=300)
+    except Exception:
+        await message.reply('⏰ Time limit exceeded. Please restart the session using /login.')
+        return
     phone_number = number.text
     try:
         await message.reply("📲 Sending OTP...")
@@ -90,6 +94,7 @@ async def generate_session(_, message):
         await client.connect()
     except Exception as e:
         await message.reply(f"❌ Failed to send OTP {e}. Please wait and try again later.")
+        return
     try:
         code = await client.send_code(phone_number)
     except ApiIdInvalid:
@@ -100,7 +105,7 @@ async def generate_session(_, message):
         return
     try:
         otp_code = await _.ask(user_id, "Please check for an OTP in your official Telegram account. Once received, enter the OTP in the following format: \nIf the OTP is `12345`, please enter it as `1 2 3 4 5`.", filters=filters.text, timeout=600)
-    except TimeoutError:
+    except Exception:
         await message.reply('⏰ Time limit of 10 minutes exceeded. Please restart the session.')
         return
     phone_code = otp_code.text.replace(" ", "")
@@ -116,9 +121,10 @@ async def generate_session(_, message):
     except SessionPasswordNeeded:
         try:
             two_step_msg = await _.ask(user_id, 'Your account has two-step verification enabled. Please enter your password.', filters=filters.text, timeout=300)
-        except TimeoutError:
+        except Exception:
             await message.reply('⏰ Time limit of 5 minutes exceeded. Please restart the session.')
             return
+
         try:
             password = two_step_msg.text
             await client.check_password(password=password)

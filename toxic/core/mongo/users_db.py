@@ -32,32 +32,25 @@ async def get_users():
 
 
 async def get_user(user):
-  users = await get_users()
-  if user in users:
-    return True
-  else:
+  try:
+    data = await db.find_one({"user": user})
+    return bool(data)
+  except Exception as e:
+    print(f"Error getting user from db: {e}")
     return False
 
 async def add_user(user):
-  users = await get_users()
-  if user in users:
-    return
-  else:
-    try:
-      await db.insert_one({"user": user})
-    except Exception as e:
-      print(f"Error adding user to db: {e}")
-
+  try:
+    await db.update_one({"user": user}, {"$setOnInsert": {"user": user}}, upsert=True)
+  except Exception as e:
+    print(f"Error adding user to db: {e}")
 
 async def del_user(user):
-  users = await get_users()
-  if not user in users:
-    return
-  else:
-    try:
-      await db.delete_one({"user": user})
-    except Exception as e:
-      print(f"Error deleting user from db: {e}")
+  try:
+    await db.delete_one({"user": user})
+  except Exception as e:
+    print(f"Error deleting user from db: {e}")
+
       
 async def get_all_registered_users():
   users = await get_users()

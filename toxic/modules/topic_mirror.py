@@ -17,7 +17,7 @@ import math
 import asyncio
 import random
 import unicodedata
-from pyrogram import filters, Client, raw, types
+from pyrogram import filters, Client, raw, types, enums
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -2715,7 +2715,7 @@ async def on_group_member_update(_, event):
         if not event or not event.chat:
             return
         chat = event.chat
-        if chat.type in (types.ChatType.GROUP, types.ChatType.SUPERGROUP):
+        if chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
             chat_id = chat.id
             title = chat.title or str(chat_id)
             new_member = event.new_chat_member

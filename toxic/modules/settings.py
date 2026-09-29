@@ -232,7 +232,11 @@ async def caption_actions_callback(client, callback_query: CallbackQuery):
         
     elif data == "set_new_caption":
         await callback_query.message.delete()
-        ask = await client.ask(user_id, "📝 **Send your new custom caption now.**\n\n> Use `{caption}` where you want the original text to appear.\n> Send /cancel to abort.")
+        try:
+            ask = await client.ask(user_id, "📝 **Send your new custom caption now.**\n\n> Use `{caption}` where you want the original text to appear.\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
         
         if ask.text == "/cancel":
             await ask.reply("Action cancelled.")
@@ -266,7 +270,11 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
         await callback_query.answer("Thumbnail deleted", show_alert=True)
     elif data == "set_new_thumb":
         await callback_query.message.delete()
-        ask = await client.ask(user_id, "🖼️ **Send the photo you want to set as thumbnail.**\n\n> Send /cancel to abort.")
+        try:
+            ask = await client.ask(user_id, "🖼️ **Send the photo you want to set as thumbnail.**\n\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
         
         if ask.photo:
             import os
@@ -291,6 +299,7 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
         await settings_command(client, ask)
         return
 
+
     user_data = await db.get_data(user_id) or {}
     await main_nav_callback(client, callback_query)
 
@@ -306,14 +315,19 @@ async def chatid_actions_callback(client, callback_query: CallbackQuery):
         await callback_query.answer("Auto-forward reset to DM", show_alert=True)
     elif data == "set_new_chatid":
         await callback_query.message.delete()
-        ask = await client.ask(
-            user_id,
-            "📢 **Send the Channel, Group ID, or Message Link.**\n\n"
-            "> **Examples:**\n"
-            "> • `-100123456789` (Plain ID)\n"
-            "> • `https://t.me/c/123456789/430/431` (Message link with Topic ID)\n\n"
-            "> Send /cancel to abort."
-        )
+        try:
+            ask = await client.ask(
+                user_id,
+                "📢 **Send the Channel, Group ID, or Message Link.**\n\n"
+                "> **Examples:**\n"
+                "> • `-100123456789` (Plain ID)\n"
+                "> • `https://t.me/c/123456789/430/431` (Message link with Topic ID)\n\n"
+                "> Send /cancel to abort.",
+                timeout=120
+            )
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
         
         if ask.text == "/cancel":
             await ask.reply("Action cancelled.")
@@ -352,7 +366,12 @@ async def cleaning_actions_callback(client, callback_query: CallbackQuery):
         await callback_query.answer("Replacement rules cleared")
     elif data == "add_clean_word":
         await callback_query.message.delete()
-        ask = await client.ask(user_id, "🧹 **Send the word you want to clean from captions.**\n\n> Separate multiple words with spaces.\n> Send /cancel to abort.")
+        try:
+            ask = await client.ask(user_id, "🧹 **Send the word you want to clean from captions.**\n\n> Separate multiple words with spaces.\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
+
         if ask.text != "/cancel":
             words = ask.text.split()
             await db.clean_words(user_id, words)
@@ -362,7 +381,12 @@ async def cleaning_actions_callback(client, callback_query: CallbackQuery):
         return
     elif data == "set_replacement":
         await callback_query.message.delete()
-        ask = await client.ask(user_id, "🔄 **Send the words in format:** `word > replacement`\n\n> Example: `oldword > newword`\n> Send /cancel to abort.")
+        try:
+            ask = await client.ask(user_id, "🔄 **Send the words in format:** `word > replacement`\n\n> Example: `oldword > newword`\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
+
         if ask.text != "/cancel" and ">" in ask.text:
             parts = ask.text.split(">")
             to_replace = parts[0].strip()
@@ -402,8 +426,12 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
             return
             
         await callback_query.message.delete()
-        ask = await client.ask(user_id, "🏷️ **Send your custom branding tag now.**\n\n> Send /cancel to abort.")
-        
+        try:
+            ask = await client.ask(user_id, "🏷️ **Send your custom branding tag now.**\n\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
+
         if ask.text == "/cancel":
             await ask.reply("Action cancelled.")
         else:
@@ -412,6 +440,7 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
         await asyncio.sleep(0.5)
         await settings_command(client, ask)
         return
+
 
     elif data.startswith("set_tag_select_"):
         tag_index = int(data.split("_")[-1])

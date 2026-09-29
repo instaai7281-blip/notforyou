@@ -17,7 +17,7 @@ import importlib
 import gc
 from pyrogram import idle
 from toxic.modules import ALL_MODULES
-from toxic.core.mongo.plans_db import check_and_remove_expired_users
+from toxic.core.mongo.plans_db import check_and_remove_expired_users, check_and_remove_expired_mirror_users
 from aiojobs import create_scheduler
 
 # ----------------------------Bot-Start---------------------------- #
@@ -29,8 +29,10 @@ async def schedule_expiry_check():
     scheduler = await create_scheduler()
     while True:
         await scheduler.spawn(check_and_remove_expired_users())
+        await scheduler.spawn(check_and_remove_expired_mirror_users())
         await asyncio.sleep(3600)  # Check every hour
         gc.collect()
+
 
 # Function to broadcast upgrade plans daily at 7 PM
 async def daily_plans_broadcast_task():
@@ -187,8 +189,12 @@ async def schedule_daily_plans_broadcast():
         await asyncio.sleep(30)
 
 async def devggn_boot():
+    from toxic import restrict_bot
+    await restrict_bot()
+
     # Restore custom thumbnails from DB on startup
     from toxic.core.mongo.db import load_all_thumbnails
+
     from config import THUMBNAIL_DIR
     try:
         await load_all_thumbnails(THUMBNAIL_DIR)

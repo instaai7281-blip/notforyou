@@ -284,4 +284,3 @@ async def restrict_bot():
 def get_client():
     return random.choice(pro_clients) if pro_clients else None
 
-loop.run_until_complete(restrict_bot())
