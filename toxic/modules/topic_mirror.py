@@ -392,7 +392,7 @@ def parse_topic_link(link: str):
     return None, None
 
 
-DIAMOND_EMOJI_ID = 5332526543162712301
+DIAMOND_EMOJI_ID = 5312389333909511107
 
 def clean_topic_title(title: str) -> str:
     """Cleans topic title by removing leading diamond emoji prefixes or clutter, preserving the pure title text."""
