@@ -392,14 +392,18 @@ def parse_topic_link(link: str):
     return None, None
 
 
-def format_topic_title_with_diamond(title: str) -> str:
-    """Formats topic title with 💎 diamond emoji at the beginning."""
+DIAMOND_EMOJI_ID = 5332526543162712301
+
+def clean_topic_title(title: str) -> str:
+    """Cleans topic title by removing leading diamond emoji prefixes or clutter, preserving the pure title text."""
     if not title:
-        return "💎 Topic"
+        return "Topic"
     clean = str(title).strip()
-    if clean.startswith("💎"):
-        return clean
-    return f"💎 {clean}"
+    clean = re.sub(r'^[💎\s]+', '', clean).strip()
+    return clean or "Topic"
+
+format_topic_title_with_diamond = clean_topic_title
+
 
 
 def extract_caption_content_ids(text: str) -> set:
@@ -2280,15 +2284,16 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with 💎 Diamond title and color
+            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup matching source title
             new_tgt_topic_id = None
-            diamond_st_title = format_topic_title_with_diamond(st_title)
+            clean_st_title = st_title.strip()
+            src_icon_emoji = st.get("icon_emoji_id") or DIAMOND_EMOJI_ID
             try:
                 created = await app.create_forum_topic(
                     chat_id=tgt_chat_id,
-                    title=diamond_st_title,
+                    title=clean_st_title,
                     icon_color=0x6FB9F0,
-                    icon_emoji_id=st.get("icon_emoji_id")
+                    icon_emoji_id=src_icon_emoji
                 )
                 new_tgt_topic_id = created.message_thread_id
             except Exception:
@@ -2296,8 +2301,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     peer = await app.resolve_peer(tgt_chat_id)
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(
                         peer=peer,
-                        title=diamond_st_title,
+                        title=clean_st_title,
                         icon_color=0x6FB9F0,
+                        icon_emoji_id=src_icon_emoji,
                         random_id=random.randint(1000000, 9999999)
                     ))
                     for upd in getattr(res, "updates", []):
@@ -2308,33 +2314,42 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             new_tgt_topic_id = upd.id
                             break
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] Raw CreateForumTopic error for '{diamond_st_title}': {rpc_create_err}")
+                    print(f"[TopicMirror] Raw CreateForumTopic error for '{clean_st_title}': {rpc_create_err}")
 
             if new_tgt_topic_id:
                 topic_map[st_id] = new_tgt_topic_id
                 target_topics_by_title[norm_title] = new_tgt_topic_id
-                target_topics_by_title[st_title.strip().lower()] = new_tgt_topic_id
-                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, new_tgt_topic_id, st_title)
+                target_topics_by_title[clean_st_title.lower()] = new_tgt_topic_id
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, new_tgt_topic_id, clean_st_title)
             else:
                 if st_id == 1 or norm_title in ("general", "1"):
                     topic_map[st_id] = 1
-                    await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
+                    await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, clean_st_title)
                 else:
-                    print(f"[TopicMirror] ⚠️ Topic '{st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
+                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
 
-        # Ensure ALL mapped target topics in target supergroup have 💎 diamond title format asynchronously in background so Phase 1 completes instantly!
-        async def background_diamond_title_update():
+        # Asynchronously update target topic titles & icons in background so Phase 1 finishes in <0.05s!
+        async def background_topic_icon_update():
             for s_id, t_id in topic_map.items():
                 if t_id and t_id != 1:
-                    t_title = topic_names.get(s_id, f"Topic {s_id}")
-                    diamond_name = format_topic_title_with_diamond(t_title)
+                    t_title = clean_topic_title(topic_names.get(s_id, f"Topic {s_id}"))
                     try:
-                        await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=diamond_name)
+                        peer = await app.resolve_peer(tgt_chat_id)
+                        await app.invoke(raw.functions.messages.EditForumTopic(
+                            peer=peer,
+                            topic_id=t_id,
+                            title=t_title,
+                            icon_emoji_id=DIAMOND_EMOJI_ID
+                        ))
                         await asyncio.sleep(0.1)
                     except Exception:
-                        pass
+                        try:
+                            await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=t_title)
+                        except Exception:
+                            pass
 
-        asyncio.create_task(background_diamond_title_update())
+        asyncio.create_task(background_topic_icon_update())
+
 
 
 
@@ -2671,7 +2686,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 pass
 
 
-@app.on_message(filters.group & filters.service)
+@app.on_message((filters.group | filters.supergroup) & filters.service)
 async def auto_delete_group_service_messages(_, message):
     """
     Auto-deletes all group service messages:
@@ -2682,8 +2697,10 @@ async def auto_delete_group_service_messages(_, message):
     """
     try:
         await message.delete()
-    except Exception:
-        pass
+        print(f"[ServiceMsgDelete] ✅ Auto-deleted service message {getattr(message, 'id', None)} in chat {message.chat.id}")
+    except Exception as e:
+        print(f"[ServiceMsgDelete] Notice: Could not delete service msg: {e}")
+
 
 
 @app.on_chat_member_updated()
