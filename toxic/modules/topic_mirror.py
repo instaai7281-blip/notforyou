@@ -2298,16 +2298,14 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with clean title & 💎 Diamond custom emoji icon
+            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with clean title
             new_tgt_topic_id = None
             clean_st_title = clean_topic_title(st_title)
-            src_icon_emoji = DIAMOND_EMOJI_ID
             try:
                 created = await app.create_forum_topic(
                     chat_id=tgt_chat_id,
                     title=clean_st_title,
-                    icon_color=0x6FB9F0,
-                    icon_emoji_id=src_icon_emoji
+                    icon_color=0x6FB9F0
                 )
                 new_tgt_topic_id = created.message_thread_id
             except Exception as create_err:
@@ -2317,7 +2315,6 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         peer=peer,
                         title=clean_st_title,
                         icon_color=0x6FB9F0,
-                        icon_emoji_id=src_icon_emoji,
                         random_id=random.randint(1000000, 9999999)
                     ))
                     for upd in getattr(res, "updates", []):
