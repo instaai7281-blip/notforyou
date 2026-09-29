@@ -2171,14 +2171,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         topic_map = {}   # src_topic_id -> tgt_topic_id
         topic_names = {} # src_topic_id -> title
 
-        # Pre-populate already mapped topics from MongoDB immediately (Instant 0.01s resume!)
+        # Pre-populate already mapped topics from MongoDB (rejecting invalid fallback 1s for non-general topics)
         if saved_topics:
             for st_id_str, info in saved_topics.items():
                 try:
                     s_id = int(st_id_str)
-                    if info.get("tgt_topic_id"):
-                        topic_map[s_id] = info["tgt_topic_id"]
-                        topic_names[s_id] = info.get("title", f"Topic {s_id}")
+                    tgt_id = info.get("tgt_topic_id")
+                    t_title = info.get("title", f"Topic {s_id}")
+                    # Only pre-populate if valid AND non-general topic is NOT mapped to 1
+                    if tgt_id and (s_id == 1 or normalize_topic_title(t_title) in ("general", "1") or tgt_id != 1):
+                        topic_map[s_id] = tgt_id
+                        topic_names[s_id] = t_title
                 except Exception:
                     pass
 
@@ -2197,6 +2200,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, detected_topic_id, forced_tgt_topic_id, st_title)
 
         source_topics = []
+        # Strategy 1: Userbot get_forum_topics
         try:
             async for forum_topic in userbot.get_forum_topics(src_chat_id):
                 source_topics.append({
@@ -2206,24 +2210,41 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     "icon_emoji_id": getattr(forum_topic, "icon_emoji_id", None)
                 })
         except Exception as scan_err:
+            print(f"[TopicMirror] Userbot get_forum_topics scan notice: {scan_err}")
+
+        # Strategy 2: App get_forum_topics or Raw RPC GetForumTopics
+        if not source_topics:
             try:
-                peer = await userbot.resolve_peer(src_chat_id)
-                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                    peer=peer,
-                    offset_date=0,
-                    offset_id=0,
-                    offset_topic=0,
-                    limit=100
-                ))
-                for t in getattr(res, "topics", []):
+                async for forum_topic in app.get_forum_topics(src_chat_id):
                     source_topics.append({
-                        "id": t.id,
-                        "title": t.title,
-                        "icon_color": getattr(t, "icon_color", None),
-                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
+                        "id": forum_topic.message_thread_id,
+                        "title": forum_topic.title,
+                        "icon_color": getattr(forum_topic, "icon_color", None),
+                        "icon_emoji_id": getattr(forum_topic, "icon_emoji_id", None)
                     })
-            except Exception as rpc_err:
-                print(f"[TopicMirror] Raw RPC GetForumTopics failed: {rpc_err}")
+            except Exception:
+                try:
+                    peer = await userbot.resolve_peer(src_chat_id)
+                    res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                        peer=peer,
+                        offset_date=0,
+                        offset_id=0,
+                        offset_topic=0,
+                        limit=100
+                    ))
+                    for t in getattr(res, "topics", []):
+                        source_topics.append({
+                            "id": t.id,
+                            "title": t.title,
+                            "icon_color": getattr(t, "icon_color", None),
+                            "icon_emoji_id": getattr(t, "icon_emoji_id", None)
+                        })
+                except Exception as rpc_err:
+                    print(f"[TopicMirror] Raw RPC GetForumTopics failed: {rpc_err}")
+
+        # Strategy 3: Message History Topic Discovery (if get_forum_topics returned empty)
+        if not source_topics and detected_topic_id:
+            source_topics.append({"id": detected_topic_id, "title": f"Topic {detected_topic_id}", "icon_color": None, "icon_emoji_id": None})
 
         if not mirror_all_topics and detected_topic_id:
             source_topics = [t for t in source_topics if t["id"] == detected_topic_id]
@@ -2231,17 +2252,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 source_topics = [{"id": detected_topic_id, "title": f"Topic {detected_topic_id}", "icon_color": None, "icon_emoji_id": None}]
 
         if not source_topics:
-            if detected_topic_id:
-                source_topics = [{"id": detected_topic_id, "title": f"Topic {detected_topic_id}", "icon_color": None, "icon_emoji_id": None}]
-            else:
-                source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
+            source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
 
-        # Scan target topics only if there are source topics not yet mapped in MongoDB
-        unmapped_topics = [st for st in source_topics if st["id"] not in topic_map]
-        target_topics_by_title = {}
-        target_topics_by_id = {}
-        if unmapped_topics:
-            target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+        # Scan target topics to match existing topics in target supergroup
+        target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
 
         for st in source_topics:
             st_id = st["id"]
@@ -2249,8 +2263,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             topic_names[st_id] = st_title
             norm_title = normalize_topic_title(st_title)
 
-            # 1. Already mapped from memory
-            if st_id in topic_map:
+            # 1. Already mapped from memory (only if not mapped improperly to 1 for non-general topic)
+            if st_id in topic_map and (st_id == 1 or norm_title in ("general", "1") or topic_map[st_id] != 1):
                 continue
 
             # 2. General topic (id 1) always maps to target General topic (1)
@@ -2259,7 +2273,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
-            # 3. Check persistent MongoDB session FIRST (Priority 1, rejecting bad fallback 1s for non-general topics)
+            # 3. Check persistent MongoDB session FIRST (rejecting bad fallback 1s for non-general topics)
             saved_info = saved_topics.get(str(st_id))
             if saved_info and saved_info.get("tgt_topic_id"):
                 existing_tgt_id = saved_info["tgt_topic_id"]
@@ -2296,7 +2310,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     icon_emoji_id=src_icon_emoji
                 )
                 new_tgt_topic_id = created.message_thread_id
-            except Exception:
+            except Exception as create_err:
                 try:
                     peer = await app.resolve_peer(tgt_chat_id)
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(
@@ -2314,7 +2328,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             new_tgt_topic_id = upd.id
                             break
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] Raw CreateForumTopic error for '{clean_st_title}': {rpc_create_err}")
+                    print(f"[TopicMirror] CreateForumTopic failed for '{clean_st_title}': {create_err} / {rpc_create_err}")
 
             if new_tgt_topic_id:
                 topic_map[st_id] = new_tgt_topic_id
@@ -2326,7 +2340,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     topic_map[st_id] = 1
                     await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, clean_st_title)
                 else:
-                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
+                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' could not be created or mapped to target. Make sure bot has 'Manage Topics' admin rights in target group!")
+
 
         # Asynchronously update target topic titles (removing 💎 text) & setting 💎 custom emoji icon in background!
         async def background_topic_icon_update():
