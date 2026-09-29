@@ -243,13 +243,20 @@ async def restrict_bot():
             "⚡ <i>Ready to process extraction & mirroring requests!</i>"
         )
         if owner_id:
-            await app.send_message(int(owner_id), startup_msg, parse_mode=enums.ParseMode.HTML)
-            print("[INFO] Startup message sent to owner.")
+            try:
+                await app.send_message(int(owner_id), startup_msg, parse_mode=ParseMode.HTML)
+                print("[INFO] Startup message sent to owner.")
+            except Exception as owner_err:
+                print(f"⚠️ Failed to send startup message to owner ({owner_id}): {owner_err}")
         if LOG_GROUP:
-            await app.send_message(int(LOG_GROUP), startup_msg, parse_mode=enums.ParseMode.HTML)
-            print("[INFO] Startup message sent to log group.")
+            try:
+                await app.send_message(int(LOG_GROUP), startup_msg, parse_mode=ParseMode.HTML)
+                print("[INFO] Startup message sent to log group.")
+            except Exception as log_err:
+                print(f"⚠️ Failed to send startup message to log group ({LOG_GROUP}): {log_err}")
     except Exception as e:
         print(f"⚠️ Failed to send startup message: {e}")
+
 
 
 def get_client():

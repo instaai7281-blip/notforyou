@@ -435,7 +435,20 @@ async def get_working_userbot(user_id: int):
     return None, False
 
 
+async def ensure_userbot_connected(userbot):
+    """Ensures userbot client connection is active during continuous mirroring."""
+    if userbot:
+        try:
+            if not getattr(userbot, "is_connected", False):
+                print("[TopicMirror] Userbot disconnected. Attempting auto-reconnect...")
+                await userbot.start()
+                print("[TopicMirror] ✅ Userbot reconnected successfully!")
+        except Exception as e:
+            print(f"[TopicMirror] ensure_userbot_connected notice: {e}")
+
+
 def normalize_topic_title(title: str) -> str:
+
     """Normalizes topic title for robust matching across spaces, casing, emojis and punctuation."""
     if not title:
         return ""
@@ -2291,133 +2304,159 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             current_state["skip_topic"] = False
             topic_stats[src_topic_id] = {"copied": 0, "failed": 0, "skipped": 0, "title": topic_title}
 
-            # Check last copied message ID from MongoDB checkpoint (with cross-session failsafe)
-            saved_checkpoint = saved_topics.get(str(src_topic_id), {}).get("last_msg_id", 0)
-            if not force_sync:
-                highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, src_topic_id, saved_checkpoint)
-                if highest_ckpt > saved_checkpoint:
-                    saved_checkpoint = highest_ckpt
+            try:
+                # Ensure userbot client is connected before fetching topic messages
+                await ensure_userbot_connected(userbot)
 
-            # Rapidly fetch messages for this topic with checkpoint cutoff (0 if force_sync)
-            fetch_cutoff = 0 if force_sync else saved_checkpoint
-            all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff)
-            
-            # Filter pending messages to copy
-            messages_to_copy = [m for m in all_topic_messages if m.id > saved_checkpoint]
-            already_done_count = len(all_topic_messages) - len(messages_to_copy)
-            topic_stats[src_topic_id]["skipped"] = already_done_count
-            overall_skipped += already_done_count
+                # Check last copied message ID from MongoDB checkpoint (with cross-session failsafe)
+                saved_checkpoint = saved_topics.get(str(src_topic_id), {}).get("last_msg_id", 0)
+                if not force_sync:
+                    highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, src_topic_id, saved_checkpoint)
+                    if highest_ckpt > saved_checkpoint:
+                        saved_checkpoint = highest_ckpt
 
-            total_msgs_in_topic = len(messages_to_copy)
+                # Rapidly fetch messages for this topic with checkpoint cutoff (0 if force_sync)
+                fetch_cutoff = 0 if force_sync else saved_checkpoint
+                all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff)
+                
+                # Filter pending messages to copy
+                messages_to_copy = [m for m in all_topic_messages if m.id > saved_checkpoint]
+                already_done_count = len(all_topic_messages) - len(messages_to_copy)
+                topic_stats[src_topic_id]["skipped"] = already_done_count
+                overall_skipped += already_done_count
 
-            if total_msgs_in_topic == 0:
-                print(f"[TopicMirror] Topic '{topic_title}' already up to date ({already_done_count} msgs). Skipping.")
-                continue
+                total_msgs_in_topic = len(messages_to_copy)
 
-            # Instant Extraction Start without heavy pre-loop file sizing
-            topic_copied_bytes = 0
-            last_edit_time = time.time()
-            topic_start_time = time.time()
-
-            for idx, msg in enumerate(messages_to_copy, 1):
-                # Check cancellation or skip signal
-                current_state = active_mirrors.get(user_id, {})
-                if not current_state.get("running", False):
-                    break
-                if current_state.get("skip_topic", False):
-                    print(f"[TopicMirror] User requested skipping topic '{topic_title}' at msg {idx}/{total_msgs_in_topic}")
-                    current_state["skip_topic"] = False
-                    break
-
-                # Skip service/action messages
-                if getattr(msg, "service", False) or getattr(msg, "empty", False) or getattr(msg, "action", None) or getattr(msg, "forum_topic_created", None) or getattr(msg, "pinned_message", None):
-                    await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                if total_msgs_in_topic == 0:
+                    print(f"[TopicMirror] Topic '{topic_title}' already up to date ({already_done_count} msgs). Skipping.")
                     continue
 
-                msg_size = get_msg_size(msg)
+                # Instant Extraction Start without heavy pre-loop file sizing
+                topic_copied_bytes = 0
+                last_edit_time = time.time()
+                topic_start_time = time.time()
 
-                success, method, sent_msg_id = await transfer_single_message(
-                    userbot=userbot,
-                    app=app,
-                    src_chat_id=src_chat_id,
-                    tgt_chat_id=tgt_chat_id,
-                    tgt_topic_id=tgt_topic_id if tgt_topic_id != 1 else None,
-                    msg=msg,
-                    user_id=user_id
-                )
+                for idx, msg in enumerate(messages_to_copy, 1):
+                    # Check cancellation or skip signal
+                    current_state = active_mirrors.get(user_id, {})
+                    if not current_state.get("running", False):
+                        break
+                    if current_state.get("skip_topic", False):
+                        print(f"[TopicMirror] User requested skipping topic '{topic_title}' at msg {idx}/{total_msgs_in_topic}")
+                        current_state["skip_topic"] = False
+                        break
 
-                if success:
-                    if method != "service_skipped":
-                        overall_copied += 1
-                        topic_stats[src_topic_id]["copied"] += 1
-                        topic_copied_bytes += msg_size
-                        overall_transferred_bytes += msg_size
+                    # Skip service/action messages
+                    if getattr(msg, "service", False) or getattr(msg, "empty", False) or getattr(msg, "action", None) or getattr(msg, "forum_topic_created", None) or getattr(msg, "pinned_message", None):
+                        await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                        continue
 
-                        # Auto-pin the FIRST transferred message of this topic
-                        if topic_stats[src_topic_id]["copied"] == 1 and sent_msg_id:
-                            try:
-                                await app.pin_chat_message(
-                                    chat_id=tgt_chat_id,
-                                    message_id=sent_msg_id,
-                                    disable_notification=True
-                                )
-                                print(f"[TopicMirror] 📌 Auto-pinned first message ({sent_msg_id}) in topic {tgt_topic_id}")
-                            except Exception as pin_err:
-                                print(f"[TopicMirror] First message auto-pin notice for topic {tgt_topic_id}: {pin_err}")
-                else:
-                    if method != "skipped_filter":
-                        overall_failed += 1
-                        topic_stats[src_topic_id]["failed"] += 1
+                    msg_size = get_msg_size(msg)
 
+                    # Auto-retry transfer up to 3 times on transient errors or FloodWaits
+                    success = False
+                    method = "failed"
+                    sent_msg_id = None
 
-                # Update checkpoint in MongoDB immediately after message is processed
-                await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                    for attempt in range(1, 4):
+                        try:
+                            await ensure_userbot_connected(userbot)
+                            success, method, sent_msg_id = await transfer_single_message(
+                                userbot=userbot,
+                                app=app,
+                                src_chat_id=src_chat_id,
+                                tgt_chat_id=tgt_chat_id,
+                                tgt_topic_id=tgt_topic_id if tgt_topic_id != 1 else None,
+                                msg=msg,
+                                user_id=user_id
+                            )
+                            if success or method in ("service_skipped", "skipped_filter"):
+                                break
+                        except FloodWait as fw:
+                            print(f"[TopicMirror] FloodWait {fw.value}s on msg {msg.id}. Sleeping...")
+                            await asyncio.sleep(fw.value + 1)
+                        except Exception as transfer_err:
+                            print(f"[TopicMirror] Message {msg.id} transfer attempt {attempt}/3 error: {transfer_err}")
+                            if attempt < 3:
+                                await asyncio.sleep(2)
+                            else:
+                                success, method, sent_msg_id = False, str(transfer_err), None
 
-                # Update live high-speed status UI every 3.5 seconds
-                now = time.time()
-                if now - last_edit_time > 3.5:
-                    last_edit_time = now
-                    topic_elapsed = now - topic_start_time
-                    
-                    # Calculate real data speed (MB/s / KB/s)
-                    speed_bytes_sec = (topic_copied_bytes / topic_elapsed) if topic_elapsed > 0 else 0
-                    if speed_bytes_sec > 1024:
-                        speed_str = f"{humanbytes(speed_bytes_sec)}/s"
+                    if success:
+                        if method != "service_skipped":
+                            overall_copied += 1
+                            topic_stats[src_topic_id]["copied"] += 1
+                            topic_copied_bytes += msg_size
+                            overall_transferred_bytes += msg_size
+
+                            # Auto-pin the FIRST transferred message of this topic
+                            if topic_stats[src_topic_id]["copied"] == 1 and sent_msg_id:
+                                try:
+                                    await app.pin_chat_message(
+                                        chat_id=tgt_chat_id,
+                                        message_id=sent_msg_id,
+                                        disable_notification=True
+                                    )
+                                    print(f"[TopicMirror] 📌 Auto-pinned first message ({sent_msg_id}) in topic {tgt_topic_id}")
+                                except Exception as pin_err:
+                                    print(f"[TopicMirror] First message auto-pin notice for topic {tgt_topic_id}: {pin_err}")
                     else:
+                        if method != "skipped_filter":
+                            overall_failed += 1
+                            topic_stats[src_topic_id]["failed"] += 1
+
+                    # Update checkpoint in MongoDB immediately after message is processed
+                    await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+
+                    # Update live high-speed status UI every 3.5 seconds
+                    now = time.time()
+                    if now - last_edit_time > 3.5:
+                        last_edit_time = now
+                        topic_elapsed = now - topic_start_time
+                        
+                        # Calculate real data speed (MB/s / KB/s)
+                        speed_bytes_sec = (topic_copied_bytes / topic_elapsed) if topic_elapsed > 0 else 0
+                        if speed_bytes_sec > 1024:
+                            speed_str = f"{humanbytes(speed_bytes_sec)}/s"
+                        else:
+                            speed_msgs = (idx / topic_elapsed) if topic_elapsed > 0 else 0
+                            speed_str = f"{speed_msgs:.2f} msg/s"
+                        
+                        percent = int((idx / total_msgs_in_topic) * 100) if total_msgs_in_topic > 0 else 0
+                        bar_blocks = int(percent // 10)
+                        progress_bar_str = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
+                        
+                        # Dynamic ETA calculation based on messages processed
+                        remaining_msgs = total_msgs_in_topic - idx
                         speed_msgs = (idx / topic_elapsed) if topic_elapsed > 0 else 0
-                        speed_str = f"{speed_msgs:.2f} msg/s"
-                    
-                    percent = int((idx / total_msgs_in_topic) * 100) if total_msgs_in_topic > 0 else 0
-                    bar_blocks = int(percent // 10)
-                    progress_bar_str = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
-                    
-                    # Dynamic ETA calculation based on messages processed
-                    remaining_msgs = total_msgs_in_topic - idx
-                    speed_msgs = (idx / topic_elapsed) if topic_elapsed > 0 else 0
-                    eta_seconds = (remaining_msgs / speed_msgs) if speed_msgs > 0 else 0
-                    eta_str = TimeFormatter(int(eta_seconds * 1000)) if eta_seconds > 0 else "00:00:00"
+                        eta_seconds = (remaining_msgs / speed_msgs) if speed_msgs > 0 else 0
+                        eta_str = TimeFormatter(int(eta_seconds * 1000)) if eta_seconds > 0 else "00:00:00"
 
-                    status_text = (
-                        f"╔══━⚡️ **Topic Mirroring in Progress** ⚡️━══╗\n"
-                        f" ┉━┉━┉━┉┉━┉━┉━┉┉━┉━\n"
-                        f"> 📁 **Topic [{current_topic_index}/{total_topics_count}]:** `{topic_title}`\n"
-                        f"> 📥 **Routing To:** `{tgt_title} → {topic_title}`\n\n"
-                        f"> 📊 **Topic Progress:** {progress_bar_str} `{percent}%`\n"
-                        f"> 🔢 **Pending Messages:** `{idx}/{total_msgs_in_topic}`\n"
-                        f"> ⚡ **Transfer Speed:** `{speed_str}`\n"
-                        f"> ⏳ **Topic ETA:** `{eta_str}`\n\n"
-                        f"> ✅ **New Copied:** `{overall_copied}` | ⏩ **Resumed/Skipped:** `{overall_skipped}`\n"
-                        f"> ❌ **Failed:** `{overall_failed}` | 🛡️ **Bypass & Clean:** `Active`\n"
-                        f" ╚═══━━━─⚝─━━━═══╝\n\n"
-                        f"⚝__**"
-                    )
-                    status_html = format_caption_to_html(status_text)
-                    try:
-                        await status_msg.edit(status_html if status_html else status_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
-                    except Exception:
-                        pass
+                        status_text = (
+                            f"╔══━⚡️ **Topic Mirroring in Progress** ⚡️━══╗\n"
+                            f" ┉━┉━┉━┉┉━┉━┉━┉┉━┉━\n"
+                            f"> 📁 **Topic [{current_topic_index}/{total_topics_count}]:** `{topic_title}`\n"
+                            f"> 📥 **Routing To:** `{tgt_title} → {topic_title}`\n\n"
+                            f"> 📊 **Topic Progress:** {progress_bar_str} `{percent}%`\n"
+                            f"> 🔢 **Pending Messages:** `{idx}/{total_msgs_in_topic}`\n"
+                            f"> ⚡ **Transfer Speed:** `{speed_str}`\n"
+                            f"> ⏳ **Topic ETA:** `{eta_str}`\n\n"
+                            f"> ✅ **New Copied:** `{overall_copied}` | ⏩ **Resumed/Skipped:** `{overall_skipped}`\n"
+                            f"> ❌ **Failed:** `{overall_failed}` | 🛡️ **Bypass & Clean:** `Active`\n"
+                            f" ╚═══━━━─⚝─━━━═══╝\n\n"
+                            f"⚝__**"
+                        )
+                        status_html = format_caption_to_html(status_text)
+                        try:
+                            await status_msg.edit(status_html if status_html else status_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                        except Exception:
+                            pass
 
-                await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)
+
+            except Exception as topic_err:
+                print(f"[TopicMirror] Error processing topic '{topic_title}': {topic_err}. Continuing to next topic...")
+
 
         # -------------------------------------------------------------
         # FINAL REPORT DASHBOARD
