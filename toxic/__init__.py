@@ -233,15 +233,11 @@ async def restrict_bot():
     try:
         owner_id = OWNER_ID[0] if isinstance(OWNER_ID, list) and OWNER_ID else OWNER_ID
         startup_msg = (
-            "<blockquote><b>🚀 TOXIC BOT PRO ONLINE!</b></blockquote>\n\n"
-            "<b>✅ Status:</b> Bot & Telethon Clients Started Successfully\n"
-            "<b>🛡️ Active Features:</b>\n"
-            "• PDF & Video Watermarking\n"
-            "• High-Speed Save-Restricted Bypass\n"
-            "• Topic Mirror & Auto Forum Sync (v2.5)\n"
-            "• Real Speed Test & Dynamic UI\n\n"
-            "⚡ <i>Ready to process extraction & mirroring requests!</i>"
+            "<blockquote><b>⚡ I am restarted baby! 😎</b></blockquote>\n\n"
+            "Press <b>/start</b> and continue your tasks with <b>/batch</b> or <b>/topicmirror</b>.\n"
+            "<i>Just give me tasks and go to rest! ☕🚀</i>"
         )
+
         if owner_id:
             try:
                 await app.send_message(int(owner_id), startup_msg, parse_mode=ParseMode.HTML)

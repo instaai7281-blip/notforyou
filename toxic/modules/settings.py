@@ -123,10 +123,20 @@ def get_tag_keyboard(user_id):
 
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_command(client, message):
-    await message.reply_text(
-        "⚙️ **Personalize Your Experience**\n\nConfigure your extraction preferences, branding, and filters using the buttons below.",
-        reply_markup=get_main_settings_keyboard(message.chat.id)
-    )
+    image_url = "https://freeimage.host/i/n7cbXDX"
+    caption_text = "⚙️ **Personalize Your Experience**\n\nConfigure your extraction preferences, branding, and filters using the buttons below."
+    try:
+        await message.reply_photo(
+            photo=image_url,
+            caption=caption_text,
+            reply_markup=get_main_settings_keyboard(message.chat.id)
+        )
+    except Exception:
+        await message.reply_text(
+            caption_text,
+            reply_markup=get_main_settings_keyboard(message.chat.id)
+        )
+
 
 # ────── Navigation & Main Callbacks ──────
 

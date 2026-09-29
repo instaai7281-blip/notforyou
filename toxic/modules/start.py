@@ -30,6 +30,47 @@ async def restrict_unauthorized_users(client, message: Message):
     return
 
 
+@app.on_message(filters.command("start") & filters.private)
+async def start_cmd(client, message: Message):
+    join = await subscribe(client, message)
+    if join == 1:
+        return
+
+    bot_username = get_bot_username()
+    user_name = message.from_user.first_name if message.from_user else "User"
+
+    start_text = (
+        f"<blockquote><b>🚀 Welcome to TOXIC BOT PRO, {user_name}! 🖤</b></blockquote>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        f"<blockquote><b>✨ WHAT I CAN DO FOR YOU:</b>\n"
+        f"• <b>Save-Restricted Bypass:</b> Extract content from private channels & groups!\n"
+        f"• <b>Bulk Extraction (/batch):</b> Extract up to 5000 files in one single command!\n"
+        f"• <b>Topic Mirror Forum Sync (/topicmirror):</b> Clone entire forum groups with auto-topic creation & 1-click update sync!\n"
+        f"• <b>Direct Topic Link Mirror (/topiclink):</b> Mirror from 1 topic link directly into another!\n"
+        f"• <b>Custom Watermarking & Metadata:</b> PDF watermarks, video thumbnails, custom captions!</blockquote>\n\n"
+        f"<i>Just send any post link or tap a button below to get started! ☕🚀</i>"
+    )
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📁 Topic Mirror Hub", callback_data="tm_hub"), InlineKeyboardButton("🔗 Link Mirror", callback_data="tm_topiclink")],
+        [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("⚙️ Settings", callback_data="back_to_main")],
+        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+    ])
+
+    image_url = "https://freeimage.host/i/n7cbXDX"
+    try:
+        await message.reply_photo(
+            photo=image_url,
+            caption=start_text,
+            reply_markup=buttons,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as err:
+        print(f"⚠️ Failed to send start photo: {err}")
+        await message.reply_text(start_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
+
 @app.on_message(filters.command("set"))
 async def set(_, message):
     if message.from_user.id not in OWNER_ID:

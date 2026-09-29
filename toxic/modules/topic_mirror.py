@@ -403,15 +403,31 @@ def format_topic_title_with_diamond(title: str) -> str:
 
 
 
+userbot_sessions = {} # user_id -> Client instance
+
+
 async def get_working_userbot(user_id: int):
-    """Returns an authenticated Pyrogram Client for the user session or pool client."""
+    """Returns a cached/reusable authenticated Pyrogram Client for the user session or pool client."""
     user_data = await db.get_data(user_id)
     user_session = user_data.get("session") if user_data else None
 
     if user_session:
+        # Reuse existing cached userbot client if available
+        existing_ub = userbot_sessions.get(user_id)
+        if existing_ub:
+            try:
+                if getattr(existing_ub, "is_connected", False):
+                    return existing_ub, False
+                else:
+                    await existing_ub.start()
+                    return existing_ub, False
+            except Exception as re_err:
+                print(f"[TopicMirror] Cached userbot reconnect notice: {re_err}")
+                userbot_sessions.pop(user_id, None)
+
         try:
             ub = Client(
-                f"ub_tm_{user_id}_{int(time.time())}",
+                f"ub_tm_{user_id}",
                 api_id=API_ID,
                 api_hash=API_HASH,
                 session_string=user_session,
@@ -419,7 +435,8 @@ async def get_working_userbot(user_id: int):
                 max_concurrent_transmissions=128
             )
             await ub.start()
-            return ub, True
+            userbot_sessions[user_id] = ub
+            return ub, False
         except Exception as e:
             print(f"[TopicMirror] User session client start failed: {e}")
 
@@ -433,6 +450,7 @@ async def get_working_userbot(user_id: int):
                 return c, False
 
     return None, False
+
 
 
 async def ensure_userbot_connected(userbot):
@@ -2240,15 +2258,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 else:
                     print(f"[TopicMirror] ⚠️ Topic '{st_title}' could not be created or mapped to target. Skipping to prevent sending into General topic.")
 
-        # Ensure ALL mapped target topics in target supergroup have 💎 diamond title format
-        for s_id, t_id in topic_map.items():
-            if t_id and t_id != 1:
-                t_title = topic_names.get(s_id, f"Topic {s_id}")
-                diamond_name = format_topic_title_with_diamond(t_title)
-                try:
-                    await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=diamond_name)
-                except Exception:
-                    pass
+        # Ensure ALL mapped target topics in target supergroup have 💎 diamond title format asynchronously in background so Phase 1 completes instantly!
+        async def background_diamond_title_update():
+            for s_id, t_id in topic_map.items():
+                if t_id and t_id != 1:
+                    t_title = topic_names.get(s_id, f"Topic {s_id}")
+                    diamond_name = format_topic_title_with_diamond(t_title)
+                    try:
+                        await app.edit_forum_topic(chat_id=tgt_chat_id, message_thread_id=t_id, title=diamond_name)
+                        await asyncio.sleep(0.1)
+                    except Exception:
+                        pass
+
+        asyncio.create_task(background_diamond_title_update())
+
 
 
         total_topics_count = len(topic_map)
