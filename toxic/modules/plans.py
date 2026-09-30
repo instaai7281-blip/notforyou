@@ -20,7 +20,7 @@ import asyncio
 from config import OWNER_ID
 from toxic.core.func import get_seconds
 from toxic.core.mongo import plans_db  
-from pyrogram import filters 
+from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 
 
