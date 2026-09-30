@@ -2,7 +2,7 @@ import asyncio
 import datetime
 from pyrogram import filters, Client
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, ChatMemberUpdated
-from pyrogram.enums import ChatType, ChatMemberStatus
+from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
 from toxic import app
 from config import OWNER_ID
 from toxic.core.mongo.db import (
@@ -674,4 +674,94 @@ async def reset_bio_cmd(client: Client, message: Message):
         f"🔄 **Group Bio Reset to Default!**\n\n"
         f"📝 **Default Bio:**\n```\n{default_bio}\n```\n\n"
         f"Run `/syncallbio` to update all connected groups."
+    )
+
+
+# ────── Dedicated Group-Only Broadcast Command (/gcast /groupbroadcast) ──────
+
+@app.on_message(filters.command(["gcast", "groupbroadcast", "bcast_groups", "broadcast_groups"]))
+async def group_broadcast_cmd(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+
+    reply = message.reply_to_message
+    cmd_text = message.text.split(None, 1)[1] if len(message.text.split(None, 1)) > 1 else ""
+
+    if not reply and not cmd_text:
+        await message.reply_text(
+            "📢 **Group-Only Broadcast Usage:**\n\n"
+            "1️⃣ **Reply to a Message (Photo, Video, Formatted Text, etc.)**:\n"
+            "   • `/gcast` — Broadcasts exact replied message with all formatting (`bold`, `> blockquote`, links, etc.).\n"
+            "   • `/gcast <extra text>` — Appends your custom text/note to the replied message/caption!\n\n"
+            "2️⃣ **Direct Text Broadcast**:\n"
+            "   • `/gcast <b>Header Text</b>\n\n> Blockquote text`\n\n"
+            "*(Sends exclusively to linked Telegram Supergroups & Groups!)*"
+        )
+        return
+
+    db_chats = await get_all_joined_chats()
+    if not db_chats:
+        await message.reply_text("ℹ️ **No linked groups found in database to broadcast.**")
+        return
+
+    status_msg = await message.reply_text(f"🚀 **Starting Group Broadcast to `{len(db_chats)}` groups...**")
+
+    sent_count = 0
+    failed_count = 0
+
+    for i, chat_info in enumerate(db_chats, 1):
+        cid = chat_info.get("chat_id")
+        if not cid:
+            continue
+        try:
+            if reply:
+                if cmd_text:
+                    orig_html = reply.text.html if reply.text else (reply.caption.html if reply.caption else "")
+                    combined_text = f"{orig_html}\n\n{cmd_text}".strip()
+                    
+                    if reply.photo:
+                        await client.send_photo(cid, reply.photo.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.video:
+                        await client.send_video(cid, reply.video.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.document:
+                        await client.send_document(cid, reply.document.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.animation:
+                        await client.send_animation(cid, reply.animation.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.audio:
+                        await client.send_audio(cid, reply.audio.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.voice:
+                        await client.send_voice(cid, reply.voice.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    else:
+                        await client.send_message(cid, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                else:
+                    await reply.copy(cid)
+            else:
+                await client.send_message(cid, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+            sent_count += 1
+            await asyncio.sleep(0.4)
+        except Exception as err:
+            failed_count += 1
+            print(f"[GCAST] Failed for group {cid}: {err}")
+            if "kicked" in str(err).lower() or "deactivated" in str(err).lower() or "chat not found" in str(err).lower():
+                await remove_joined_chat(cid)
+
+        if i % 10 == 0 or i == len(db_chats):
+            try:
+                await status_msg.edit(
+                    f"📢 **Group Broadcast in Progress...**\n\n"
+                    f"• Progress: `{i}/{len(db_chats)}` chats\n"
+                    f"• Delivered: `{sent_count}` ✅\n"
+                    f"• Failed: `{failed_count}` ❌"
+                )
+            except Exception:
+                pass
+
+    await status_msg.edit(
+        f"🎉 **Group Broadcast Completed!**\n\n"
+        f"• **Total Groups Targeted:** `{len(db_chats)}`\n"
+        f"• **Successfully Delivered:** `{sent_count}` ✅\n"
+        f"• **Failed / Unreachable:** `{failed_count}` ❌"
     )

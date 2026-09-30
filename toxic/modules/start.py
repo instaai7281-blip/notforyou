@@ -82,7 +82,7 @@ async def set(_, message):
         BotCommand("guide", "📘 Interactive user guide & help"),
         BotCommand("plans", "💎 Premium & topic mirror plans"),
         BotCommand("myplan", "⌛ Subscription details"),
-        BotCommand("topicmirror", "📁 Topic Mirror Forum (₹299 Plan)"),
+        BotCommand("topicmirror", "📁 Topic Mirror Forum Sync"),
         BotCommand("scan_mirror", "🔎 Scan & compare topic content"),
         BotCommand("sync_mirror", "🔄 1-Click sync missing topic files"),
         BotCommand("cancel_mirror", "🛑 Cancel active mirror task"),
@@ -253,9 +253,9 @@ async def plan(client, message):
         "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
         "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
         "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
-        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> Active via Admin\n"
         "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
-        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires the dedicated ₹299 plan. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
+        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires dedicated mirror access. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
         "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
         "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
         "• Crypto (USDT BEP20 / TRC20 / TON)\n"
@@ -285,9 +285,9 @@ async def see_plan(client, callback_query):
         "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
         "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
         "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
-        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> ₹299 / month\n"
+        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> Active via Admin\n"
         "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
-        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires the dedicated ₹299 plan. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
+        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires dedicated mirror access. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
         "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
         "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
         "• Crypto (USDT BEP20 / TRC20 / TON)\n"
@@ -426,7 +426,7 @@ async def guide_page_2(_, query: CallbackQuery):
     guide_p2_text = (
         f"<blockquote><b>📁 USER GUIDE — TOPIC MIRROR FORUM SYNC (2/3)</b></blockquote>\n\n"
         f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
-        "<blockquote><b>👑 EXCLUSIVE TOPIC MIRROR FEATURE (₹299 PLAN):</b>\n"
+        "<blockquote><b>👑 EXCLUSIVE TOPIC MIRROR FEATURE:</b>\n"
         "Clones entire Forum Groups with automatic folder/topic creation, target mapping, instant resume checkpoints, and 1-click update sync!</blockquote>\n\n"
         "<blockquote><b>🛠️ STEP-BY-STEP SETUP:</b>\n"
         "1️⃣ Enable <b>Topics</b> in your Target Telegram Group settings.\n"
@@ -438,7 +438,7 @@ async def guide_page_2(_, query: CallbackQuery):
         "• <b>1-Click Sync (<code>/sync_mirror</code>):</b> Automatically extracts missing posts without duplicating existing content!\n"
         "• <b>Topic Link Mirror (<code>/topiclink</code>):</b> Mirror content from one specific source topic link directly to another target topic link!</blockquote>\n\n"
 
-        "⚠️ <i>Note: Requires active ₹299 Topic Mirror Plan. Contact Admin via /plans to enable access.</i>"
+        "⚠️ <i>Note: Requires active Topic Mirror Plan. Contact Admin via /plans to enable access.</i>"
     )
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Restricted Guide", callback_data="guide_page_1"), InlineKeyboardButton("Extra Features ➡️", callback_data="guide_page_3")],
@@ -459,7 +459,7 @@ async def guide_page_3(_, query: CallbackQuery):
         "<blockquote><b>🛠️ KEY COMMANDS:</b>\n"
         "• <code>/batch</code> — Extract range of posts (up to 5000 files in one go)\n"
         "• <code>/cancel</code> — Stop active batch download task\n"
-        "• <code>/topicmirror</code> — Start Topic Mirror Forum Sync (₹299 Plan)\n"
+        "• <code>/topicmirror</code> — Start Topic Mirror Forum Sync\n"
         "• <code>/cancel_mirror</code> — Stop active Topic Mirroring process\n"
         "• <code>/scan_mirror</code> — Live scan & compare topic content differences\n"
         "• <code>/sync_mirror</code> — 1-Click update missing topic files\n"

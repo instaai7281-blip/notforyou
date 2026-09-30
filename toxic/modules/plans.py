@@ -14,13 +14,14 @@
 
 from datetime import timedelta
 import pytz
-import datetime, time
+import datetime, time, math
 from toxic import app
 import asyncio
 from config import OWNER_ID
 from toxic.core.func import get_seconds
 from toxic.core.mongo import plans_db  
 from pyrogram import filters 
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 
 
 # -*- coding: utf-8 -*-
@@ -151,10 +152,10 @@ async def myplan(client, message):
         m_days = m_time_left.days
         m_hours, m_remainder = divmod(m_time_left.seconds, 3600)
         m_minutes, _ = divmod(m_remainder, 60)
-        status_lines.append(f"🎛️ **Topic Mirror Plan (₹299):** ✅ Active")
+        status_lines.append(f"🎛️ **Topic Mirror Plan:** ✅ Active")
         status_lines.append(f"⏳ **Mirror Expiry:** `{m_expiry_str}` IST ({m_days}d {m_hours}h {m_minutes}m left)\n")
     else:
-        status_lines.append(f"🎛️ **Topic Mirror Plan (₹299):** ❌ Inactive\n")
+        status_lines.append(f"🎛️ **Topic Mirror Plan:** ❌ Inactive\n")
         
     status_lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     if has_any:
@@ -197,7 +198,7 @@ async def give_mirror_premium_cmd_handler(client, message):
             await message.reply_text(
                 f"✨ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ✨\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎛️ **TOPIC MIRROR PLAN ACTIVATED (₹299)** 🎛️\n"
+                f"🎛️ **TOPIC MIRROR PLAN ACTIVATED** 🎛️\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"👤 **User:** {user_mention}\n"
                 f"🆔 **ID:** `{user_id}`\n"
@@ -215,7 +216,7 @@ async def give_mirror_premium_cmd_handler(client, message):
                         f"🎉 **CONGRATULATIONS! TOPIC MIRROR PLAN ACTIVATED** 🎉\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"👋 Hey {user_name},\n"
-                        f"Your account has been upgraded to **Topic Mirror Plan (₹299/month)**! 🎛️\n\n"
+                        f"Your account has been upgraded to **Topic Mirror Plan**! 🎛️\n\n"
                         f"⚡ **UNLOCKED FEATURES:**\n"
                         f"  • Forum Topic Mirroring (/mirror) 📁\n"
                         f"  • Automatic Topic Creation & Mapping 🔄\n"
@@ -308,10 +309,253 @@ async def check_mirror_premium_cmd(client, message):
         else:
             await message.reply_text(
                 f"❌ **No Topic Mirror Plan Data Found!**\n\n"
-                f"User `{user_id}` does not have an active Topic Mirror Plan (₹299)."
+                f"User `{user_id}` does not have an active Topic Mirror Plan."
             )
     else:
         await message.reply_text("Usage: `/checkmirror user_id`")
+
+
+# -------------------------------------------------------------
+# INTERACTIVE OWNER MIRROR USERS MANAGER (/mirrorusers, /musers)
+# -------------------------------------------------------------
+
+async def build_mirror_users_panel(client, page: int = 1):
+    all_users = await plans_db.get_all_mirror_users_data()
+    current_time_ist = datetime.datetime.now(pytz.timezone("Asia/Kolkata"))
+    
+    if not all_users:
+        text = (
+            "🎛️ **Topic Mirror Users Manager**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "ℹ️ **No active Topic Mirror users found in database.**\n\n"
+            "Use `/addmirror <user_id> <time>` to add a new mirror user."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="muser_list_1")]
+        ])
+        return text, kb
+
+    total_users = len(all_users)
+    items_per_page = 5
+    max_pages = math.ceil(total_users / items_per_page)
+    page = max(1, min(page, max_pages))
+    
+    start_idx = (page - 1) * items_per_page
+    page_users = all_users[start_idx:start_idx + items_per_page]
+
+    text = (
+        f"🎛️ **Topic Mirror Users Manager** (Total: `{total_users}`)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Click on any user below to **increase/decrease time** or **remove access**:\n\n"
+    )
+
+    buttons = []
+    for u in page_users:
+        u_id = u["_id"]
+        exp_utc = u.get("expire_date")
+        time_left_str = "Expired ❌"
+        if exp_utc:
+            try:
+                exp_ist = exp_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+                if exp_ist > current_time_ist:
+                    diff = exp_ist - current_time_ist
+                    days = diff.days
+                    hours = diff.seconds // 3600
+                    time_left_str = f"{days}d {hours}h left ✅"
+            except Exception:
+                pass
+        
+        buttons.append([
+            InlineKeyboardButton(f"👤 User {u_id} • {time_left_str}", callback_data=f"muser_view_{u_id}_{page}")
+        ])
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"muser_list_{page-1}"))
+    nav_row.append(InlineKeyboardButton(f"📄 Page {page}/{max_pages}", callback_data="muser_nop"))
+    if page < max_pages:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"muser_list_{page+1}"))
+    
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh List", callback_data=f"muser_list_{page}"),
+        InlineKeyboardButton("❌ Close", callback_data="muser_close")
+    ])
+    
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def build_single_mirror_user_panel(client, user_id: int, page: int = 1):
+    u_data = await plans_db.check_mirror_premium(user_id)
+    if not u_data:
+        text = f"❌ **User `{user_id}` is not in the Topic Mirror list.**"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to List", callback_data=f"muser_list_{page}")]])
+        return text, kb
+
+    user_mention = f"User (`{user_id}`)"
+    try:
+        u_obj = await client.get_users(user_id)
+        if u_obj:
+            user_mention = f"{u_obj.mention} (`{user_id}`)"
+    except Exception:
+        pass
+
+    exp_utc = u_data.get("expire_date")
+    current_time_ist = datetime.datetime.now(pytz.timezone("Asia/Kolkata"))
+    
+    exp_str = "N/A"
+    time_left_str = "Expired ❌"
+    if exp_utc:
+        try:
+            exp_ist = exp_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+            exp_str = exp_ist.strftime("%d-%m-%Y %I:%M:%S %p")
+            if exp_ist > current_time_ist:
+                diff = exp_ist - current_time_ist
+                days = diff.days
+                hours, rem = divmod(diff.seconds, 3600)
+                mins, _ = divmod(rem, 60)
+                time_left_str = f"`{days} days, {hours} hours, {mins} mins remaining`"
+            else:
+                time_left_str = "❌ **Plan Expired**"
+        except Exception:
+            pass
+
+    text = (
+        f"🎛️ **Manage Topic Mirror User**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 **User:** {user_mention}\n"
+        f"🆔 **User ID:** `{user_id}`\n"
+        f"⌛ **Expiry Date:** `{exp_str}` (IST)\n"
+        f"⏳ **Status:** {time_left_str}\n\n"
+        f"Use the buttons below to **increase time**, **decrease time**, or **revoke access**:"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕ +7 Days", callback_data=f"muser_adddays_{user_id}_7_{page}"),
+            InlineKeyboardButton("➕ +30 Days", callback_data=f"muser_adddays_{user_id}_30_{page}"),
+            InlineKeyboardButton("➕ +1 Day", callback_data=f"muser_adddays_{user_id}_1_{page}")
+        ],
+        [
+            InlineKeyboardButton("➖ -7 Days", callback_data=f"muser_subdays_{user_id}_7_{page}"),
+            InlineKeyboardButton("➖ -1 Day", callback_data=f"muser_subdays_{user_id}_1_{page}")
+        ],
+        [
+            InlineKeyboardButton("❌ Revoke Mirror Access", callback_data=f"muser_revoke_{user_id}_{page}")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to List", callback_data=f"muser_list_{page}"),
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"muser_view_{user_id}_{page}")
+        ]
+    ])
+    return text, kb
+
+
+@app.on_message(filters.command(["mirrorusers", "musers", "manage_mirror"]) & filters.user(OWNER_ID))
+async def mirror_users_manager_cmd(client, message):
+    text, kb = await build_mirror_users_panel(client, page=1)
+    await message.reply_text(text, reply_markup=kb)
+
+
+@app.on_callback_query(filters.regex(r"^muser_"))
+async def mirror_users_callback_handler(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    if not any(str(user_id) == str(o) for o in owner_list):
+        await query.answer("❌ Access Denied!", show_alert=True)
+        return
+
+    data = query.data
+    if data == "muser_close":
+        await query.message.delete()
+        return
+    elif data == "muser_nop":
+        await query.answer()
+        return
+
+    parts = data.split("_")
+    action = parts[1]
+
+    if action == "list":
+        page = int(parts[2]) if len(parts) > 2 else 1
+        text, kb = await build_mirror_users_panel(client, page=page)
+        await query.message.edit_text(text, reply_markup=kb)
+
+    elif action == "view":
+        target_uid = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 1
+        text, kb = await build_single_mirror_user_panel(client, target_uid, page=page)
+        await query.message.edit_text(text, reply_markup=kb)
+
+    elif action == "adddays":
+        target_uid = int(parts[2])
+        days_to_add = int(parts[3])
+        page = int(parts[4]) if len(parts) > 4 else 1
+
+        u_data = await plans_db.check_mirror_premium(target_uid)
+        curr_utc = datetime.datetime.utcnow()
+        if u_data and u_data.get("expire_date"):
+            old_exp = u_data["expire_date"]
+            start_exp = old_exp if old_exp > curr_utc else curr_utc
+        else:
+            start_exp = curr_utc
+
+        new_exp = start_exp + datetime.timedelta(days=days_to_add)
+        await plans_db.update_mirror_premium_expiry(target_uid, new_exp)
+
+        exp_ist_str = new_exp.astimezone(pytz.timezone("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M:%S %p")
+        await query.answer(f"✅ Added +{days_to_add} days for user {target_uid}!", show_alert=True)
+
+        try:
+            await client.send_message(
+                target_uid,
+                f"🎉 **TOPIC MIRROR PLAN EXTENDED!**\n\n"
+                f"Your Topic Mirror Plan has been extended by **+{days_to_add} days** by Admin.\n"
+                f"⏳ **New Expiry Date:** `{exp_ist_str}` (IST)"
+            )
+        except Exception:
+            pass
+
+        text, kb = await build_single_mirror_user_panel(client, target_uid, page=page)
+        await query.message.edit_text(text, reply_markup=kb)
+
+    elif action == "subdays":
+        target_uid = int(parts[2])
+        days_to_sub = int(parts[3])
+        page = int(parts[4]) if len(parts) > 4 else 1
+
+        u_data = await plans_db.check_mirror_premium(target_uid)
+        if u_data and u_data.get("expire_date"):
+            old_exp = u_data["expire_date"]
+            new_exp = old_exp - datetime.timedelta(days=days_to_sub)
+            await plans_db.update_mirror_premium_expiry(target_uid, new_exp)
+            await query.answer(f"➖ Reduced {days_to_sub} days from user {target_uid}.", show_alert=True)
+        else:
+            await query.answer("User has no active mirror plan!", show_alert=True)
+
+        text, kb = await build_single_mirror_user_panel(client, target_uid, page=page)
+        await query.message.edit_text(text, reply_markup=kb)
+
+    elif action == "revoke":
+        target_uid = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 1
+
+        await plans_db.remove_mirror_premium(target_uid)
+        await query.answer(f"🗑️ Mirror access revoked for user {target_uid}!", show_alert=True)
+
+        try:
+            await client.send_message(
+                target_uid,
+                f"⚠️ **TOPIC MIRROR PLAN REVOKED**\n\n"
+                f"Your Topic Mirror Plan access has been removed by Admin."
+            )
+        except Exception:
+            pass
+
+        text, kb = await build_mirror_users_panel(client, page=page)
+        await query.message.edit_text(text, reply_markup=kb)
         
 
 

@@ -69,6 +69,15 @@ async def mirror_premium_users():
         id_list.append(data["_id"])
     return id_list
 
+async def get_all_mirror_users_data():
+    users = []
+    async for data in mirror_db.find():
+        users.append(data)
+    return users
+
+async def update_mirror_premium_expiry(user_id: int, expire_date: datetime.datetime):
+    await mirror_db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}}, upsert=True)
+
 async def check_and_remove_expired_mirror_users():
     current_time = datetime.datetime.utcnow()
     async for data in mirror_db.find():

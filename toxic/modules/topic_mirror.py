@@ -1322,7 +1322,7 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
 async def scan_session_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
     if await chk_mirror_user(user_id) != 0:
-        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        await query.answer("🔒 Topic Mirroring requires the Topic Mirror Plan!", show_alert=True)
         return
 
     match = re.search(r"^tm_scan_(-?\d+)_(-?\d+)$", query.data)
@@ -1357,7 +1357,7 @@ async def scan_session_callback(_, query: CallbackQuery):
 async def sync_session_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
     if await chk_mirror_user(user_id) != 0:
-        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        await query.answer("🔒 Topic Mirroring requires the Topic Mirror Plan!", show_alert=True)
         return
 
     match = re.search(r"^tm_sync_(-?\d+)_(-?\d+)$", query.data)
@@ -1438,7 +1438,7 @@ async def skip_topic_callback(_, query: CallbackQuery):
 async def session_options_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
     if await chk_mirror_user(user_id) != 0:
-        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan! Use /plans.", show_alert=True)
+        await query.answer("🔒 Topic Mirroring requires the Topic Mirror Plan! Use /plans.", show_alert=True)
         return
     match = re.search(r"^tm_opt_(-?\d+)_(-?\d+)$", query.data)
     src_chat_id = int(match.group(1))
@@ -1467,7 +1467,7 @@ async def session_options_callback(_, query: CallbackQuery):
 async def edit_target_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
     if await chk_mirror_user(user_id) != 0:
-        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan! Use /plans.", show_alert=True)
+        await query.answer("🔒 Topic Mirroring requires the Topic Mirror Plan! Use /plans.", show_alert=True)
         return
     match = re.search(r"^tm_edittgt_(-?\d+)_(-?\d+)$", query.data)
     src_chat_id = int(match.group(1))
@@ -1638,11 +1638,11 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan (₹299/month)</b>.\n\n"
+            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
             "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
             "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan (₹299)", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
@@ -1744,10 +1744,10 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan (₹299/month)</b>.\n\n"
+            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
             "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan (₹299)", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
@@ -2031,11 +2031,11 @@ async def topic_mirror_cmd(client, message):
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan (₹299/month)</b>.\n\n"
+            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
             "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
             "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan (₹299)", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
         await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
 
@@ -2063,9 +2063,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "You need an active <b>Topic Mirror Plan (₹299/month)</b> to run Topic Mirroring. Contact @CHOSEN_ONEx_bot to purchase access.</blockquote>"
+            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CHOSEN_ONEx_bot to purchase access.</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan (₹299)", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
         if status_msg:
             try:
                 await status_msg.edit(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
