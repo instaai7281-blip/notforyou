@@ -192,9 +192,8 @@ async def restrict_bot():
             BotCommand("guide", "📘 𝗜𝗻𝘁𝗲𝗿𝗮𝗰𝘁𝗶𝘃𝗲 𝘂𝘀𝗲𝗿 𝗴𝘂𝗶𝗱𝗲 & 𝗵𝗲𝗹𝗽"),
             BotCommand("plans", "💎 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 & 𝘁𝗼𝗽𝗶𝗰 𝗺𝗶𝗿𝗿𝗼𝗿 𝗽𝗹𝗮𝗻𝘀"),
             BotCommand("myplan", "⌛ 𝗦𝘂𝗯𝘀𝗰𝗿𝗶𝗽𝘁𝗶𝗼𝗻 𝗱𝗲𝘁𝗮𝗶𝗹𝘀"),
-            BotCommand("topicmirror", "📁 𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗙𝗼𝗿𝘂𝗺 (₹𝟮𝟵𝟵 𝗣𝗹𝗮𝗻)"),
+            BotCommand("topicmirror", "📁 𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗙𝗼𝗿𝘂𝗺 𝗦𝘆𝗻𝗰"),
             BotCommand("topiclink", "🔗 𝗠𝗶𝗿𝗿𝗼𝗿 𝘀𝗽𝗲𝗰𝗶𝗳𝗶𝗰 𝘁𝗼𝗽𝗶𝗰-𝘁𝗼-𝘁𝗼𝗽𝗶𝗰"),
-
             BotCommand("scan_mirror", "🔎 𝗦𝗰𝗮𝗻 & 𝗰𝗼𝗺𝗽𝗮𝗿𝗲 𝘁𝗼𝗽𝗶𝗰 𝗰𝗼𝗻𝘁𝗲𝗻𝘁"),
             BotCommand("sync_mirror", "🔄 𝟭-𝗖𝗹𝗶𝗰𝗸 𝘀𝘆𝗻𝗰 𝗺𝗶𝘀𝘀𝗶𝗻𝗴 𝘁𝗼𝗽𝗶𝗰 𝗳𝗶𝗹𝗲𝘀"),
             BotCommand("cancel_mirror", "🛑 𝗖𝗮𝗻𝗰𝗲𝗹 𝗮𝗰𝘁𝗶𝘃𝗲 𝗺𝗶𝗿𝗿𝗼𝗿"),
@@ -205,6 +204,7 @@ async def restrict_bot():
             BotCommand("settings", "⚙️ 𝗖𝘂𝘀𝘁𝗼𝗺𝗶𝘇𝗲 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀"),
             BotCommand("speedtest", "🚅 𝗦𝗽𝗲𝗲𝗱 𝘁𝗲𝘀𝘁"),
             BotCommand("terms", "📜 𝗧𝗲𝗿𝗺𝘀 & 𝗰𝗼𝗻𝗱𝗶𝘁𝗶𝗼𝗻𝘀"),
+            BotCommand("mirrorusers", "🎛️ 𝗠𝗮𝗻𝗮𝗴𝗲 𝗺𝗶𝗿𝗿𝗼𝗿 𝘂𝘀𝗲𝗿𝘀 (𝗢𝘄𝗻𝗲𝗿)"),
             BotCommand("addmirror", "👑 𝗔𝗱𝗱 𝗺𝗶𝗿𝗿𝗼𝗿 𝗮𝗰𝗰𝗲𝘀𝘀 (𝗔𝗱𝗺𝗶𝗻)"),
             BotCommand("remmirror", "👑 𝗥𝗲𝗺𝗼𝘃𝗲 𝗺𝗶𝗿𝗿𝗼𝗿 𝗮𝗰𝗰𝗲𝘀𝘀 (𝗔𝗱𝗺𝗶𝗻)"),
             BotCommand("checkmirror", "👑 𝗖𝗵𝗲𝗰𝗸 𝗺𝗶𝗿𝗿𝗼𝗿 𝗮𝗰𝗰𝗲𝘀𝘀 (𝗔𝗱𝗺𝗶𝗻)"),
@@ -212,7 +212,8 @@ async def restrict_bot():
             BotCommand("rem", "➖ 𝗥𝗲𝗺𝗼𝘃𝗲 𝗽𝗿𝗲𝗺𝗶𝘂𝗺 𝘂𝘀𝗲𝗿"),
             BotCommand("transfer", "💞 𝗚𝗶𝗳𝘁 𝗽𝗿𝗲𝗺𝗶𝘂𝗺"),
             BotCommand("stats", "📊 𝗕𝗼𝘁 𝘀𝘁𝗮𝘁𝗶𝘀𝘁𝗶𝗰𝘀"),
-            BotCommand("gcast", "⚡ 𝗕𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝗺𝗲𝘀𝘀𝗮𝗴𝗲")
+            BotCommand("gcast", "📢 𝗚𝗿𝗼𝘂𝗽 𝗯𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁"),
+            BotCommand("autobroadcast", "⚡ 𝗔𝘂𝘁𝗼 𝗯𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀")
         ])
     except Exception as cmd_err:
         print(f"⚠️ Failed to set bot commands: {cmd_err}")
