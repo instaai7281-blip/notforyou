@@ -943,6 +943,12 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                         thumb_path = None
 
             sent_media = None
+            file_size = os.path.getsize(temp_file)
+            if file_size > 1.99 * 1024 * 1024 * 1024:
+                from toxic.core.get_func import split_and_upload_file
+                await split_and_upload_file(app, user_id, tgt_chat_id, temp_file, final_caption, tgt_topic_id, thumb=thumb_path)
+                return True, None
+
             # Video metadata & thumbnail handling
             if msg.video or file_extension in VIDEO_EXTENSIONS:
                 # Format and rename video file to remove @mentions and add ⚝ before extension

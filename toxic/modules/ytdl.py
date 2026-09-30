@@ -492,42 +492,110 @@ async def split_and_upload_file(app, sender, file_path, caption):
         return
 
     file_size = os.path.getsize(file_path)
-    start = await app.send_message(sender, f"ℹ️ File size: {file_size / (1024 * 1024):.2f} MB")
-    PART_SIZE =  1.9 * 1024 * 1024 * 1024
+    start = await app.send_message(sender, f"ℹ️ File size: {file_size / (1024 * 1024):.2f} MB. Splitting video into 2 GB parts...")
+    PART_SIZE = int(1.9 * 1024 * 1024 * 1024)
 
-    part_number = 0
+    base_name, file_ext = os.path.splitext(file_path)
+    if not file_ext:
+        file_ext = ".mp4"
+    ext_clean = file_ext.lower().lstrip('.')
+
+    from toxic.core.func import video_metadata, screenshot, thumbnail
+    from toxic.core.get_func import format_caption_to_html, progress_bar
+    from pyrogram.enums import ParseMode
+
+    video_exts = {'mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', '3gp', 'ts', 'm4v', 'mpg', 'mpeg', 'f4v', 'vob'}
+    is_video = ext_clean in video_exts
+
+    thumb = thumbnail(sender)
+
+    part_number = 1
     with open(file_path, "rb") as f:
         while True:
-            # Create part filename
-            base_name, file_ext = os.path.splitext(file_path)
-            part_file = f"{base_name}.part{str(part_number).zfill(3)}{file_ext}"
+            part_file = f"{base_name} Part {part_number}{file_ext}"
             
-            # Read and write chunks until part is complete
             with open(part_file, "wb") as part_f:
                 bytes_written = 0
                 while bytes_written < PART_SIZE:
-                    chunk = f.read(min(1024 * 1024, int(PART_SIZE - bytes_written))) # 1MB chunks
+                    chunk = f.read(min(1024 * 1024, int(PART_SIZE - bytes_written)))
                     if not chunk:
                         break
                     part_f.write(chunk)
                     bytes_written += len(chunk)
             
-            if os.path.getsize(part_file) == 0:
-                os.remove(part_file)
+            if not os.path.exists(part_file) or os.path.getsize(part_file) == 0:
+                if os.path.exists(part_file):
+                    os.remove(part_file)
                 break
 
-            # Uploading part
-            edit = await app.send_message(sender, f"⬆️ Uploading part {part_number + 1}...")
-            part_caption = f"{caption} \n\n**Part : {part_number + 1}**"
-            await app.send_document(sender, document=part_file, caption=part_caption,
-                progress=progress_bar,
-                progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
-            )
-            await edit.delete()
-            os.remove(part_file)  # Cleanup after upload
+            edit = await app.send_message(sender, f"⬆️ Uploading Part {part_number}...")
+            part_caption = f"{caption}\n\n**Part : {part_number}**" if caption else f"**Part : {part_number}**"
+            part_caption_html = format_caption_to_html(part_caption)
+
+            if is_video:
+                meta = video_metadata(part_file)
+                duration = meta.get('duration', 0)
+                width = meta.get('width', 0)
+                height = meta.get('height', 0)
+                
+                part_thumb = thumb
+                if not part_thumb or not os.path.exists(part_thumb):
+                    try:
+                        part_thumb = await screenshot(part_file, duration or 10, sender)
+                    except Exception:
+                        part_thumb = None
+
+                try:
+                    await app.send_video(
+                        sender,
+                        video=part_file,
+                        caption=part_caption_html,
+                        duration=duration if duration > 0 else None,
+                        width=width if width > 0 else None,
+                        height=height if height > 0 else None,
+                        supports_streaming=True,
+                        thumb=part_thumb if part_thumb and os.path.exists(part_thumb) else None,
+                        parse_mode=ParseMode.HTML,
+                        progress=progress_bar,
+                        progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                    )
+                except Exception as vid_err:
+                    print(f"[YTDL SPLIT] send_video failed: {vid_err}, falling back to send_document")
+                    await app.send_document(
+                        sender,
+                        document=part_file,
+                        caption=part_caption_html,
+                        thumb=part_thumb if part_thumb and os.path.exists(part_thumb) else None,
+                        parse_mode=ParseMode.HTML,
+                        progress=progress_bar,
+                        progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                    )
+            else:
+                await app.send_document(
+                    sender,
+                    document=part_file,
+                    caption=part_caption_html,
+                    thumb=thumb if thumb and os.path.exists(thumb) else None,
+                    parse_mode=ParseMode.HTML,
+                    progress=progress_bar,
+                    progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                )
+
+            try:
+                await edit.delete()
+            except Exception:
+                pass
+
+            if os.path.exists(part_file):
+                os.remove(part_file)
 
             part_number += 1
 
-    await start.delete()
-    os.remove(file_path)
+    try:
+        await start.delete()
+    except Exception:
+        pass
+
+    if os.path.exists(file_path):
+        os.remove(file_path)
  
