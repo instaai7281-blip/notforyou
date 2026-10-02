@@ -346,18 +346,13 @@ def parse_source_link(link: str):
     return None, None, None
 
 
-def parse_topic_link(link: str):
+def parse_topic_and_post_link(link: str):
     """
-    Parses a Telegram topic link to extract (chat_id, topic_id).
-    Supports:
-    - https://t.me/c/1234567890/100/500 -> (-1001234567890, 100)
-    - https://t.me/c/1234567890/100 -> (-1001234567890, 100)
-    - https://t.me/username/100/500 -> ('username', 100)
-    - https://t.me/username/100 -> ('username', 100)
-    - tg://openmessage?chat_id=-1001234567890&topic_id=100 -> (-1001234567890, 100)
+    Parses a Telegram link (topic link, post link, channel post link, or tg://openmessage)
+    and returns a tuple: (chat_id, topic_id, post_id)
     """
     if not link:
-        return None, None
+        return None, None, None
     try:
         clean_link = link.strip()
         if "tg://openmessage" in clean_link:
@@ -365,31 +360,46 @@ def parse_topic_link(link: str):
             topic_match = re.search(r'topic_id=(\d+)', clean_link)
             msg_match = re.search(r'message_id=(\d+)', clean_link)
             chat_id = int(chat_match.group(1)) if chat_match else None
-            topic_id = int(topic_match.group(1)) if topic_match else (int(msg_match.group(1)) if msg_match else 1)
-            return chat_id, topic_id
+            topic_id = int(topic_match.group(1)) if topic_match else None
+            post_id = int(msg_match.group(1)) if msg_match else None
+            return chat_id, topic_id, post_id
 
         clean_link = re.sub(r'https?://(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)/', '', clean_link)
+        clean_link = clean_link.split('?')[0].rstrip('/')
         parts = [p for p in clean_link.split('/') if p]
         if not parts:
-            return None, None
+            return None, None, None
 
-        if parts[0] == 'c':
+        if parts[0] in ('c', 'b'):
             chat_id = int("-100" + parts[1])
             if len(parts) >= 4:
-                return chat_id, int(parts[2])
+                # e.g., t.me/c/1234567890/15/500 -> (chat_id, topic_id=15, post_id=500)
+                return chat_id, int(parts[2]), int(parts[3])
             elif len(parts) == 3:
-                return chat_id, int(parts[2])
+                # e.g., t.me/c/1234567890/500 -> (chat_id, topic_id=500, post_id=500)
+                val = int(parts[2])
+                return chat_id, val, val
             elif len(parts) == 2:
-                return chat_id, 1
+                return chat_id, None, None
         else:
             chat_id = parts[0]
-            if len(parts) >= 3 and parts[1].isdigit():
-                return chat_id, int(parts[1])
+            if chat_id.isdigit():
+                chat_id = int("-100" + chat_id)
+            if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
+                return chat_id, int(parts[1]), int(parts[2])
             elif len(parts) == 2 and parts[1].isdigit():
-                return chat_id, int(parts[1])
+                val = int(parts[1])
+                return chat_id, val, val
+            elif len(parts) == 1:
+                return chat_id, None, None
     except Exception as e:
-        print(f"[TopicMirror] parse_topic_link error: {e}")
-    return None, None
+        print(f"[TopicMirror] parse_topic_and_post_link error: {e}")
+    return None, None, None
+
+
+def parse_topic_link(link: str):
+    chat_id, topic_id, post_id = parse_topic_and_post_link(link)
+    return chat_id, topic_id
 
 
 DIAMOND_EMOJI_ID = 5312389333909511107
@@ -403,6 +413,38 @@ def clean_topic_title(title: str) -> str:
     return clean or "Topic"
 
 format_topic_title_with_diamond = clean_topic_title
+
+
+async def set_topic_diamond_icon(userbot, app, tgt_chat_id: int, tgt_topic_id: int, title: str):
+    """
+    Sets the custom 💎 diamond emoji icon (5312389333909511107) on a target forum topic.
+    Silently fails — icon update is best-effort only.
+    """
+    if not tgt_chat_id or not tgt_topic_id or tgt_topic_id == 1:
+        return False
+
+    clean_title = clean_topic_title(title)
+    clients_to_try = []
+    if app:
+        clients_to_try.append(app)
+    if userbot and userbot not in clients_to_try:
+        clients_to_try.append(userbot)
+
+    for client in clients_to_try:
+        try:
+            peer = await client.resolve_peer(tgt_chat_id)
+            await client.invoke(raw.functions.messages.EditForumTopic(
+                peer=peer,
+                topic_id=tgt_topic_id,
+                title=clean_title,
+                icon_emoji_id=DIAMOND_EMOJI_ID
+            ))
+            return True
+        except Exception:
+            pass
+    return False
+
+
 
 
 
@@ -544,35 +586,33 @@ def normalize_topic_title(title: str) -> str:
 
 
 def alphanumeric_topic_title(title: str) -> str:
-    """Extracts purely letters and numbers for fail-safe topic matching."""
+    """Extracts purely letters and numbers (including unicode scripts) for fail-safe topic matching."""
     if not title:
         return ""
-    return re.sub(r'[^a-zA-Z0-9]+', '', str(title)).lower()
+    return re.sub(r'[^\w]+', '', str(title), flags=re.UNICODE).lower()
 
 
 def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> int:
     """Matches a source topic title against existing target topics using multi-level matching."""
     if not st_title or not target_topics_by_title:
         return None
-    
-    exact = st_title.strip().lower()
-    norm = normalize_topic_title(st_title)
-    alpha = alphanumeric_topic_title(st_title)
 
-    # 1. Exact match
-    if exact in target_topics_by_title:
-        return target_topics_by_title[exact]
-    
-    # 2. Normalized match
-    if norm in target_topics_by_title:
-        return target_topics_by_title[norm]
-    
-    # 3. Alphanumeric match
-    if alpha and alpha in target_topics_by_title:
-        return target_topics_by_title[alpha]
-    
-    # 4. Partial word-set match
-    st_words = set(re.findall(r'\w+', st_title.lower()))
+    clean_t = clean_topic_title(st_title)
+    variants = [
+        st_title.strip().lower(),
+        clean_t.strip().lower(),
+        normalize_topic_title(st_title),
+        normalize_topic_title(clean_t),
+        alphanumeric_topic_title(st_title),
+        alphanumeric_topic_title(clean_t)
+    ]
+
+    for var in variants:
+        if var and var in target_topics_by_title:
+            return target_topics_by_title[var]
+
+    # Partial word-set match
+    st_words = set(re.findall(r'\w+', clean_t.lower()))
     if len(st_words) >= 2:
         for key, tid in target_topics_by_title.items():
             key_words = set(re.findall(r'\w+', str(key).lower()))
@@ -582,15 +622,19 @@ def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> 
     return None
 
 
-async def get_highest_topic_checkpoint(src_chat_id: int, src_topic_id: int, current_saved_checkpoint: int = 0) -> int:
+async def get_highest_topic_checkpoint(src_chat_id: int, src_topic_id: int, tgt_chat_id: int = None, current_saved_checkpoint: int = 0) -> int:
     """
-    Finds the highest last_msg_id checkpoint for a source topic across ALL MongoDB sessions
-    for this source chat ID, ensuring extraction never duplicates already copied posts.
+    Finds the highest last_msg_id checkpoint for a source topic specifically for this target chat ID.
+    If tgt_chat_id is provided, only searches within that specific target chat's session to ensure
+    each target group/channel maintains its own independent checkpoint.
     """
     highest = current_saved_checkpoint
     try:
         from toxic.core.mongo.db import mirror_db
-        async for doc in mirror_db.find({"src_chat_id": src_chat_id}):
+        query = {"src_chat_id": src_chat_id}
+        if tgt_chat_id is not None:
+            query["tgt_chat_id"] = int(tgt_chat_id)
+        async for doc in mirror_db.find(query):
             topics = doc.get("topics", {})
             st_info = topics.get(str(src_topic_id), {})
             last_id = st_info.get("last_msg_id", 0)
@@ -635,9 +679,66 @@ def get_mirror_keyboard(user_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def _register_topic(topics_by_title: dict, topics_by_id: dict, title: str, tid: int):
+    """Registers a topic into both lookup dicts under ALL title variants to prevent any future duplicate creation."""
+    if not title or not tid:
+        return
+    clean_t = clean_topic_title(title)
+    for var in [
+        title.strip().lower(),
+        clean_t.strip().lower(),
+        normalize_topic_title(title),
+        normalize_topic_title(clean_t),
+        alphanumeric_topic_title(title),
+        alphanumeric_topic_title(clean_t),
+    ]:
+        if var:
+            topics_by_title[var] = tid
+    topics_by_id[tid] = title
+
+
+async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query: str) -> int:
+    """
+    Directly queries Telegram servers via GetForumTopics RPC search filter (q=title_query).
+    Returns target topic ID if an existing topic with matching title is found on Telegram servers.
+    """
+    if not title_query or len(str(title_query).strip()) < 1:
+        return None
+    clean_q = clean_topic_title(title_query).strip()
+    clients_to_try = []
+    if userbot:
+        clients_to_try.append(userbot)
+    if app and app not in clients_to_try:
+        clients_to_try.append(app)
+
+    for client in clients_to_try:
+        try:
+            peer = await client.resolve_peer(tgt_chat_id)
+            for q_term in (clean_q, title_query.strip()):
+                res = await client.invoke(raw.functions.messages.GetForumTopics(
+                    peer=peer,
+                    q=q_term,
+                    offset_date=0,
+                    offset_id=0,
+                    offset_topic=0,
+                    limit=20
+                ))
+                topics = getattr(res, "topics", [])
+                for t in topics:
+                    tid = getattr(t, "id", None)
+                    t_title = getattr(t, "title", "") or ""
+                    if tid and t_title:
+                        c_t = clean_topic_title(t_title).strip()
+                        if c_t.lower() == clean_q.lower() or normalize_topic_title(c_t) == normalize_topic_title(clean_q) or alphanumeric_topic_title(c_t) == alphanumeric_topic_title(clean_q):
+                            return tid
+        except Exception:
+            pass
+    return None
+
+
 async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     """
-    Scans ALL existing forum topics in target supergroup trying both userbot and app.
+    Scans ALL existing forum topics in target supergroup using raw RPC GetForumTopics with pagination.
     Returns: (topics_by_normalized_title, topics_by_id)
     """
     topics_by_norm_title = {}
@@ -651,27 +752,12 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
 
     for client in clients_to_try:
         try:
-            async for t in client.get_forum_topics(tgt_chat_id):
-                if t and getattr(t, "title", None) and getattr(t, "message_thread_id", None):
-                    t_title = t.title
-                    tid = t.message_thread_id
-                    norm = normalize_topic_title(t_title)
-                    alpha = alphanumeric_topic_title(t_title)
-                    exact = t_title.strip().lower()
-
-                    topics_by_norm_title[norm] = tid
-                    topics_by_norm_title[exact] = tid
-                    if alpha:
-                        topics_by_norm_title[alpha] = tid
-                    topics_by_id[tid] = t_title
-        except Exception as e:
-            print(f"[TopicMirror] client.get_forum_topics scan notice: {e}")
-
-        try:
             peer = await client.resolve_peer(tgt_chat_id)
             offset_date = 0
             offset_id = 0
             offset_topic = 0
+            seen_topic_ids = set()
+
             while True:
                 res = await client.invoke(raw.functions.messages.GetForumTopics(
                     peer=peer,
@@ -683,27 +769,27 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
                 topics = getattr(res, "topics", [])
                 if not topics:
                     break
-                for t in topics:
-                    if not getattr(t, "id", None):
-                        continue
-                    t_title = getattr(t, "title", "")
-                    tid = t.id
-                    norm = normalize_topic_title(t_title)
-                    alpha = alphanumeric_topic_title(t_title)
-                    exact = t_title.strip().lower()
 
-                    topics_by_norm_title[norm] = tid
-                    topics_by_norm_title[exact] = tid
-                    if alpha:
-                        topics_by_norm_title[alpha] = tid
-                    topics_by_id[tid] = t_title
-                    offset_date = getattr(t, "date", 0)
-                    offset_id = tid
+                new_count = 0
+                for t in topics:
+                    tid = getattr(t, "id", None)
+                    if not tid or tid in seen_topic_ids:
+                        continue
+                    seen_topic_ids.add(tid)
+                    new_count += 1
+                    t_title = getattr(t, "title", "") or ""
+
+                    _register_topic(topics_by_norm_title, topics_by_id, t_title, tid)
+
+                    offset_date = getattr(t, "date", offset_date)
+                    top_msg = getattr(t, "top_message", 0)
+                    offset_id = top_msg if top_msg else tid
                     offset_topic = tid
-                if len(topics) < 100:
+
+                if new_count == 0 or len(topics) < 100:
                     break
-        except Exception as rpc_err:
-            print(f"[TopicMirror] Raw GetForumTopics pagination notice: {rpc_err}")
+        except Exception as scan_err:
+            print(f"[TopicMirror] get_all_target_forum_topics scan notice: {scan_err}")
 
         if topics_by_norm_title:
             break
@@ -711,30 +797,39 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     return topics_by_norm_title, topics_by_id
 
 
-async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_msg_id: int = 0, max_limit: int = 5000):
+
+async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_msg_id: int = 0, max_limit: int = 4000):
     """
-    Rapidly fetches pending messages for a topic.
-    If min_msg_id > 0 (resuming from checkpoint), stops scanning immediately once older messages are reached.
+    Fetches all pending messages for a specific forum topic up to max_limit (default 4000).
+    Returns messages sorted oldest→newest (ascending by id).
+    Only messages strictly > min_msg_id are returned (checkpoint resume).
+    Guarantees messages belong ONLY to this topic — no cross-topic leakage.
     """
     collected_messages = []
     seen_ids = set()
 
-    # Strategy 1: get_discussion_replies (Fastest for forum topics)
+    # ─── Strategy 1: get_discussion_replies (Pyrogram high-level, most accurate) ───
+    # get_discussion_replies returns thread replies newest→oldest.
+    # We collect ALL of them and filter by min_msg_id after, so we never miss messages.
     if topic_id and topic_id != 1:
         try:
             async for m in userbot.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
                 if not m or m.id in seen_ids:
                     continue
-                # If resuming and reached older/already-saved message, stop immediately!
-                if min_msg_id > 0 and m.id <= min_msg_id:
-                    break
                 seen_ids.add(m.id)
                 collected_messages.append(m)
+            if collected_messages:
+                # Filter to only pending messages after checkpoint
+                collected_messages = [m for m in collected_messages if m.id > min_msg_id]
+                collected_messages.sort(key=lambda x: x.id)
+                return collected_messages
         except Exception as disc_err:
             print(f"[TopicMirror] get_discussion_replies notice for topic {topic_id}: {disc_err}")
+            collected_messages.clear()
+            seen_ids.clear()
 
-    # Strategy 2: Raw RPC GetReplies (Fallback)
-    if not collected_messages and topic_id and topic_id != 1:
+    # ─── Strategy 2: Raw RPC GetReplies (fallback when Strategy 1 fails) ───
+    if topic_id and topic_id != 1:
         try:
             peer = await userbot.resolve_peer(src_chat_id)
             offset_id = 0
@@ -747,63 +842,133 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
                     add_offset=0,
                     limit=100,
                     max_id=0,
-                    min_id=min_msg_id if min_msg_id > 0 else 0,
+                    min_id=0,
                     hash=0
                 ))
                 raw_msgs = getattr(res, "messages", [])
                 if not raw_msgs:
                     break
+                users_map = {u.id: u for u in getattr(res, "users", [])}
+                chats_map = {c.id: c for c in getattr(res, "chats", [])}
                 new_found = 0
-                reached_min = False
                 for rm in raw_msgs:
-                    if min_msg_id > 0 and getattr(rm, 'id', 0) <= min_msg_id:
-                        reached_min = True
-                        break
-                    parsed_m = await types.Message._parse(userbot, rm, {u.id: u for u in getattr(res, "users", [])}, {c.id: c for c in getattr(res, "chats", [])})
-                    if parsed_m and parsed_m.id not in seen_ids:
-                        seen_ids.add(parsed_m.id)
-                        collected_messages.append(parsed_m)
-                        new_found += 1
-                if reached_min or new_found == 0:
+                    mid = getattr(rm, "id", None)
+                    if not mid or mid in seen_ids:
+                        continue
+                    try:
+                        parsed_m = await types.Message._parse(userbot, rm, users_map, chats_map)
+                        if parsed_m:
+                            seen_ids.add(mid)
+                            collected_messages.append(parsed_m)
+                            new_found += 1
+                    except Exception:
+                        pass
+                if new_found == 0 or len(raw_msgs) < 100:
                     break
                 offset_id = raw_msgs[-1].id
+            if collected_messages:
+                collected_messages = [m for m in collected_messages if m.id > min_msg_id]
+                collected_messages.sort(key=lambda x: x.id)
+                return collected_messages
         except Exception as rpc_err:
             print(f"[TopicMirror] Raw GetReplies notice for topic {topic_id}: {rpc_err}")
+            collected_messages.clear()
+            seen_ids.clear()
 
-    # Strategy 3: General topic or Fallback get_chat_history scan
-    if not collected_messages:
-        try:
-            async for m in userbot.get_chat_history(src_chat_id, limit=max_limit):
-                if not m or m.id in seen_ids:
-                    continue
-                if min_msg_id > 0 and m.id <= min_msg_id:
-                    break
-                if topic_id == 1:
-                    m_thread = getattr(m, "message_thread_id", None)
-                    reply_to = getattr(m, "reply_to_message_id", None)
-                    if m_thread in (None, 1) and (not reply_to or reply_to == 1):
-                        seen_ids.add(m.id)
-                        collected_messages.append(m)
-                else:
-                    m_thread = getattr(m, "message_thread_id", None)
-                    reply_to = getattr(m, "reply_to_message_id", None)
-                    if m_thread == topic_id or reply_to == topic_id:
-                        seen_ids.add(m.id)
-                        collected_messages.append(m)
-        except Exception as scan_err:
-            print(f"[TopicMirror] get_chat_history scan notice for topic {topic_id}: {scan_err}")
+    # ─── Strategy 3: Chat history scan — for General topic or when both above fail ───
+    # WARNING: This is a full scan. For non-General topics it matches via reply chain.
+    try:
+        # First pass: collect candidate message IDs that belong to this topic
+        topic_msg_ids: set = set()
+        all_scanned = []
 
-    # Sort messages chronologically (oldest first)
+        async for m in userbot.get_chat_history(src_chat_id, limit=min(max_limit * 2, 8000)):
+            if not m:
+                continue
+            all_scanned.append(m)
+
+            m_thread = getattr(m, "message_thread_id", None)
+            reply_to = getattr(m, "reply_to_message_id", None)
+            reply_top = None
+            rt_msg = getattr(m, "reply_to_message", None)
+            if rt_msg:
+                reply_top = getattr(rt_msg, "reply_to_top_id", None) or getattr(rt_msg, "message_thread_id", None)
+
+            if topic_id == 1:
+                # General: messages with no thread assignment
+                if m_thread in (None, 1) and reply_to in (None, 1) and reply_top in (None, 1):
+                    topic_msg_ids.add(m.id)
+            else:
+                # Topic thread: match via thread ID or reply chain pointing to topic root
+                if (m_thread == topic_id or
+                        reply_to == topic_id or
+                        reply_top == topic_id or
+                        m.id == topic_id):  # the root message itself
+                    topic_msg_ids.add(m.id)
+
+        # Second pass: expand via reply chain (replies to known topic messages also belong)
+        for m in all_scanned:
+            reply_to = getattr(m, "reply_to_message_id", None)
+            if reply_to and reply_to in topic_msg_ids and m.id not in topic_msg_ids:
+                topic_msg_ids.add(m.id)
+
+        # Third pass: collect actual message objects for matched IDs, filtering by checkpoint
+        for m in all_scanned:
+            if m.id in topic_msg_ids and m.id > min_msg_id and m.id not in seen_ids:
+                seen_ids.add(m.id)
+                collected_messages.append(m)
+
+    except Exception as scan_err:
+        print(f"[TopicMirror] get_chat_history scan notice for topic {topic_id}: {scan_err}")
+
+    # Sort chronologically oldest→newest
     collected_messages.sort(key=lambda x: x.id)
     return collected_messages
 
 
+
+
+def extract_topic_id_from_result(created) -> int:
+    if not created:
+        return None
+    if hasattr(created, "id") and isinstance(created.id, int) and created.id > 0:
+        return created.id
+    if hasattr(created, "message_thread_id") and isinstance(created.message_thread_id, int) and created.message_thread_id > 0:
+        return created.message_thread_id
+    if hasattr(created, "top_message_id") and isinstance(created.top_message_id, int) and created.top_message_id > 0:
+        return created.top_message_id
+
+    updates = getattr(created, "updates", []) or []
+    for upd in updates:
+        msg_obj = getattr(upd, "message", None)
+        if msg_obj and getattr(msg_obj, "id", None):
+            return msg_obj.id
+        uid = getattr(upd, "id", None)
+        if uid and isinstance(uid, int) and uid > 1:
+            return uid
+        
+    raw_msgs = getattr(created, "messages", []) or []
+    for m in raw_msgs:
+        if getattr(m, "id", None):
+            return m.id
+
+    return None
+
+
 async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int):
     """
-    Transfers a single message using server-side copy first, with full extraction fallback
-    (download, metadata extraction, auto-thumbnail, watermark, caption cleaning, and upload).
+    Transfers a single message using the fastest available method:
+      1. Direct forward_messages (zero-bandwidth, instant — if forward allowed or bot is member)
+      2. Server-side copy_message (no download/upload — removes forward tag)
+      3. Download → Upload full pipeline (protected/restricted content fallback)
     Checks user media filters and settings. Filters service/empty messages.
     """
+    # Instant Cancellation Check
+    if user_id in active_mirrors:
+        state = active_mirrors[user_id]
+        if (isinstance(state, dict) and not state.get("running", True)) or (isinstance(state, bool) and not state):
+            return False, "cancelled", None
+
     # 0. Skip Service, Action, Topic-Created, Pinned & Empty Messages
     if (getattr(msg, "service", False) or 
         getattr(msg, "empty", False) or 
@@ -829,325 +994,327 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
     if msg.text and not is_media_type_enabled(user_data, "text"):
         return False, "skipped_filter", None
 
-    # 1. First Attempt: Fast server-side copy via userbot or app
-    try:
+    # ── Helper: log copy to LOG_GROUP ──────────────────────────────
+    async def _log_msg(sent_m):
+        log_chat = get_log_group()
+        if log_chat and sent_m:
+            try:
+                await (sent_m[0] if isinstance(sent_m, list) else sent_m).copy(log_chat)
+            except Exception:
+                pass
+
+    # ─────────────────────────────────────────────────────────────
+    # METHOD 1: Direct forward_messages (zero-bandwidth, instant)
+    # Works when: bot/userbot is admin/member of source and target
+    # ─────────────────────────────────────────────────────────────
+    fwd_kwargs = {"chat_id": tgt_chat_id, "from_chat_id": src_chat_id, "message_ids": msg.id}
+    if tgt_topic_id:
+        fwd_kwargs["message_thread_id"] = tgt_topic_id
+
+    for fwd_client in [app, userbot]:
         try:
-            copied_m = await userbot.copy_message(
+            fwd_result = await fwd_client.forward_messages(**fwd_kwargs)
+            sent_list = fwd_result if isinstance(fwd_result, list) else [fwd_result]
+            sent_id = sent_list[0].id if sent_list and hasattr(sent_list[0], 'id') else None
+            if sent_id:
+                await _log_msg(sent_list[0])
+                return True, "forwarded", sent_id
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+        except Exception as fwd_err:
+            print(f"[Transfer] Direct forward notice ({fwd_client.__class__.__name__}): {fwd_err}")
+            continue  # Try next client (userbot / app)
+
+    # ─────────────────────────────────────────────────────────────
+    # METHOD 2: Server-side copy (no download/upload, removes forward header)
+    # Works when forward is restricted but bot/userbot has read access
+    # ─────────────────────────────────────────────────────────────
+    for copy_client in [app, userbot]:
+        try:
+            copied_m = await copy_client.copy_message(
                 chat_id=tgt_chat_id,
                 from_chat_id=src_chat_id,
                 message_id=msg.id,
                 reply_to_message_id=tgt_topic_id
             )
             sent_id = getattr(copied_m, 'id', None)
-            log_chat = get_log_group()
-            if log_chat:
+            if sent_id:
+                await _log_msg(copied_m)
+                return True, "copied", sent_id
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+        except Exception as copy_err:
+            print(f"[Transfer] Server copy notice ({copy_client.__class__.__name__}): {copy_err}")
+            continue  # Try next client
+
+    # ─────────────────────────────────────────────────────────────
+    # METHOD 3: Download via userbot → Upload (protected/restricted content)
+    # Full pipeline: download, thumbnail, watermark, caption clean, upload
+    # ─────────────────────────────────────────────────────────────
+    if msg.text:
+        try:
+            raw_text = msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else (msg.text or "")
+            final_text = await clean_and_brand_caption(user_id, raw_text)
+            html_text = format_caption_to_html(final_text) if final_text else None
+            sent_txt = await app.send_message(
+                chat_id=tgt_chat_id,
+                text=html_text if html_text else (final_text or msg.text),
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+            sent_id = getattr(sent_txt, 'id', None)
+            await _log_msg(sent_txt)
+            return True, "text_sent", sent_id
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+        except Exception as txt_err:
+            print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
+            return False, str(txt_err), None
+
+    # Media download/upload pipeline
+    temp_file = None
+    auto_thumb_file = None
+    try:
+        temp_dir = os.path.join("downloads", str(user_id))
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # Download media via userbot
+        temp_file = await userbot.download_media(
+            msg,
+            file_name=f"{temp_dir}/"
+        )
+
+        if not temp_file or not os.path.isfile(temp_file):
+            return False, "Download failed", None
+
+        # Prepare caption with advanced cleaning & branding (retaining source blockquotes)
+        orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
+        final_caption = await clean_and_brand_caption(user_id, orig_cap)
+        caption_html = format_caption_to_html(final_caption) if final_caption else None
+
+        # Check custom thumbnail from settings
+        thumb_path = thumbnail(user_id)
+        file_extension = str(temp_file).split('.')[-1].lower()
+
+        # If no custom thumbnail, try downloading original thumbnail from source message
+        if not thumb_path:
+            if msg.video and getattr(msg.video, 'thumbs', None) and len(msg.video.thumbs) > 0:
                 try:
-                    await app.copy_message(chat_id=log_chat, from_chat_id=src_chat_id, message_id=msg.id)
+                    thumb_path = await userbot.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                    auto_thumb_file = thumb_path
                 except Exception:
-                    pass
-            return True, "copied", sent_id
-        except Exception as forward_err:
-            err_str = str(forward_err).upper()
-            if "CHAT_FORWARDS_RESTRICTED" not in err_str and "CHATFORWARDSRESTRICTED" not in err_str:
+                    thumb_path = None
+            elif msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
                 try:
-                    copied_m = await app.copy_message(
-                        chat_id=tgt_chat_id,
-                        from_chat_id=src_chat_id,
-                        message_id=msg.id,
-                        reply_to_message_id=tgt_topic_id
-                    )
-                    sent_id = getattr(copied_m, 'id', None)
-                    log_chat = get_log_group()
-                    if log_chat:
-                        try:
-                            await app.copy_message(chat_id=log_chat, from_chat_id=src_chat_id, message_id=msg.id)
-                        except Exception:
-                            pass
-                    return True, "copied", sent_id
+                    thumb_path = await userbot.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                    auto_thumb_file = thumb_path
                 except Exception:
-                    pass
-            raise forward_err
+                    thumb_path = None
+
+        sent_media = None
+        file_size = os.path.getsize(temp_file)
+        if file_size > 1.99 * 1024 * 1024 * 1024:
+            from toxic.core.get_func import split_and_upload_file
+            await split_and_upload_file(app, user_id, tgt_chat_id, temp_file, final_caption, tgt_topic_id, thumb=thumb_path)
+            return True, "split_uploaded", None
+
+        # Video metadata & thumbnail handling
+        if msg.video or file_extension in VIDEO_EXTENSIONS:
+            # Format and rename video file to remove @mentions and add ⚝ before extension
+            raw_filename = (msg.video.file_name if msg.video and msg.video.file_name else os.path.basename(temp_file)) or "video.mp4"
+            clean_formatted_name = format_media_filename(raw_filename, media_type="video")
+            renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
+            if renamed_path != temp_file:
+                try:
+                    if os.path.exists(renamed_path):
+                        os.remove(renamed_path)
+                    os.rename(temp_file, renamed_path)
+                    temp_file = renamed_path
+                except Exception as ren_err:
+                    print(f"[TopicMirror] Video rename notice: {ren_err}")
+
+            # Extract original dimensions and duration from msg.video if available
+            duration = msg.video.duration if (msg.video and msg.video.duration) else 0
+            width = msg.video.width if (msg.video and msg.video.width) else 0
+            height = msg.video.height if (msg.video and msg.video.height) else 0
+
+            # Fallback to file metadata if missing
+            if not duration or not width or not height:
+                metadata = video_metadata(temp_file)
+                if not duration and metadata.get('duration', 0) > 0:
+                    duration = metadata.get('duration', 0)
+                if not width and metadata.get('width', 0) > 0:
+                    width = metadata.get('width', 0)
+                if not height and metadata.get('height', 0) > 0:
+                    height = metadata.get('height', 0)
+
+            # Generate screenshot thumbnail if still missing
+            if not thumb_path:
+                try:
+                    thumb_path = await screenshot(temp_file, duration or 10, user_id)
+                    auto_thumb_file = thumb_path
+                except Exception as ss_err:
+                    print(f"[TopicMirror] Screenshot generation error: {ss_err}")
+                    thumb_path = None
+
+            if thumb_path and os.path.isfile(thumb_path):
+                thumb_path = optimize_thumbnail(thumb_path)
+
+            has_spoiler = get_user_spoiler_preference(user_id)
+
+            sent_media = await app.send_video(
+                chat_id=tgt_chat_id,
+                video=temp_file,
+                caption=caption_html,
+                duration=duration if duration > 0 else None,
+                width=width if width > 0 else None,
+                height=height if height > 0 else None,
+                thumb=thumb_path,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML,
+                supports_streaming=True,
+                has_spoiler=has_spoiler
+            )
+        elif msg.document or file_extension == 'pdf':
+            # Apply PDF watermark if set in user settings
+            if file_extension == 'pdf':
+                watermark_txt = user_data.get("watermark_text")
+                if watermark_txt:
+                    temp_file = add_pdf_watermark(temp_file, watermark_txt)
+
+            # Format and rename document file with 📙 prefix and ⚝ before extension
+            raw_filename = (msg.document.file_name if msg.document and msg.document.file_name else os.path.basename(temp_file)) or "document.pdf"
+            clean_formatted_name = format_media_filename(raw_filename, media_type="document")
+
+            # Rename the downloaded temp file on disk so Pyrogram uploads with the clean name
+            renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
+            if renamed_path != temp_file:
+                try:
+                    if os.path.exists(renamed_path):
+                        os.remove(renamed_path)
+                    os.rename(temp_file, renamed_path)
+                    temp_file = renamed_path
+                except Exception as ren_err:
+                    print(f"[TopicMirror] File rename notice: {ren_err}")
+
+            # If no original caption, generate clean blockquote caption with formatted filename & branding
+            if not orig_cap:
+                branding_tag = get_user_branding_tag(user_id) or "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝"
+                final_caption = f"> **{clean_formatted_name}**\n\n> **{branding_tag}**"
+                final_caption = make_caption_bold(final_caption)
+                caption_html = format_caption_to_html(final_caption)
+
+            if thumb_path and os.path.isfile(thumb_path):
+                thumb_path = optimize_thumbnail(thumb_path)
+
+            sent_media = await app.send_document(
+                chat_id=tgt_chat_id,
+                document=temp_file,
+                caption=caption_html,
+                thumb=thumb_path,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML
+            )
+        elif msg.photo:
+            has_spoiler = get_user_spoiler_preference(user_id)
+            sent_media = await app.send_photo(
+                chat_id=tgt_chat_id,
+                photo=temp_file,
+                caption=caption_html,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML,
+                has_spoiler=has_spoiler
+            )
+        elif msg.audio:
+            raw_filename = (msg.audio.file_name if msg.audio and msg.audio.file_name else os.path.basename(temp_file)) or "audio.mp3"
+            clean_formatted_name = format_media_filename(raw_filename, media_type="audio")
+            renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
+            if renamed_path != temp_file:
+                try:
+                    if os.path.exists(renamed_path):
+                        os.remove(renamed_path)
+                    os.rename(temp_file, renamed_path)
+                    temp_file = renamed_path
+                except Exception as ren_err:
+                    print(f"[TopicMirror] Audio rename notice: {ren_err}")
+
+            clean_performer = re.sub(r'@\w+', '', msg.audio.performer or '').strip() if msg.audio.performer else None
+            clean_title = re.sub(r'@\w+', '', msg.audio.title or '').strip() if msg.audio.title else None
+
+            if thumb_path and os.path.isfile(thumb_path):
+                thumb_path = optimize_thumbnail(thumb_path)
+            sent_media = await app.send_audio(
+                chat_id=tgt_chat_id,
+                audio=temp_file,
+                caption=caption_html,
+                duration=msg.audio.duration or 0,
+                performer=clean_performer,
+                title=clean_title,
+                thumb=thumb_path,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML
+            )
+        elif msg.voice:
+            sent_media = await app.send_voice(
+                chat_id=tgt_chat_id,
+                voice=temp_file,
+                caption=caption_html,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML
+            )
+        elif msg.animation:
+            sent_media = await app.send_animation(
+                chat_id=tgt_chat_id,
+                animation=temp_file,
+                caption=caption_html,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML
+            )
+        elif msg.sticker:
+            sent_media = await app.send_sticker(
+                chat_id=tgt_chat_id,
+                sticker=temp_file,
+                reply_to_message_id=tgt_topic_id
+            )
+        else:
+            if thumb_path and os.path.isfile(thumb_path):
+                thumb_path = optimize_thumbnail(thumb_path)
+            sent_media = await app.send_document(
+                chat_id=tgt_chat_id,
+                document=temp_file,
+                caption=caption_html,
+                thumb=thumb_path,
+                reply_to_message_id=tgt_topic_id,
+                parse_mode=ParseMode.HTML
+            )
+
+        # Send copy of uploaded media to LOG_GROUP
+        await _log_msg(sent_media)
+
+        sent_id = getattr(sent_media, 'id', None)
+        return True, "download_uploaded", sent_id
 
     except FloodWait as fw:
         await asyncio.sleep(fw.value + 1)
         return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+    except Exception as dl_up_err:
+        print(f"[TopicMirror] Save-Restricted extraction error for msg {msg.id}: {dl_up_err}")
+        return False, str(dl_up_err), None
 
-    except Exception as e:
-        # 2. Restricted / Protected Content Fallback: Download via userbot & Upload to target topic
-        if msg.text:
+    finally:
+        if temp_file and os.path.isfile(temp_file):
             try:
-                raw_text = msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else (msg.text or "")
-                final_text = await clean_and_brand_caption(user_id, raw_text)
-                html_text = format_caption_to_html(final_text) if final_text else None
-                sent_txt = await app.send_message(
-                    chat_id=tgt_chat_id,
-                    text=html_text if html_text else (final_text or msg.text),
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True
-                )
-                sent_id = getattr(sent_txt, 'id', None)
-                log_chat = get_log_group()
-                if log_chat and sent_txt:
-                    try:
-                        await sent_txt.copy(log_chat)
-                    except Exception:
-                        pass
-                return True, "text_sent", sent_id
-            except FloodWait as fw:
-                await asyncio.sleep(fw.value + 1)
-                return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
-            except Exception as txt_err:
-                print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
-                return False, str(txt_err), None
-
-
-        # If message contains media:
-        temp_file = None
-        auto_thumb_file = None
-        try:
-            temp_dir = os.path.join("downloads", str(user_id))
-            os.makedirs(temp_dir, exist_ok=True)
-
-            # Download media via userbot
-            temp_file = await userbot.download_media(
-                msg,
-                file_name=f"{temp_dir}/"
-            )
-
-            if not temp_file or not os.path.isfile(temp_file):
-                return False, "Download failed"
-
-            # Prepare caption with advanced cleaning & branding (retaining source blockquotes)
-            orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
-            final_caption = await clean_and_brand_caption(user_id, orig_cap)
-            caption_html = format_caption_to_html(final_caption) if final_caption else None
-
-            # Check custom thumbnail from settings
-            thumb_path = thumbnail(user_id)
-            file_extension = str(temp_file).split('.')[-1].lower()
-
-            # If no custom thumbnail, try downloading original thumbnail from source message
-            if not thumb_path:
-                if msg.video and getattr(msg.video, 'thumbs', None) and len(msg.video.thumbs) > 0:
-                    try:
-                        thumb_path = await userbot.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                        auto_thumb_file = thumb_path
-                    except Exception:
-                        thumb_path = None
-                elif msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
-                    try:
-                        thumb_path = await userbot.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                        auto_thumb_file = thumb_path
-                    except Exception:
-                        thumb_path = None
-
-            sent_media = None
-            file_size = os.path.getsize(temp_file)
-            if file_size > 1.99 * 1024 * 1024 * 1024:
-                from toxic.core.get_func import split_and_upload_file
-                await split_and_upload_file(app, user_id, tgt_chat_id, temp_file, final_caption, tgt_topic_id, thumb=thumb_path)
-                return True, None
-
-            # Video metadata & thumbnail handling
-            if msg.video or file_extension in VIDEO_EXTENSIONS:
-                # Format and rename video file to remove @mentions and add ⚝ before extension
-                raw_filename = (msg.video.file_name if msg.video and msg.video.file_name else os.path.basename(temp_file)) or "video.mp4"
-                clean_formatted_name = format_media_filename(raw_filename, media_type="video")
-                renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
-                if renamed_path != temp_file:
-                    try:
-                        if os.path.exists(renamed_path):
-                            os.remove(renamed_path)
-                        os.rename(temp_file, renamed_path)
-                        temp_file = renamed_path
-                    except Exception as ren_err:
-                        print(f"[TopicMirror] Video rename notice: {ren_err}")
-
-                # Extract original dimensions and duration from msg.video if available
-                duration = msg.video.duration if (msg.video and msg.video.duration) else 0
-                width = msg.video.width if (msg.video and msg.video.width) else 0
-                height = msg.video.height if (msg.video and msg.video.height) else 0
-
-                # Fallback to file metadata if missing
-                if not duration or not width or not height:
-                    metadata = video_metadata(temp_file)
-                    if not duration and metadata.get('duration', 0) > 0:
-                        duration = metadata.get('duration', 0)
-                    if not width and metadata.get('width', 0) > 0:
-                        width = metadata.get('width', 0)
-                    if not height and metadata.get('height', 0) > 0:
-                        height = metadata.get('height', 0)
-
-                # Generate screenshot thumbnail if still missing
-                if not thumb_path:
-                    try:
-                        thumb_path = await screenshot(temp_file, duration or 10, user_id)
-                        auto_thumb_file = thumb_path
-                    except Exception as ss_err:
-                        print(f"[TopicMirror] Screenshot generation error: {ss_err}")
-                        thumb_path = None
-
-                if thumb_path and os.path.isfile(thumb_path):
-                    thumb_path = optimize_thumbnail(thumb_path)
-
-                has_spoiler = get_user_spoiler_preference(user_id)
-
-                sent_media = await app.send_video(
-                    chat_id=tgt_chat_id,
-                    video=temp_file,
-                    caption=caption_html,
-                    duration=duration if duration > 0 else None,
-                    width=width if width > 0 else None,
-                    height=height if height > 0 else None,
-                    thumb=thumb_path,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML,
-                    supports_streaming=True,
-                    has_spoiler=has_spoiler
-                )
-            elif msg.document or file_extension == 'pdf':
-                # Apply PDF watermark if set in user settings
-                if file_extension == 'pdf':
-                    watermark_txt = user_data.get("watermark_text")
-                    if watermark_txt:
-                        temp_file = add_pdf_watermark(temp_file, watermark_txt)
-
-                # Format and rename document file with 📙 prefix and ⚝ before extension
-                raw_filename = (msg.document.file_name if msg.document and msg.document.file_name else os.path.basename(temp_file)) or "document.pdf"
-                clean_formatted_name = format_media_filename(raw_filename, media_type="document")
-                
-                # Rename the downloaded temp file on disk so Pyrogram uploads with the clean name
-                renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
-                if renamed_path != temp_file:
-                    try:
-                        if os.path.exists(renamed_path):
-                            os.remove(renamed_path)
-                        os.rename(temp_file, renamed_path)
-                        temp_file = renamed_path
-                    except Exception as ren_err:
-                        print(f"[TopicMirror] File rename notice: {ren_err}")
-
-                # If no original caption, generate clean blockquote caption with formatted filename & branding
-                if not orig_cap:
-                    branding_tag = get_user_branding_tag(user_id) or "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝"
-                    final_caption = f"> **{clean_formatted_name}**\n\n> **{branding_tag}**"
-                    final_caption = make_caption_bold(final_caption)
-                    caption_html = format_caption_to_html(final_caption)
-
-                if thumb_path and os.path.isfile(thumb_path):
-                    thumb_path = optimize_thumbnail(thumb_path)
-
-                sent_media = await app.send_document(
-                    chat_id=tgt_chat_id,
-                    document=temp_file,
-                    caption=caption_html,
-                    thumb=thumb_path,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML
-                )
-            elif msg.photo:
-                has_spoiler = get_user_spoiler_preference(user_id)
-                sent_media = await app.send_photo(
-                    chat_id=tgt_chat_id,
-                    photo=temp_file,
-                    caption=caption_html,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML,
-                    has_spoiler=has_spoiler
-                )
-            elif msg.audio:
-                raw_filename = (msg.audio.file_name if msg.audio and msg.audio.file_name else os.path.basename(temp_file)) or "audio.mp3"
-                clean_formatted_name = format_media_filename(raw_filename, media_type="audio")
-                renamed_path = os.path.join(os.path.dirname(temp_file), clean_formatted_name)
-                if renamed_path != temp_file:
-                    try:
-                        if os.path.exists(renamed_path):
-                            os.remove(renamed_path)
-                        os.rename(temp_file, renamed_path)
-                        temp_file = renamed_path
-                    except Exception as ren_err:
-                        print(f"[TopicMirror] Audio rename notice: {ren_err}")
-
-                clean_performer = re.sub(r'@\w+', '', msg.audio.performer or '').strip() if msg.audio.performer else None
-                clean_title = re.sub(r'@\w+', '', msg.audio.title or '').strip() if msg.audio.title else None
-
-                if thumb_path and os.path.isfile(thumb_path):
-                    thumb_path = optimize_thumbnail(thumb_path)
-                sent_media = await app.send_audio(
-                    chat_id=tgt_chat_id,
-                    audio=temp_file,
-                    caption=caption_html,
-                    duration=msg.audio.duration or 0,
-                    performer=clean_performer,
-                    title=clean_title,
-                    thumb=thumb_path,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML
-                )
-            elif msg.voice:
-                sent_media = await app.send_voice(
-                    chat_id=tgt_chat_id,
-                    voice=temp_file,
-                    caption=caption_html,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML
-                )
-            elif msg.animation:
-                sent_media = await app.send_animation(
-                    chat_id=tgt_chat_id,
-                    animation=temp_file,
-                    caption=caption_html,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML
-                )
-            elif msg.sticker:
-                sent_media = await app.send_sticker(
-                    chat_id=tgt_chat_id,
-                    sticker=temp_file,
-                    reply_to_message_id=tgt_topic_id
-                )
-            else:
-                if thumb_path and os.path.isfile(thumb_path):
-                    thumb_path = optimize_thumbnail(thumb_path)
-                sent_media = await app.send_document(
-                    chat_id=tgt_chat_id,
-                    document=temp_file,
-                    caption=caption_html,
-                    thumb=thumb_path,
-                    reply_to_message_id=tgt_topic_id,
-                    parse_mode=ParseMode.HTML
-                )
-
-            # Send copy of uploaded media to LOG_GROUP
-            log_chat = get_log_group()
-            if log_chat and sent_media:
-                try:
-                    await sent_media.copy(log_chat)
-                except Exception as log_err:
-                    print(f"[TopicMirror] Media log copy notice: {log_err}")
-
-            sent_id = getattr(sent_media, 'id', None)
-            return True, "download_uploaded", sent_id
-
-        except FloodWait as fw:
-            await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
-        except Exception as dl_up_err:
-            print(f"[TopicMirror] Save-Restricted extraction error for msg {msg.id}: {dl_up_err}")
-            return False, str(dl_up_err), None
-
-        finally:
-            if temp_file and os.path.isfile(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
-            if auto_thumb_file and os.path.isfile(auto_thumb_file):
-                try:
-                    os.remove(auto_thumb_file)
-                except Exception:
-                    pass
+                os.remove(temp_file)
+            except Exception:
+                pass
+        if auto_thumb_file and os.path.isfile(auto_thumb_file):
+            try:
+                os.remove(auto_thumb_file)
+            except Exception:
+                pass
 
 
 def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeyboardMarkup:
@@ -1181,9 +1348,11 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
     return InlineKeyboardMarkup(buttons)
 
 
-def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int) -> InlineKeyboardMarkup:
+def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_count: int = 0) -> InlineKeyboardMarkup:
     """Builds action options for a selected saved mirror session."""
+    topic_btn_text = f"📂 View & Manage Topics ({topic_count})" if topic_count > 0 else "📂 View & Manage Topics"
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton(topic_btn_text, callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_0")],
         [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
         [
@@ -1228,21 +1397,21 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
         # Fetch all source topics
         source_topics = []
         try:
-            async for forum_topic in userbot.get_forum_topics(src_chat_id):
-                source_topics.append({
-                    "id": forum_topic.message_thread_id,
-                    "title": forum_topic.title
-                })
+            peer = await userbot.resolve_peer(src_chat_id)
+            res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
+            ))
+            for t in getattr(res, "topics", []):
+                if getattr(t, "id", None):
+                    source_topics.append({
+                        "id": t.id,
+                        "title": getattr(t, "title", f"Topic {t.id}"),
+                        "icon_color": getattr(t, "icon_color", None),
+                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
+                    })
         except Exception:
-            try:
-                peer = await userbot.resolve_peer(src_chat_id)
-                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                    peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
-                ))
-                for t in getattr(res, "topics", []):
-                    source_topics.append({"id": t.id, "title": t.title})
-            except Exception:
-                source_topics = [{"id": 1, "title": "General"}]
+            source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
+
 
         if not source_topics:
             source_topics = [{"id": 1, "title": "General"}]
@@ -1260,7 +1429,7 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
             # Check saved checkpoint in MongoDB (with cross-session failsafe)
             topic_info = saved_topics.get(str(st_id), {})
             last_msg_id = topic_info.get("last_msg_id", 0)
-            highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, st_id, last_msg_id)
+            highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, st_id, tgt_chat_id, last_msg_id)
             if highest_ckpt > last_msg_id:
                 last_msg_id = highest_ckpt
 
@@ -1459,13 +1628,324 @@ async def session_options_callback(_, query: CallbackQuery):
         f"> 📤 **Source Group:** `{src_title}` (`{src_chat_id}`)\n"
         f"> 📥 **Target Group:** `{tgt_title}` (`{tgt_chat_id}`)\n"
         f"> 📂 **Saved Topic Checkpoints:** `{topic_count}` topic(s) mapped\n\n"
-        f"Choose an option below to continue mirroring, change target chat ID, or delete this session:"
+        f"Choose an option below to view/manage individual topics, sync, rename, or continue mirroring:"
     )
     html_text = format_caption_to_html(text)
     await query.message.edit_text(
         html_text if html_text else text,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id)
+        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count)
+    )
+
+
+def make_topic_link(chat_id: int, topic_id: int) -> str:
+    """Generates a direct clickable Telegram link to a topic in a supergroup."""
+    cid_str = str(chat_id)
+    if cid_str.startswith("-100"):
+        cid_clean = cid_str[4:]
+    elif cid_str.startswith("-"):
+        cid_clean = cid_str[1:]
+    else:
+        cid_clean = cid_str
+    
+    tid = topic_id if (topic_id and topic_id > 1) else 1
+    return f"https://t.me/c/{cid_clean}/{tid}"
+
+
+@app.on_callback_query(filters.regex(r"^tm_topics_(-?\d+)_(-?\d+)_(\d+)$"))
+async def list_topics_paginated_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    
+    match = re.search(r"^tm_topics_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    page = int(match.group(3))
+    
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {})
+    src_title = session.get("src_title") or str(src_chat_id)
+    tgt_title = session.get("tgt_title") or str(tgt_chat_id)
+    
+    if not topics_dict:
+        await query.answer("ℹ️ No topics mapped yet! Run Sync & Update to initialize.", show_alert=True)
+        return
+        
+    topic_items = []
+    for s_id_str, info in topics_dict.items():
+        try:
+            s_id = int(s_id_str)
+            t_id = info.get("tgt_topic_id", s_id)
+            title = info.get("title", f"Topic {s_id}")
+            last_msg = info.get("last_msg_id", 0)
+            topic_items.append({"src_id": s_id, "tgt_id": t_id, "title": title, "last_msg": last_msg})
+        except Exception:
+            pass
+            
+    topic_items.sort(key=lambda x: x["src_id"])
+    
+    PAGE_SIZE = 10
+    total_topics = len(topic_items)
+    total_pages = max(1, math.ceil(total_topics / PAGE_SIZE))
+    page = min(max(0, page), total_pages - 1)
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, total_topics)
+    current_page_topics = topic_items[start_idx:end_idx]
+    
+    keyboard = []
+    for t in current_page_topics:
+        btn_text = f"📁 {t['title'][:25]}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"tm_topinfo_{src_chat_id}_{tgt_chat_id}_{t['src_id']}")])
+        
+    # Pagination row
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_{page-1}"))
+    nav_row.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_{page}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_{page+1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+    
+    # Global Action buttons
+    keyboard.append([
+        InlineKeyboardButton("⚡ Update All Topics", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}"),
+        InlineKeyboardButton("➕ Sync New Topics", callback_data=f"tm_syncnew_{src_chat_id}_{tgt_chat_id}")
+    ])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Session Options", callback_data=f"tm_opt_{src_chat_id}_{tgt_chat_id}")])
+    
+    text = (
+        f"📂 **Topic Management & Links Browser**\n\n"
+        f"> 📤 **Source:** `{src_title}`\n"
+        f"> 📥 **Target:** `{tgt_title}`\n"
+        f"> 📊 **Total Topics:** `{total_topics}` | **Page:** `{page+1}/{total_pages}`\n\n"
+        f"Tap any topic below to view **Source & Target links**, **Update**, **Rename**, or **Delete**:"
+    )
+    html_text = format_caption_to_html(text)
+    await query.message.edit_text(
+        html_text if html_text else text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        disable_web_page_preview=True
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_topinfo_(-?\d+)_(-?\d+)_(\d+)$"))
+async def single_topic_info_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+        
+    match = re.search(r"^tm_topinfo_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    src_topic_id = int(match.group(3))
+    
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {})
+    topic_info = topics_dict.get(str(src_topic_id), {})
+    
+    tgt_topic_id = topic_info.get("tgt_topic_id", src_topic_id)
+    title = topic_info.get("title", f"Topic {src_topic_id}")
+    last_msg = topic_info.get("last_msg_id", 0)
+    
+    src_link = make_topic_link(src_chat_id, src_topic_id)
+    tgt_link = make_topic_link(tgt_chat_id, tgt_topic_id)
+    
+    text = (
+        f"📁 **Topic Details & Actions**\n\n"
+        f"> 🏷️ **Topic Name:** `{title}`\n"
+        f"> 🔢 **Source Topic ID:** `{src_topic_id}`\n"
+        f"> 🎯 **Target Topic ID:** `{tgt_topic_id}`\n"
+        f"> 📌 **Last Synced Checkpoint:** Post `#{last_msg}`\n\n"
+        f"🔗 **Direct Clickable Topic Links:**\n"
+        f"• 📤 [Open Source Topic]({src_link})\n"
+        f"• 📥 [Open Target Topic]({tgt_link})\n\n"
+        f"Choose an action below for this topic:"
+    )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Update This Topic", callback_data=f"tm_sync1_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")],
+        [
+            InlineKeyboardButton("✏️ Rename Topic", callback_data=f"tm_rentop_{src_chat_id}_{tgt_chat_id}_{src_topic_id}"),
+            InlineKeyboardButton("🗑️ Delete Topic", callback_data=f"tm_deltop_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")
+        ],
+        [InlineKeyboardButton("🔙 Back to Topics List", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_0")]
+    ])
+    
+    html_text = format_caption_to_html(text)
+    await query.message.edit_text(
+        html_text if html_text else text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_sync1_(-?\d+)_(-?\d+)_(\d+)$"))
+async def update_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+        
+    match = re.search(r"^tm_sync1_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    src_topic_id = int(match.group(3))
+    
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+        return
+        
+    await query.answer("⚡ Starting Update for this Topic...")
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=False,
+        detected_topic_id=src_topic_id,
+        status_msg=query.message,
+        force_sync=True
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_rentop_(-?\d+)_(-?\d+)_(\d+)$"))
+async def rename_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+        
+    match = re.search(r"^tm_rentop_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    src_topic_id = int(match.group(3))
+    
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {})
+    topic_info = topics_dict.get(str(src_topic_id), {})
+    tgt_topic_id = topic_info.get("tgt_topic_id", src_topic_id)
+    old_title = topic_info.get("title", f"Topic {src_topic_id}")
+    
+    await query.answer()
+    try:
+        prompt = await app.ask(
+            user_id,
+            f"✏️ **Rename Topic:** `{old_title}`\n\n"
+            f"Send the **NEW title** for this topic:\n*(Send `/cancel` to abort)*",
+            timeout=120
+        )
+    except Exception as e:
+        await app.send_message(user_id, f"❌ Request timed out: {e}")
+        return
+        
+    if not prompt or prompt.text == "/cancel":
+        await app.send_message(user_id, "❌ Renaming cancelled.")
+        return
+        
+    new_title = clean_topic_title(prompt.text.strip())
+    if not new_title:
+        await app.send_message(user_id, "❌ Invalid title.")
+        return
+        
+    # Rename in Telegram target supergroup
+    renamed_tg = False
+    for client in [app]:
+        try:
+            peer = await client.resolve_peer(tgt_chat_id)
+            await client.invoke(raw.functions.messages.EditForumTopic(
+                peer=peer,
+                topic_id=tgt_topic_id,
+                title=new_title
+            ))
+            renamed_tg = True
+            break
+        except Exception as e:
+            print(f"[TopicMirror] Rename topic in TG notice: {e}")
+            
+    # Update title in MongoDB
+    await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, src_topic_id, tgt_topic_id, new_title)
+    
+    status_note = "✅ Renamed in Target Group & Database!" if renamed_tg else "✅ Updated in Database (Ensure bot has 'Manage Topics' admin rights in group)!"
+    res_text = (
+        f"🎉 **Topic Renamed Successfully!**\n\n"
+        f"> 🏷️ **Old Title:** `{old_title}`\n"
+        f"> ✨ **New Title:** `{new_title}`\n\n"
+        f"{status_note}"
+    )
+    await app.send_message(
+        user_id,
+        res_text,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Topics", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_0")]])
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_deltop_(-?\d+)_(-?\d+)_(\d+)$"))
+async def delete_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+        
+    match = re.search(r"^tm_deltop_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    src_topic_id = int(match.group(3))
+    
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {})
+    topic_info = topics_dict.get(str(src_topic_id), {})
+    tgt_topic_id = topic_info.get("tgt_topic_id", src_topic_id)
+    title = topic_info.get("title", f"Topic {src_topic_id}")
+    
+    # Try deleting topic history in Telegram target supergroup
+    for client in [app]:
+        try:
+            peer = await client.resolve_peer(tgt_chat_id)
+            await client.invoke(raw.functions.channels.DeleteTopicHistory(
+                channel=peer,
+                top_msg_id=tgt_topic_id
+            ))
+        except Exception as del_err:
+            print(f"[TopicMirror] Delete topic TG notice: {del_err}")
+            
+    # Unset from MongoDB
+    await db.mirror_db.update_one(
+        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+        {"$unset": {f"topics.{str(src_topic_id)}": ""}}
+    )
+    
+    await query.answer(f"🗑️ Deleted topic '{title}'!", show_alert=True)
+    # Refresh topics list
+    await list_topics_paginated_callback(_, query)
+
+
+@app.on_callback_query(filters.regex(r"^tm_syncnew_(-?\d+)_(-?\d+)$"))
+async def sync_new_topics_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+        
+    match = re.search(r"^tm_syncnew_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    
+    await query.answer("➕ Scanning source group for new topics...")
+    # Trigger full mirror scan which auto-discovers new source topics, maps/creates them in target, and syncs
+    await run_topic_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        mirror_all_topics=True,
+        detected_topic_id=None,
+        status_msg=query.message,
+        force_sync=True
     )
 
 
@@ -1761,65 +2241,447 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         return
 
     if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
-        err_active = "⚠️ **A mirroring operation is already running!** Send `/cancel_mirror` to abort it first."
+        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
         if is_callback:
-            await app.send_message(user_id, err_active)
+            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
         else:
-            await message.reply(err_active)
+            await message.reply(err_active, parse_mode=ParseMode.HTML)
         return
 
-    # STEP 1: Ask for SOURCE Topic Link
+async def run_single_link_mirror(
+    user_id: int,
+    src_chat_id: int,
+    src_topic_id: int,
+    tgt_chat_id: int,
+    tgt_topic_id: int = None,
+    src_start_id: int = None,
+    src_end_id: int = None,
+    status_msg = None
+):
+    """
+    Dedicated Link-to-Link Topic/Channel Mirror Engine.
+    Uses independent MongoDB storage (link_mirror_db) so single topic copies
+    never interfere with each other or with full group mirroring sessions.
+    """
+    if await chk_mirror_user(user_id) != 0:
+        err_msg = (
+            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
+            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CHOSEN_ONEx_bot to purchase access.</blockquote>"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(err_msg, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML)
+        return
+
+    userbot, is_temp_userbot = await get_working_userbot(user_id)
+    if not userbot:
+        err_ub = "❌ <b>No working userbot session!</b>\nPlease use `/login` to login your account first."
+        if status_msg:
+            try:
+                await status_msg.edit(err_ub, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, err_ub, parse_mode=ParseMode.HTML)
+        return
+
+    active_mirrors[user_id] = {
+        "running": True,
+        "skip_topic": False,
+        "current_topic": f"Topic {src_topic_id or 1}"
+    }
+
+    try:
+        # Check if source is a broadcast channel
+        # Check if source is a broadcast channel or if explicit post range is provided
+        try:
+            from pyrogram import enums
+            src_chat = await userbot.get_chat(src_chat_id)
+            if src_chat.type == enums.ChatType.CHANNEL or not getattr(src_chat, "is_forum", False):
+                if src_topic_id and src_topic_id > 1:
+                    if not src_start_id or src_start_id == 0:
+                        src_start_id = src_topic_id
+                    src_topic_id = 0
+        except Exception as e:
+            print(f"[SingleLinkMirror] Source chat check notice: {e}")
+
+        if src_start_id and src_end_id and src_end_id >= src_start_id:
+            # Explicit post range provided (e.g. 5494 -> 6541)
+            src_topic_id = 0
+
+        # Check independent checkpoint from link_mirror_db
+        saved_checkpoint = await db.get_link_mirror_checkpoint(src_chat_id, src_topic_id or 0, tgt_chat_id, tgt_topic_id or 0)
+
+        # Determine effective start bound (explicit user start_id takes precedence over checkpoint)
+        if src_start_id and src_start_id > 0:
+            effective_start = max(0, src_start_id - 1)
+        elif saved_checkpoint > 0:
+            effective_start = saved_checkpoint
+        else:
+            effective_start = 0
+
+        # Fetch messages for source topic or channel
+        all_messages = []
+        messages_to_copy = []
+
+        if src_topic_id and src_topic_id > 1:
+            # Forum topic — use discussion replies (already fetches everything properly)
+            all_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=effective_start)
+            if src_end_id and src_end_id > 0:
+                messages_to_copy = [m for m in all_messages if m.id <= src_end_id]
+            else:
+                messages_to_copy = all_messages
+        else:
+            # Channel / non-topic group fetch — fetch EXACT range using chunked get_messages
+            # Determine the maximum message ID to fetch up to
+            max_limit_id = src_end_id
+            if not max_limit_id or max_limit_id <= 0:
+                try:
+                    async for m in userbot.get_chat_history(src_chat_id, limit=1):
+                        if m:
+                            max_limit_id = m.id
+                except Exception:
+                    max_limit_id = effective_start + 4000  # Fallback buffer if history fails
+
+            if max_limit_id and max_limit_id > effective_start:
+                # Cap batch to 4000 messages per command invocation to prevent excessive memory/API time
+                fetch_end = min(max_limit_id, effective_start + 4000)
+                msg_ids_to_fetch = list(range(effective_start + 1, fetch_end + 1))
+
+                chunk_size = 200
+                chunks = [msg_ids_to_fetch[i:i + chunk_size] for i in range(0, len(msg_ids_to_fetch), chunk_size)]
+
+                for fetch_client in [userbot, app]:
+                    temp_collected = []
+                    try:
+                        for chk in chunks:
+                            fetched_msgs = await fetch_client.get_messages(src_chat_id, message_ids=chk)
+                            msg_list = fetched_msgs if isinstance(fetched_msgs, list) else [fetched_msgs]
+                            for m in msg_list:
+                                if m and not getattr(m, "empty", False) and getattr(m, "id", None):
+                                    temp_collected.append(m)
+                        if temp_collected:
+                            messages_to_copy = sorted(temp_collected, key=lambda x: x.id)
+                            break  # Successfully fetched with this client
+                    except Exception as e:
+                        print(f"[SingleLinkMirror] Range fetch notice ({fetch_client.__class__.__name__}): {e}")
+
+        total_count = len(messages_to_copy)
+
+        if total_count == 0:
+            msg_empty = (
+                f"ℹ️ <b>No new pending messages to mirror!</b>\n\n"
+                f"• <b>Saved Checkpoint:</b> Post #{saved_checkpoint}\n"
+                f"• <b>Total fetched:</b> {len(all_messages)}"
+            )
+            if status_msg:
+                try:
+                    await status_msg.edit(msg_empty, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+            else:
+                await app.send_message(user_id, msg_empty, parse_mode=ParseMode.HTML)
+            return
+
+        # Start copying loop
+        start_time = time.time()
+        last_edit_time = start_time
+        copied_count = 0
+        failed_count = 0
+        pin_first_msg_id = None  # Track first successfully sent message for pinning
+
+        control_kb = get_mirror_keyboard(user_id)
+
+        for idx, msg in enumerate(messages_to_copy, 1):
+            if not active_mirrors.get(user_id, {}).get("running", True):
+                await app.send_message(user_id, "🛑 <b>Link Mirror stopped by user!</b>", parse_mode=ParseMode.HTML)
+                break
+
+            # Skip service / empty messages
+            if getattr(msg, "service", False) or getattr(msg, "empty", False) or getattr(msg, "action", None):
+                await db.save_link_mirror_checkpoint(src_chat_id, src_topic_id or 0, tgt_chat_id, tgt_topic_id or 0, msg.id)
+                continue
+
+            # Process & Copy message using full transfer pipeline
+            success = False
+            method = "failed"
+            sent_msg_id = None
+            for retry in range(1, 4):
+                try:
+                    await ensure_userbot_connected(userbot)
+                    effective_tgt_topic_id = None if (tgt_topic_id == 1) else tgt_topic_id
+                    success, method, sent_msg_id = await transfer_single_message(
+                        userbot=userbot,
+                        app=app,
+                        src_chat_id=src_chat_id,
+                        tgt_chat_id=tgt_chat_id,
+                        tgt_topic_id=effective_tgt_topic_id,
+                        msg=msg,
+                        user_id=user_id
+                    )
+                    if success or method in ("service_skipped", "skipped_filter"):
+                        break
+                except FloodWait as fw:
+                    await asyncio.sleep(fw.value + 1)
+                except Exception as err:
+                    print(f"[SingleLinkMirror] Msg {msg.id} transfer attempt {retry}/3 error: {err}")
+                    await asyncio.sleep(1)
+
+            if success:
+                if method != "service_skipped":
+                    copied_count += 1
+                    # Track first message for pin
+                    if pin_first_msg_id is None and sent_msg_id:
+                        pin_first_msg_id = sent_msg_id
+            else:
+                if method != "skipped_filter":
+                    failed_count += 1
+
+            # Save checkpoint in independent link_mirror_db after processing message
+            await db.save_link_mirror_checkpoint(src_chat_id, src_topic_id or 0, tgt_chat_id, tgt_topic_id or 0, msg.id)
+
+            # Live UI Dashboard Update
+            now = time.time()
+            if now - last_edit_time > 3.5:
+                last_edit_time = now
+                pct = int((idx / total_count) * 100)
+                filled = int(pct / 10)
+                bar = "█" * filled + "░" * (10 - filled)
+                elapsed = now - start_time
+                speed = copied_count / max(elapsed, 0.1)
+                eta = int((total_count - idx) / speed) if speed > 0 else 0
+
+                dashboard_text = (
+                    f"⚡ <b>Topic Link Mirror Progress</b>\n\n"
+                    f"┌ <b>Progress:</b> [{bar}] <b>{pct}%</b>\n"
+                    f"├ <b>Downloaded:</b> <code>{copied_count}</code> / <code>{total_count}</code>\n"
+                    f"├ <b>Failed:</b> <code>{failed_count}</code>\n"
+                    f"├ <b>Speed:</b> <code>{speed:.1f}</code> msgs/s\n"
+                    f"└ <b>ETA:</b> <code>{TimeFormatter(eta*1000)}</code>"
+                )
+                if status_msg:
+                    try:
+                        await status_msg.edit(dashboard_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                    except Exception:
+                        pass
+
+        # Auto-pin first transferred message in target topic
+        if pin_first_msg_id and tgt_topic_id:
+            try:
+                await app.pin_chat_message(
+                    chat_id=tgt_chat_id,
+                    message_id=pin_first_msg_id,
+                    disable_notification=True,
+                    both_sides=False
+                )
+                print(f"[SingleLinkMirror] 📌 Pinned first message {pin_first_msg_id} in target topic {tgt_topic_id}")
+                # Auto-delete the "pinned a message" service message
+                async for sys_m in app.get_chat_history(tgt_chat_id, limit=5):
+                    if getattr(sys_m, "service", False) and getattr(sys_m, "pinned_message", None):
+                        try:
+                            await sys_m.delete()
+                        except Exception:
+                            pass
+            except Exception as pin_err:
+                print(f"[SingleLinkMirror] Pin notice: {pin_err}")
+
+        # Send Completion Message DIRECTLY to target topic inside blockquote
+        elapsed_total = time.time() - start_time
+        completion_msg = (
+            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+            f"📁 <b>Total Downloaded:</b> <code>{copied_count}</code> files\n"
+            f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+            f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
+        )
+        try:
+            if tgt_topic_id:
+                await app.send_message(
+                    chat_id=tgt_chat_id,
+                    text=completion_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=tgt_topic_id
+                )
+            else:
+                await app.send_message(
+                    chat_id=tgt_chat_id,
+                    text=completion_msg,
+                    parse_mode=ParseMode.HTML
+                )
+        except Exception as send_err:
+            print(f"[SingleLinkMirror] Failed sending completion msg to target: {send_err}")
+
+        # Update User Status DM
+        final_summary = (
+            f"✅ <b>Topic Link Mirror Complete!</b>\n\n"
+            f"📁 <b>Transferred:</b> <code>{copied_count}</code> files\n"
+            f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+            f"⏱ <b>Time:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code>\n"
+            f"📍 <b>Target:</b> <code>{tgt_chat_id}</code>" + (f" › Topic <code>{tgt_topic_id}</code>" if tgt_topic_id else "")
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(final_summary, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+
+    except Exception as exec_err:
+        print(f"[SingleLinkMirror] Execution error: {exec_err}")
+        if status_msg:
+            try:
+                await status_msg.edit(f"❌ <b>Link Mirror Error:</b> `{exec_err}`")
+            except Exception:
+                pass
+    finally:
+        active_mirrors.pop(user_id, None)
+        if is_temp_userbot and userbot:
+            try:
+                await userbot.stop()
+            except Exception:
+                pass
+
+
+async def start_topic_link_flow(user_id: int, message, is_callback: bool = False):
+    """Interactive prompt flow for mirroring from ONE specific topic link to ANOTHER topic link with range support."""
+    if await chk_mirror_user(user_id) != 0:
+        err_msg = (
+            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
+            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
+            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+        )
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        if is_callback:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+        if is_callback:
+            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(err_active, parse_mode=ParseMode.HTML)
+        return
+
+    # STEP 1: SOURCE Link (Topic link / Post link / Channel link)
     try:
         prompt_1 = await app.ask(
             user_id,
-            "🔗 **Send the SOURCE Topic link:**\n\n"
-            "*(e.g., `https://t.me/c/1234567890/100/500` or `https://t.me/c/1234567890/100`)*\n\n"
-            "Send `/cancel` to abort.",
-            timeout=180
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 1 of 3 — Source Link</b>\n"
+            "<i>Jis topic/channel se copy karna hai uska link bhejo.</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📂 Topic link: <code>https://t.me/c/123/50</code>\n"
+            "• 🎯 Post link: <code>https://t.me/c/123/50/100</code>\n"
+            "• 📣 Channel link: <code>https://t.me/channel/100</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
         )
-    except Exception as e:
-        err_text = "❌ **Interactive Prompt Failed:**\nPlease start the bot first in private DM (@" + (await app.get_me()).username + ")!"
+    except Exception:
+        err_text = "⏱ <b>Prompt timed out!</b>\n\nPlease start the bot in your private DM first."
         if is_callback:
-            await app.send_message(user_id, err_text)
+            await app.send_message(user_id, err_text, parse_mode=ParseMode.HTML)
         else:
-            await message.reply(err_text)
+            await message.reply(err_text, parse_mode=ParseMode.HTML)
         return
 
-    if prompt_1.text == "/cancel":
+    if prompt_1.text.strip() == "/cancel":
         await app.send_message(user_id, "❌ Operation cancelled.")
         return
 
     src_link = prompt_1.text.strip()
-    src_chat_id, src_topic_id = parse_topic_link(src_link)
+    src_chat_id, src_topic_id, src_post_id = parse_topic_and_post_link(src_link)
 
-    if not src_chat_id or not src_topic_id:
-        await app.send_message(user_id, "❌ **Invalid Source Topic link format.** Could not extract Group ID or Topic ID.")
+    if not src_chat_id:
+        await app.send_message(
+            user_id,
+            "❌ <b>Invalid Source link!</b>\n\nCould not extract Group / Channel ID.\n\n"
+            "Example: <code>https://t.me/c/1234567890/50</code>",
+            parse_mode=ParseMode.HTML
+        )
         return
 
-    # STEP 2: Ask for TARGET Topic Link
+    src_start_id = src_post_id if src_post_id else (src_topic_id if src_topic_id else 0)
+
+    # STEP 2: End Post Link or Count (Optional)
     try:
         prompt_2 = await app.ask(
             user_id,
-            "🎯 **Send the TARGET Topic link (where content should be sent):**\n\n"
-            "*(e.g., `https://t.me/c/9876543210/200/50` or `https://t.me/c/9876543210/200`)*\n\n"
-            "Send `/cancel` to abort.",
-            timeout=180
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 2 of 3 — Range Limit</b>\n"
+            "<i>Kahan tak copy karna hai? (Sab copy karna ho to 0 bhejo)</i>\n\n"
+            "<b>Options:</b>\n"
+            "• 🏁 End post link: <code>https://t.me/c/123/50/200</code>\n"
+            "• 🔢 Message count: <code>50</code>\n"
+            "• ♾️ All pending: <code>0</code> or <code>all</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
         )
-    except Exception as e:
-        await app.send_message(user_id, f"❌ Session timed out or error: {e}")
+    except Exception:
+        await app.send_message(user_id, "⏱ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
         return
 
-    if prompt_2.text == "/cancel":
+    if prompt_2.text.strip() == "/cancel":
         await app.send_message(user_id, "❌ Operation cancelled.")
         return
 
-    tgt_link = prompt_2.text.strip()
-    tgt_chat_id, tgt_topic_id = parse_topic_link(tgt_link)
+    src_end_id = 0
+    val2 = prompt_2.text.strip()
+    if val2.isdigit():
+        count_or_id = int(val2)
+        if count_or_id > 0:
+            if src_start_id > 0 and count_or_id < 10000 and count_or_id < src_start_id:
+                src_end_id = src_start_id + count_or_id - 1
+            else:
+                src_end_id = count_or_id
+    else:
+        _, end_tid, end_pid = parse_topic_and_post_link(val2)
+        src_end_id = end_pid or end_tid or 0
 
-    if not tgt_chat_id or not tgt_topic_id:
-        await app.send_message(user_id, "❌ **Invalid Target Topic link format.** Could not extract Target Group ID or Topic ID.")
+    # STEP 3: TARGET Topic Link / Group Link
+    try:
+        prompt_3 = await app.ask(
+            user_id,
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 3 of 3 — Target Destination</b>\n"
+            "<i>Jahan content dalna hai uska link bhejo (Bot Admin hona chahiye).</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📂 Topic link: <code>https://t.me/c/987/200</code>\n"
+            "• 🆔 Group ID: <code>-1009876543</code>\n"
+            "• 👤 Username: <code>@my_channel</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        await app.send_message(user_id, "❌ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
         return
 
+    if prompt_3.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    tgt_link = prompt_3.text.strip()
+    tgt_chat_id, tgt_topic_id, _ = parse_topic_and_post_link(tgt_link)
+
+    if not tgt_chat_id:
+        await app.send_message(
+            user_id,
+            "❌ <b>Invalid Target link!</b>\nExample: <code>https://t.me/c/9876543210/200</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Resolve usernames to numeric IDs
     userbot, _ = await get_working_userbot(user_id)
     if isinstance(src_chat_id, str) and userbot:
         try:
@@ -1835,21 +2697,29 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         except Exception:
             pass
 
-    await app.send_message(
+    start_str = f"#{src_start_id}" if src_start_id > 0 else "Beginning"
+    end_str = f"#{src_end_id}" if src_end_id > 0 else "End"
+
+    control_kb = get_mirror_keyboard(user_id)
+    status_msg = await app.send_message(
         user_id,
-        f"🚀 **Direct Topic-to-Topic Link Mirror Initialized!**\n\n"
-        f"📤 **Source Chat:** `{src_chat_id}` | **Topic ID:** `{src_topic_id}`\n"
-        f"📥 **Target Chat:** `{tgt_chat_id}` | **Topic ID:** `{tgt_topic_id}`\n\n"
-        f"Starting extraction..."
+        f"🚀 <b>Single Topic Link Mirror Starting...</b>\n\n"
+        f"📤 <b>Source:</b> <code>{src_chat_id}</code>" + (f" | Topic: <code>{src_topic_id}</code>" if src_topic_id else "") + "\n"
+        f"📥 <b>Target:</b> <code>{tgt_chat_id}</code>" + (f" | Topic: <code>{tgt_topic_id}</code>" if tgt_topic_id else "") + "\n"
+        f"📊 <b>Range:</b> {start_str} ➔ {end_str}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=control_kb
     )
 
-    await run_topic_mirror(
+    await run_single_link_mirror(
         user_id=user_id,
         src_chat_id=src_chat_id,
+        src_topic_id=src_topic_id,
         tgt_chat_id=tgt_chat_id,
-        mirror_all_topics=False,
-        detected_topic_id=src_topic_id,
-        forced_tgt_topic_id=tgt_topic_id
+        tgt_topic_id=tgt_topic_id,
+        src_start_id=src_start_id if src_start_id > 0 else None,
+        src_end_id=src_end_id if src_end_id > 0 else None,
+        status_msg=status_msg
     )
 
 
@@ -1894,8 +2764,13 @@ async def pick_single_topic_callback(_, query: CallbackQuery):
 
     topics = []
     try:
-        async for t in userbot.get_forum_topics(src_chat_id):
-            topics.append((t.message_thread_id, t.title))
+        peer = await userbot.resolve_peer(src_chat_id)
+        res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+            peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
+        ))
+        for t in getattr(res, "topics", []):
+            if getattr(t, "id", None):
+                topics.append((t.id, getattr(t, "title", f"Topic {t.id}")))
     except Exception:
         topics = [(1, "General")]
 
@@ -1967,10 +2842,16 @@ async def reupload_single_topic_callback(_, query: CallbackQuery):
 
     topics = []
     try:
-        async for t in userbot.get_forum_topics(src_chat_id):
-            topics.append((t.message_thread_id, t.title))
+        peer = await userbot.resolve_peer(src_chat_id)
+        res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+            peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
+        ))
+        for t in getattr(res, "topics", []):
+            if getattr(t, "id", None):
+                topics.append((t.id, getattr(t, "title", f"Topic {t.id}")))
     except Exception:
         topics = [(1, "General")]
+
 
     if is_temp and userbot:
         try:
@@ -2063,8 +2944,8 @@ async def topic_mirror_cmd(client, message):
         await start_new_mirror_flow(user_id, message)
 
 
-async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False):
-    """Core execution engine for topic mirroring with instant resume, rapid extraction, and force sync."""
+async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None):
+    """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, and range support."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
@@ -2171,8 +3052,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         # -------------------------------------------------------------
         # PHASE 1: DISCOVER SOURCE TOPICS & MAP WITHOUT DUPLICATES
         # -------------------------------------------------------------
+        # Save session metadata to MongoDB FIRST
+        await db.save_mirror_session_info(user_id, src_chat_id, tgt_chat_id, src_title, tgt_title)
         saved_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
-        saved_topics = saved_session.get("topics", {})
+        saved_topics = saved_session.get("topics", {}) if saved_session else {}
 
         topic_map = {}   # src_topic_id -> tgt_topic_id
         topic_names = {} # src_topic_id -> title
@@ -2195,60 +3078,106 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         if forced_tgt_topic_id is not None and detected_topic_id is not None:
             st_title = f"Topic {detected_topic_id}"
             try:
-                async for forum_topic in userbot.get_forum_topics(src_chat_id):
-                    if forum_topic.message_thread_id == detected_topic_id:
-                        st_title = forum_topic.title
+                peer = await userbot.resolve_peer(src_chat_id)
+                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                    peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
+                ))
+                for t in getattr(res, "topics", []):
+                    if getattr(t, "id", None) == detected_topic_id:
+                        st_title = getattr(t, "title", st_title)
                         break
             except Exception:
                 pass
+
             topic_map[detected_topic_id] = forced_tgt_topic_id
             topic_names[detected_topic_id] = st_title
             await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, detected_topic_id, forced_tgt_topic_id, st_title)
 
         source_topics = []
-        # Strategy 1: Userbot get_forum_topics
+        # Strategy 1 & 2 merged: Raw RPC GetForumTopics via Userbot with pagination (most reliable in Pyrogram 2.3.69)
         try:
-            async for forum_topic in userbot.get_forum_topics(src_chat_id):
-                source_topics.append({
-                    "id": forum_topic.message_thread_id,
-                    "title": forum_topic.title,
-                    "icon_color": getattr(forum_topic, "icon_color", None),
-                    "icon_emoji_id": getattr(forum_topic, "icon_emoji_id", None)
-                })
-        except Exception as scan_err:
-            print(f"[TopicMirror] Userbot get_forum_topics scan notice: {scan_err}")
-
-        # Strategy 2: App get_forum_topics or Raw RPC GetForumTopics
-        if not source_topics:
-            try:
-                async for forum_topic in app.get_forum_topics(src_chat_id):
+            peer = await userbot.resolve_peer(src_chat_id)
+            offset_date = 0
+            offset_id = 0
+            offset_topic = 0
+            seen_src_ids = set()
+            while True:
+                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                    peer=peer,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100
+                ))
+                topics_list = getattr(res, "topics", [])
+                if not topics_list:
+                    break
+                new_found = 0
+                for t in topics_list:
+                    tid = getattr(t, "id", None)
+                    if not tid or tid in seen_src_ids:
+                        continue
+                    seen_src_ids.add(tid)
+                    new_found += 1
                     source_topics.append({
-                        "id": forum_topic.message_thread_id,
-                        "title": forum_topic.title,
-                        "icon_color": getattr(forum_topic, "icon_color", None),
-                        "icon_emoji_id": getattr(forum_topic, "icon_emoji_id", None)
+                        "id": tid,
+                        "title": getattr(t, "title", f"Topic {tid}"),
+                        "icon_color": getattr(t, "icon_color", None),
+                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
                     })
-            except Exception:
-                try:
-                    peer = await userbot.resolve_peer(src_chat_id)
-                    res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                        peer=peer,
-                        offset_date=0,
-                        offset_id=0,
-                        offset_topic=0,
-                        limit=100
-                    ))
-                    for t in getattr(res, "topics", []):
-                        source_topics.append({
-                            "id": t.id,
-                            "title": t.title,
-                            "icon_color": getattr(t, "icon_color", None),
-                            "icon_emoji_id": getattr(t, "icon_emoji_id", None)
-                        })
-                except Exception as rpc_err:
-                    print(f"[TopicMirror] Raw RPC GetForumTopics failed: {rpc_err}")
+                    offset_date = getattr(t, "date", offset_date)
+                    top_msg = getattr(t, "top_message", 0)
+                    offset_id = top_msg if top_msg else tid
+                    offset_topic = tid
+                if new_found == 0 or len(topics_list) < 100:
+                    break
+            if source_topics:
+                print(f"[TopicMirror] ✅ Discovered {len(source_topics)} source topics via raw RPC GetForumTopics")
+        except Exception as rpc_err:
+            print(f"[TopicMirror] Raw RPC GetForumTopics notice: {rpc_err}")
 
-        # Strategy 3: Message History Topic Discovery (if get_forum_topics returned empty)
+
+
+        # Strategy 3: Deep Chat History & Discussion Reply Topic Discovery (if get_forum_topics failed)
+        if not source_topics:
+            print(f"[TopicMirror] get_forum_topics unavailable. Starting Deep History Topic Discovery for {src_chat_id}...")
+            discovered_tids = set()
+            try:
+                async for m in userbot.get_chat_history(src_chat_id, limit=600):
+                    if not m:
+                        continue
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    reply_top_id = getattr(getattr(m, "reply_to_message", None), "reply_to_top_id", None)
+                    for tid in (m_thread, reply_to, reply_top_id):
+                        if tid and isinstance(tid, int) and tid > 1:
+                            discovered_tids.add(tid)
+
+                for tid in sorted(discovered_tids):
+                    t_title = f"Topic {tid}"
+                    try:
+                        async for rep in userbot.get_discussion_replies(src_chat_id, tid, limit=3):
+                            if getattr(rep, "forum_topic_created", None) and getattr(rep.forum_topic_created, "title", None):
+                                t_title = rep.forum_topic_created.title
+                                break
+                    except Exception:
+                        pass
+                    source_topics.append({"id": tid, "title": t_title, "icon_color": None, "icon_emoji_id": None})
+            except Exception as hist_err:
+                print(f"[TopicMirror] Deep History Topic Discovery notice: {hist_err}")
+
+        # Strategy 4: Load persistent topics from MongoDB session if previously saved
+        if saved_topics:
+            existing_src_ids = {t["id"] for t in source_topics}
+            for st_id_str, info in saved_topics.items():
+                try:
+                    s_id = int(st_id_str)
+                    if s_id not in existing_src_ids:
+                        t_title = info.get("title", f"Topic {s_id}")
+                        source_topics.append({"id": s_id, "title": t_title, "icon_color": None, "icon_emoji_id": None})
+                except Exception:
+                    pass
+
         if not source_topics and detected_topic_id:
             source_topics.append({"id": detected_topic_id, "title": f"Topic {detected_topic_id}", "icon_color": None, "icon_emoji_id": None})
 
@@ -2279,15 +3208,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
-            # 3. Check persistent MongoDB session FIRST (rejecting bad fallback 1s for non-general topics)
+            # 3. Check persistent MongoDB session FIRST (ALWAYS reuse saved mapping to prevent duplicates)
             saved_info = saved_topics.get(str(st_id))
             if saved_info and saved_info.get("tgt_topic_id"):
-                existing_tgt_id = saved_info["tgt_topic_id"]
-                if existing_tgt_id == 1 and st_id != 1 and norm_title not in ("general", "1"):
-                    print(f"[TopicMirror] Correcting bad saved mapping (1) for non-general topic '{st_title}'...")
-                else:
-                    topic_map[st_id] = existing_tgt_id
-                    continue
+                try:
+                    existing_tgt_id = int(saved_info["tgt_topic_id"])
+                    if existing_tgt_id > 1 or st_id == 1 or norm_title in ("general", "1"):
+                        topic_map[st_id] = existing_tgt_id
+                        print(f"[TopicMirror] ✅ Reusing saved Mongo mapped tgt_topic_id {existing_tgt_id} for '{st_title}'")
+                        continue
+                except Exception as e:
+                    print(f"[TopicMirror] Saved info parse notice for '{st_title}': {e}")
 
             # 4. Check if target group already has a topic with matching title (Multi-level match)
             existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
@@ -2296,88 +3227,132 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 5. Fresh re-scan right before creating a new topic to prevent ANY duplicate topic creation
-            fresh_target_topics, _ = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+            # 5. Direct Telegram Server RPC Query (q=st_title) to guarantee no duplicate created if scan missed it
+            rpc_matched_id = await search_target_topic_by_rpc(userbot, app, tgt_chat_id, st_title)
+            if rpc_matched_id:
+                topic_map[st_id] = rpc_matched_id
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, rpc_matched_id)
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, rpc_matched_id, st_title)
+                print(f"[TopicMirror] ✅ Direct Telegram RPC server query found '{st_title}' → tgt topic {rpc_matched_id}")
+                continue
+
+            # 6. Fresh re-scan right before creating a new topic as extra safeguard
+            fresh_target_topics, fresh_target_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
             existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 continue
 
-            # 6. Only if topic does NOT exist anywhere, create a NEW topic in target supergroup with clean title
-            new_tgt_topic_id = None
+            # ─────────────────────────────────────────────────────────────
+            # STEP 7: Create topic ONLY if confirmed absent everywhere
+            # ─────────────────────────────────────────────────────────────
             clean_st_title = clean_topic_title(st_title)
+            src_icon_color = st.get("icon_color") or 0x6FB9F0
+            src_icon_emoji_id = st.get("icon_emoji_id") or None
+
+            # Final check against clean title
+            existing_tgt_id = (
+                match_existing_target_topic(clean_st_title, fresh_target_topics)
+                or match_existing_target_topic(st_title, fresh_target_topics)
+                or await search_target_topic_by_rpc(userbot, app, tgt_chat_id, clean_st_title)
+            )
+            if existing_tgt_id:
+                topic_map[st_id] = existing_tgt_id
+                _register_topic(target_topics_by_title, target_topics_by_id, clean_st_title, existing_tgt_id)
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
+                print(f"[TopicMirror] ✅ Pre-create scan/RPC found '{clean_st_title}' → tgt topic {existing_tgt_id}")
+                continue
+
+            # ── Single create attempt (high-level Pyrogram first, raw RPC on failure) ──
+            new_tgt_topic_id = None
+
+            # Attempt 1: high-level API
             try:
-                created = await app.create_forum_topic(
-                    chat_id=tgt_chat_id,
-                    title=clean_st_title,
-                    icon_color=0x6FB9F0
-                )
-                new_tgt_topic_id = created.message_thread_id
-            except Exception as create_err:
+                create_kwargs = {"chat_id": tgt_chat_id, "title": clean_st_title, "icon_color": src_icon_color}
+                if src_icon_emoji_id:
+                    create_kwargs["icon_emoji_id"] = src_icon_emoji_id
+                created = await app.create_forum_topic(**create_kwargs)
+                new_tgt_topic_id = extract_topic_id_from_result(created)
+                if new_tgt_topic_id:
+                    print(f"[TopicMirror] ✅ Created topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via high-level API")
+            except Exception as hl_err:
+                print(f"[TopicMirror] create_forum_topic notice for '{clean_st_title}': {hl_err}")
+
+            # Attempt 2: Raw RPC ONLY if Attempt 1 failed to produce a topic ID
+            if not new_tgt_topic_id:
                 try:
                     peer = await app.resolve_peer(tgt_chat_id)
-                    res = await app.invoke(raw.functions.messages.CreateForumTopic(
+                    rpc_kwargs = dict(
                         peer=peer,
                         title=clean_st_title,
-                        icon_color=0x6FB9F0,
+                        icon_color=src_icon_color,
                         random_id=random.randint(1000000, 9999999)
-                    ))
-                    for upd in getattr(res, "updates", []):
-                        if hasattr(upd, "message_thread_id"):
-                            new_tgt_topic_id = upd.message_thread_id
-                            break
-                        elif hasattr(upd, "id"):
-                            new_tgt_topic_id = upd.id
-                            break
+                    )
+                    if src_icon_emoji_id:
+                        rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
+                    res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+                    new_tgt_topic_id = extract_topic_id_from_result(res)
+                    if new_tgt_topic_id:
+                        print(f"[TopicMirror] ✅ Created topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] CreateForumTopic failed for '{clean_st_title}': {create_err} / {rpc_create_err}")
+                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{clean_st_title}': {rpc_create_err}")
 
-            if new_tgt_topic_id:
-                topic_map[st_id] = new_tgt_topic_id
-                target_topics_by_title[norm_title] = new_tgt_topic_id
-                target_topics_by_title[clean_st_title.lower()] = new_tgt_topic_id
-                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, new_tgt_topic_id, clean_st_title)
+            verified_id = new_tgt_topic_id
+            if not verified_id:
+                await asyncio.sleep(1.5)
+                verify_topics, verify_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+                target_topics_by_title.update(verify_topics)
+                target_topics_by_id.update(verify_by_id)
+                verified_id = (
+                    match_existing_target_topic(clean_st_title, verify_topics)
+                    or match_existing_target_topic(st_title, verify_topics)
+                )
+
+                # Post-RPC-create scan
+                if new_tgt_topic_id:
+                    await asyncio.sleep(1.5)
+                    verify_topics2, verify_by_id2 = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+                    target_topics_by_title.update(verify_topics2)
+                    target_topics_by_id.update(verify_by_id2)
+                    verified_id = (
+                        match_existing_target_topic(clean_st_title, verify_topics2)
+                        or match_existing_target_topic(st_title, verify_topics2)
+                        or new_tgt_topic_id
+                    )
+
+            if verified_id:
+                topic_map[st_id] = verified_id
+                _register_topic(target_topics_by_title, target_topics_by_id, clean_st_title, verified_id)
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, verified_id)
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, verified_id, st_title)
+                print(f"[TopicMirror] 📌 Mapped src topic '{clean_st_title}' ({st_id}) → tgt topic ({verified_id})")
             else:
                 if st_id == 1 or norm_title in ("general", "1"):
                     topic_map[st_id] = 1
                     await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, clean_st_title)
                 else:
-                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' could not be created or mapped to target. Make sure bot has 'Manage Topics' admin rights in target group!")
-
-
-        # Asynchronously update target topic titles (removing 💎 text) & setting 💎 custom emoji icon in background!
-        async def background_topic_icon_update():
-            for s_id, t_id in topic_map.items():
-                if t_id and t_id != 1:
-                    t_title = clean_topic_title(topic_names.get(s_id, f"Topic {s_id}"))
-                    try:
-                        peer = await app.resolve_peer(tgt_chat_id)
-                        await app.invoke(raw.functions.messages.EditForumTopic(
-                            peer=peer,
-                            topic_id=t_id,
-                            title=t_title,
-                            icon_emoji_id=DIAMOND_EMOJI_ID
-                        ))
-                    except Exception:
-                        try:
-                            await app.edit_forum_topic(
-                                chat_id=tgt_chat_id,
-                                message_thread_id=t_id,
-                                title=t_title,
-                                icon_emoji_id=DIAMOND_EMOJI_ID
-                            )
-                        except Exception as py_err:
-                            print(f"[TopicMirror] Topic {t_id} icon update notice: {py_err}")
-                    await asyncio.sleep(0.1)
-
-        asyncio.create_task(background_topic_icon_update())
+                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' FAILED to create — ensure bot has 'Manage Topics' admin rights in target!")
 
 
 
 
+
+
+
+
+
+
+
+            # If single topic mode is active, strictly filter topic_map so ONLY detected_topic_id is processed
+        if not mirror_all_topics and detected_topic_id:
+            topic_map = {k: v for k, v in topic_map.items() if k == detected_topic_id}
+            if forced_tgt_topic_id:
+                topic_map[detected_topic_id] = forced_tgt_topic_id
 
         total_topics_count = len(topic_map)
+
         await status_msg.edit(
             f"✅ **Phase 1 Complete:** Mapped `{total_topics_count}` Topics (0 Duplicates)!\n\n"
             f"⚡ **Starting Rapid Extraction:** Mirroring pending messages...\n\n"
@@ -2414,7 +3389,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         current_topic_index = 0
         start_overall_time = time.time()
 
-        for src_topic_id, tgt_topic_id in topic_map.items():
+        for src_topic_id, tgt_topic_id in list(topic_map.items()):
             if not tgt_topic_id:
                 continue
             if tgt_topic_id == 1 and src_topic_id != 1 and normalize_topic_title(topic_names.get(src_topic_id, "")) not in ("general", "1"):
@@ -2434,19 +3409,30 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 # Ensure userbot client is connected before fetching topic messages
                 await ensure_userbot_connected(userbot)
 
-                # Check last copied message ID from MongoDB checkpoint (with cross-session failsafe)
-                saved_checkpoint = saved_topics.get(str(src_topic_id), {}).get("last_msg_id", 0)
-                if not force_sync:
-                    highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, src_topic_id, saved_checkpoint)
-                    if highest_ckpt > saved_checkpoint:
-                        saved_checkpoint = highest_ckpt
+                # Always fetch FRESH checkpoint from MongoDB per-topic (not stale startup snapshot)
+                # This guarantees accurate resume even after bot restart mid-mirror
+                fresh_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+                fresh_topics_data = fresh_session.get("topics", {})
+                saved_checkpoint = fresh_topics_data.get(str(src_topic_id), {}).get("last_msg_id", 0)
+                highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, saved_checkpoint)
+                if highest_ckpt > saved_checkpoint:
+                    saved_checkpoint = highest_ckpt
 
-                # Rapidly fetch messages for this topic with checkpoint cutoff (0 if force_sync)
-                fetch_cutoff = 0 if force_sync else saved_checkpoint
+                print(f"[TopicMirror] Topic '{topic_title}' → checkpoint: {saved_checkpoint}, target topic: {tgt_topic_id}")
+
+                # Rapidly fetch messages for this topic with checkpoint cutoff
+                if src_start_id is not None and src_start_id > 0:
+                    fetch_cutoff = max(0, src_start_id - 1)
+                else:
+                    fetch_cutoff = saved_checkpoint
                 all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff)
-                
-                # Filter pending messages to copy
-                messages_to_copy = [m for m in all_topic_messages if m.id > saved_checkpoint]
+
+                # Filter pending messages to copy (respecting range + checkpoint)
+                effective_start = max(saved_checkpoint, src_start_id - 1 if src_start_id else 0)
+                if src_end_id and src_end_id > 0:
+                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
+                else:
+                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start]
                 already_done_count = len(all_topic_messages) - len(messages_to_copy)
                 topic_stats[src_topic_id]["skipped"] = already_done_count
                 overall_skipped += already_done_count
@@ -2459,6 +3445,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                 # Scan target topic content IDs for smart deduplication & zero-skip continuation
                 synced_caption_ids = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
+
 
                 # Instant Extraction Start without heavy pre-loop file sizing
                 topic_copied_bytes = 0
@@ -2500,17 +3487,26 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     for attempt in range(1, 6):
                         try:
                             await ensure_userbot_connected(userbot)
+                            # CRITICAL: Never pass None as tgt_topic_id — it sends to General
+                            # Only pass None for the actual General topic (id=1), otherwise always pass the real topic ID
+                            effective_tgt_topic_id = None if (tgt_topic_id == 1) else tgt_topic_id
+                            if effective_tgt_topic_id is None and tgt_topic_id not in (1, None):
+                                # tgt_topic_id is some non-1 value but became None — this is a bug guard
+                                print(f"[TopicMirror] ⚠️ tgt_topic_id={tgt_topic_id} invalid for topic '{topic_title}'. Skipping msg {msg.id}.")
+                                success, method, sent_msg_id = False, "invalid_topic", None
+                                break
                             success, method, sent_msg_id = await transfer_single_message(
                                 userbot=userbot,
                                 app=app,
                                 src_chat_id=src_chat_id,
                                 tgt_chat_id=tgt_chat_id,
-                                tgt_topic_id=tgt_topic_id if tgt_topic_id != 1 else None,
+                                tgt_topic_id=effective_tgt_topic_id,
                                 msg=msg,
                                 user_id=user_id
                             )
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break
+
                         except FloodWait as fw:
                             print(f"[TopicMirror] FloodWait {fw.value}s on msg {msg.id}. Sleeping...")
                             await asyncio.sleep(fw.value + 1)
@@ -2537,7 +3533,25 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                                         message_id=sent_msg_id,
                                         disable_notification=True
                                     )
-                                    print(f"[TopicMirror] 📌 Auto-pinned first message ({sent_msg_id}) in topic {tgt_topic_id}")
+                                    await asyncio.sleep(1)
+                                    # Auto-delete the "pinned a message" service message inside topic thread
+                                    try:
+                                        async for sys_m in userbot.get_discussion_replies(tgt_chat_id, tgt_topic_id, limit=5):
+                                            if getattr(sys_m, "service", False) or getattr(sys_m, "action", None) or getattr(sys_m, "pinned_message", None):
+                                                try:
+                                                    await userbot.delete_messages(tgt_chat_id, sys_m.id)
+                                                except Exception:
+                                                    try:
+                                                        await app.delete_messages(tgt_chat_id, sys_m.id)
+                                                    except Exception:
+                                                        pass
+                                    except Exception:
+                                        async for sys_m in app.get_chat_history(tgt_chat_id, limit=5):
+                                            if getattr(sys_m, "service", False) or getattr(sys_m, "action", None) or getattr(sys_m, "pinned_message", None):
+                                                try:
+                                                    await app.delete_messages(tgt_chat_id, sys_m.id)
+                                                except Exception:
+                                                    pass
                                 except Exception as pin_err:
                                     print(f"[TopicMirror] First message auto-pin notice for topic {tgt_topic_id}: {pin_err}")
                     else:
@@ -2573,22 +3587,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         eta_str = TimeFormatter(int(eta_seconds * 1000)) if eta_seconds > 0 else "00:00:00"
 
                         status_text = (
-                            f"╔══━⚡️ **Topic Mirroring in Progress** ⚡️━══╗\n"
-                            f" ┉━┉━┉━┉┉━┉━┉━┉┉━┉━\n"
-                            f"> 📁 **Topic [{current_topic_index}/{total_topics_count}]:** `{topic_title}`\n"
-                            f"> 📥 **Routing To:** `{tgt_title} → {topic_title}`\n\n"
-                            f"> 📊 **Topic Progress:** {progress_bar_str} `{percent}%`\n"
-                            f"> 🔢 **Pending Messages:** `{idx}/{total_msgs_in_topic}`\n"
-                            f"> ⚡ **Transfer Speed:** `{speed_str}`\n"
-                            f"> ⏳ **Topic ETA:** `{eta_str}`\n\n"
-                            f"> ✅ **New Copied:** `{overall_copied}` | ⏩ **Resumed/Skipped:** `{overall_skipped}`\n"
-                            f"> ❌ **Failed:** `{overall_failed}` | 🛡️ **Bypass & Clean:** `Active`\n"
-                            f" ╚═══━━━─⚝─━━━═══╝\n\n"
-                            f"⚝__**"
+                            f"⚡️ <b>Xtracting...</b>\n\n"
+                            f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
+                            f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+                            f"📊 <b>Progress:</b> [{progress_bar_str}] {percent}%\n"
+                            f"🔢 <b>Pending:</b> <code>{idx}/{total_msgs_in_topic}</code>\n"
+                            f"🚀 <b>Speed:</b> <code>{speed_str}</code>\n"
+                            f"⏳ <b>ETA:</b> <code>{eta_str}</code>\n\n"
+                            f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
+                            f"❌ Failed: {overall_failed}"
                         )
-                        status_html = format_caption_to_html(status_text)
                         try:
-                            await status_msg.edit(status_html if status_html else status_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                            await status_msg.edit(status_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
                         except Exception:
                             pass
 
@@ -2616,7 +3626,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             f"📥 **To:** `{tgt_title}`\n\n"
             f"📊 **Overall Stats:**\n"
             f"• **Topics Processed:** `{len(topic_stats)}/{total_topics_count}`\n"
-            f"• **Total New Copied:** ✅ `{overall_copied}`\n"
+            f"• **Total New Downloaded:** ✅ `{overall_copied}`\n"
             f"• **Total Resumed/Skipped:** ⏩ `{overall_skipped}`\n"
             f"• **Total Failed:** ❌ `{overall_failed}`\n"
             f"• **Total Data:** 💾 `{humanbytes(overall_transferred_bytes)}`\n"
@@ -2649,35 +3659,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             except Exception as log_err:
                 print(f"[TopicMirror] Finish log notice: {log_err}")
 
-        # Send Stylish Completion Summary to Target Forum Group
+        # Send Clean Completion Message to Target Forum Group (General Topic only)
         try:
-            STUDY_QUOTES = [
-                "📖 <i>\"Success isn't given. It's earned. In the library, on the desk, with every page turned.\"</i> 💫",
-                "⚡ <i>\"Don't stop when you're tired. Stop when you're done! Keep grinding.\"</i> 🚀",
-                "🎯 <i>\"The expert in anything was once a beginner. Focus on your goal!\"</i> ✨",
-                "🔥 <i>\"Hard work beats talent when talent doesn't work hard. Study smart!\"</i> 💡",
-                "📚 <i>\"Your future self is watching you right now through memories. Make them proud!\"</i> 👑",
-                "🏆 <i>\"Push yourself, because no one else is going to do it for you.\"</i> 🌟",
-                "🚀 <i>\"Dream big, work hard, stay focused, and surround yourself with good energy.\"</i> 💎",
-                "🧠 <i>\"Consistency is the key to mastering any subject. Small steps daily!\"</i> 🎓",
-                "📖 <i>\"Work hard in silence, let your success be your noise.\"</i> 💬",
-                "🌟 <i>\"The beautiful thing about learning is that nobody can take it away from you.\"</i> ⚡",
-                "🎓 <i>\"Discipline is choosing between what you want now and what you want most.\"</i> 🎯",
-                "💫 <i>\"Believe in yourself and all that you are. Great things take time.\"</i> 🔮",
-                "🔥 <i>\"Doubt kills more dreams than failure ever will. Believe & Achieve!\"</i> 🦁",
-                "✨ <i>\"Study like there is no tomorrow, so you can live tomorrow like you always wanted!\"</i> 🚀",
-                "👑 <i>\"The harder you work for something, the greater you'll feel when you achieve it.\"</i> 🏆"
-            ]
-            random_quote = random.choice(STUDY_QUOTES)
+            elapsed_total = time.time() - start_time
             target_group_msg = (
-                "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b></blockquote>\n\n"
-                f"• <b>Total New Uploaded/Updated:</b> ✅ <code>{overall_copied}</code> files\n"
-                f"• <b>Total Topics Processed:</b> 📂 <code>{len(topic_stats)}/{total_topics_count}</code>\n"
-                f"• <b>Total Data Volume:</b> 💾 <code>{humanbytes(overall_transferred_bytes)}</code>\n"
-                f"• <b>Duration:</b> ⏱️ <code>{total_time_taken}</code>\n\n"
-                "<blockquote><b>✅ All pending content has been successfully synced & updated!</b></blockquote>\n\n"
-                f"<b>💡 Daily Motivation:</b>\n{random_quote}"
+                "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+                f"📁 <b>New Files Downloaded:</b> <code>{overall_copied}</code> files\n"
+                f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
+                f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
             )
+            
+            # Send STRICTLY to General Topic (reply_to_message_id=1 or direct)
+            sent_to_gen = False
             try:
                 await app.send_message(
                     chat_id=tgt_chat_id,
@@ -2685,15 +3678,25 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     parse_mode=ParseMode.HTML,
                     reply_to_message_id=1
                 )
+                sent_to_gen = True
             except Exception:
-                await app.send_message(
-                    chat_id=tgt_chat_id,
-                    text=target_group_msg,
-                    parse_mode=ParseMode.HTML
-                )
-            print(f"[TopicMirror] Sent completion summary to target group {tgt_chat_id}")
+                pass
+
+            if not sent_to_gen:
+                try:
+                    await app.send_message(
+                        chat_id=tgt_chat_id,
+                        text=target_group_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception as e:
+                    print(f"[TopicMirror] Could not send completion msg to general topic: {e}")
+
+            print(f"[TopicMirror] Sent completion message to General topic in target group {tgt_chat_id}")
         except Exception as tgt_msg_err:
             print(f"[TopicMirror] Failed to send target group completion msg: {tgt_msg_err}")
+
+
 
     except Exception as general_err:
         print(f"[TopicMirror] General error: {general_err}")

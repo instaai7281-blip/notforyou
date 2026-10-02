@@ -415,3 +415,55 @@ async def set_custom_group_bio(bio: str):
 async def reset_custom_group_bio():
     """Resets global group bio to default."""
     await db.delete_one({"_id": "global_group_bio"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LINK MIRROR CHECKPOINTS — Separate from topic_mirror_sessions
+# Keyed by src_chat_id + src_topic_id + tgt_chat_id + tgt_topic_id
+# Each unique (source, source_topic) → (target, target_topic) combo
+# gets its own independent last_msg_id so:
+#   • Group A's progress never bleeds into Group B
+#   • Normal group-to-group mirror is completely unaffected
+# ─────────────────────────────────────────────────────────────────────────────
+link_mirror_db = mongo.user_data.link_mirror_checkpoints
+
+
+def _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id) -> str:
+    return f"{src_chat_id}_{src_topic_id or 0}_{tgt_chat_id}_{tgt_topic_id or 0}"
+
+
+async def get_link_mirror_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id) -> int:
+    """Returns the last successfully copied message ID for this exact link-mirror route. 0 = start from beginning."""
+    try:
+        doc = await link_mirror_db.find_one({"_id": _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id)})
+        return doc.get("last_msg_id", 0) if doc else 0
+    except Exception:
+        return 0
+
+
+async def save_link_mirror_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id, last_msg_id: int):
+    """Saves the last copied message ID for this exact link-mirror route."""
+    try:
+        key = _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id)
+        await link_mirror_db.update_one(
+            {"_id": key},
+            {"$set": {
+                "last_msg_id": last_msg_id,
+                "src_chat_id": src_chat_id,
+                "src_topic_id": src_topic_id or 0,
+                "tgt_chat_id": tgt_chat_id,
+                "tgt_topic_id": tgt_topic_id or 0,
+                "updated_at": datetime.datetime.now()
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[LinkMirrorDB] save_checkpoint error: {e}")
+
+
+async def reset_link_mirror_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id):
+    """Resets (deletes) checkpoint for a link-mirror route so next run starts fresh."""
+    try:
+        await link_mirror_db.delete_one({"_id": _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id)})
+    except Exception:
+        pass

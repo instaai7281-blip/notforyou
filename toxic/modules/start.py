@@ -43,7 +43,7 @@ async def start_cmd(client, message: Message):
         f"<blockquote><b>🚀 Welcome to TOXIC BOT PRO, {user_name}! 🖤</b></blockquote>\n\n"
         f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
         f"<blockquote><b>✨ WHAT I CAN DO FOR YOU:</b>\n"
-        f"• <b>Save-Restricted Bypass:</b> Extract content from private channels & groups!\n"
+        f"• <b>Ultra Fast Xtractor Pro:</b> Extract & sync content from private channels & groups!\n"
         f"• <b>Bulk Extraction (/batch):</b> Extract up to 5000 files in one single command!\n"
         f"• <b>Topic Mirror Forum Sync (/topicmirror):</b> Clone entire forum groups with auto-topic creation & 1-click update sync!\n"
         f"• <b>Direct Topic Link Mirror (/topiclink):</b> Mirror from 1 topic link directly into another!\n"

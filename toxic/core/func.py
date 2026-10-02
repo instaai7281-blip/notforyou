@@ -75,7 +75,7 @@ async def subscribe(app, message):
         return 0
     except UserNotParticipant:
         caption = (
-            "<blockquote><b>🛑 ACCESS RESTRICTED — MUST JOIN CHANNEL 🛑</b></blockquote>\n\n"
+            "<blockquote><b>🛑 ACCESS REQUIRED — MUST JOIN CHANNEL 🛑</b></blockquote>\n\n"
             f"<b>👋 Hello {first_name}!</b>\n\n"
             "<blockquote><b>📢 To use this Bot, you must join our Official Updates Channel!</b>\n\n"
             "<i>Due to high server load & security filters, access is reserved exclusively for our channel members.</i></blockquote>\n\n"
@@ -83,7 +83,7 @@ async def subscribe(app, message):
             "1️⃣ Click <b>📢 Join Official Channel</b> button below.\n"
             "2️⃣ Click <b>Join Channel</b> in Telegram.\n"
             "3️⃣ Come back & send <code>/start</code> again or click <b>🔄 Check Access</b>!\n\n"
-            "<blockquote><b>⚡ Fast & Free Save-Restricted Content Extraction!</b></blockquote>"
+            "<blockquote><b>⚡ Ultra Fast & Smart Content Xtractor Pro!</b></blockquote>"
         )
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Join Official Channel", url=f"{url}")],
