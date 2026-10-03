@@ -1456,15 +1456,17 @@ def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_coun
 
 async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: int):
     """
-    Scans source and target groups, compares total content per topic,
-    and returns a clean comparative report with pending message counts.
+    Performs 2-stage scanning and comparative analysis:
+      Stage 1: Topic Existence & Count Comparison (detecting topics missing in Target).
+      Stage 2: Per-Topic Content Message Comparison (checking pending vs synced messages).
+    Returns tuple: (report_html_text, missing_topics_list, total_pending_msgs)
     """
     userbot, is_temp_userbot = await get_working_userbot(user_id)
     if not userbot:
-        return "❌ **No working userbot session!** Please login via `/login` first."
+        return "❌ **No working userbot session!** Please login via `/login` first.", [], 0
 
     try:
-        # Resolve chat titles
+        # 1. Resolve chat titles
         try:
             src_chat = await userbot.get_chat(src_chat_id)
             src_title = src_chat.title or str(src_chat_id)
@@ -1478,55 +1480,101 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
             tgt_title = str(tgt_chat_id)
 
         saved_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
-        saved_topics = saved_session.get("topics", {})
+        saved_topics = saved_session.get("topics", {}) if saved_session else {}
 
-        # Fetch all source topics
+        # 2. Stage 1 Scan: Discover Source Topics & Target Topics
         source_topics = await get_all_source_forum_topics(userbot, src_chat_id)
         if not source_topics:
             source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
 
+        target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+
+        missing_topics = []   # list of dicts {"id": st_id, "title": st_title}
+        existing_topics = []  # list of dicts with target mapped IDs
+
+        for st in source_topics:
+            st_id = st["id"]
+            st_title = st["title"].strip()
+            norm_title = normalize_topic_title(st_title)
+
+            # Check if mapped in General (1)
+            if st_id == 1 or norm_title in ("general", "1", "main"):
+                existing_topics.append({"src_id": st_id, "tgt_id": 1, "title": st_title})
+                continue
+
+            # Check Mongo saved mapping first
+            mapped_tgt_id = None
+            saved_info = saved_topics.get(str(st_id))
+            if saved_info and saved_info.get("tgt_topic_id"):
+                try:
+                    s_tgt_id = int(saved_info["tgt_topic_id"])
+                    if s_tgt_id > 1:
+                        mapped_tgt_id = s_tgt_id
+                except Exception:
+                    pass
+
+            # Match in target topics lookup
+            if not mapped_tgt_id:
+                mapped_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
+
+            if mapped_tgt_id:
+                existing_topics.append({"src_id": st_id, "tgt_id": mapped_tgt_id, "title": st_title})
+            else:
+                missing_topics.append({"id": st_id, "title": st_title})
+
+        # 3. Stage 2 Scan: Content Message Comparison per Topic
         total_src_msgs = 0
         total_synced_msgs = 0
         total_pending_msgs = 0
-
         topic_lines = []
 
         for st in source_topics:
             st_id = st["id"]
             st_title = st["title"].strip()
-            
-            # Check saved checkpoint in MongoDB (with cross-session failsafe)
+
+            # Find mapped target ID if exists
+            is_missing = any(m["id"] == st_id for m in missing_topics)
+
+            # Check saved checkpoint in MongoDB
             topic_info = saved_topics.get(str(st_id), {})
             last_msg_id = topic_info.get("last_msg_id", 0)
             highest_ckpt = await get_highest_topic_checkpoint(src_chat_id, st_id, tgt_chat_id, last_msg_id)
             if highest_ckpt > last_msg_id:
                 last_msg_id = highest_ckpt
 
-            # Rapidly fetch messages for topic
+            # Fetch messages for topic
             messages = await fetch_all_messages_for_topic(userbot, src_chat_id, st_id, min_msg_id=0, max_limit=5000)
-            
-            # Filter non-service messages
-            content_msgs = [m for m in messages if not (getattr(m, "service", False) or getattr(m, "empty", False) or getattr(m, "action", None) or getattr(m, "forum_topic_created", None) or getattr(m, "pinned_message", None) or not (m.text or m.media or getattr(m, "document", None) or getattr(m, "video", None) or getattr(m, "photo", None) or getattr(m, "audio", None)))]
-            
+
+            # Filter content messages (non-service)
+            content_msgs = [m for m in messages if not (
+                getattr(m, "service", False) or getattr(m, "empty", False) or getattr(m, "action", None) or 
+                getattr(m, "forum_topic_created", None) or getattr(m, "pinned_message", None) or 
+                not (m.text or m.media or getattr(m, "document", None) or getattr(m, "video", None) or getattr(m, "photo", None) or getattr(m, "audio", None))
+            )]
+
             t_total = len(content_msgs)
-            
-            if last_msg_id > 0:
-                t_synced = len([m for m in content_msgs if m.id <= last_msg_id])
-            else:
+
+            if is_missing:
                 t_synced = 0
-                
-            t_pending = max(0, t_total - t_synced)
+                t_pending = t_total
+                status_str = f"🚨 **Missing in Target** (`{t_pending}` msgs pending)"
+            else:
+                if last_msg_id > 0:
+                    t_synced = len([m for m in content_msgs if m.id <= last_msg_id])
+                else:
+                    t_synced = 0
+                t_pending = max(0, t_total - t_synced)
+
+                if t_pending == 0 and t_total > 0:
+                    status_str = "🌐 **Complete**"
+                elif t_pending > 0:
+                    status_str = f"⏳ **Pending:** `{t_pending}` msgs"
+                else:
+                    status_str = "ℹ️ **Empty**"
 
             total_src_msgs += t_total
             total_synced_msgs += t_synced
             total_pending_msgs += t_pending
-
-            if t_pending == 0 and t_total > 0:
-                status_str = "🌐 **Complete**"
-            elif t_pending > 0:
-                status_str = f"⏳ **Pending:** `{t_pending}` msgs"
-            else:
-                status_str = "ℹ️ **Empty**"
 
             topic_lines.append(f"• **{st_title}**: Total: `{t_total}` | Synced: `{t_synced}` | {status_str}")
 
@@ -1534,25 +1582,43 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
         bar_blocks = int(sync_percent // 10)
         progress_bar = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
 
-        breakdown_str = "\n".join(topic_lines[:30])
-        if len(topic_lines) > 30:
-            breakdown_str += f"\n*...and {len(topic_lines) - 30} more topics*"
+        breakdown_str = "\n".join(topic_lines[:35])
+        if len(topic_lines) > 35:
+            breakdown_str += f"\n*...and {len(topic_lines) - 35} more topics*"
+
+        # Build Missing Topics Report Section
+        if missing_topics:
+            missing_names = [f"• 🚨 <code>{m['title']}</code>" for m in missing_topics[:15]]
+            missing_str = "\n".join(missing_names)
+            if len(missing_topics) > 15:
+                missing_str += f"\n*...and {len(missing_topics) - 15} more missing topics*"
+
+            missing_section = (
+                f"<blockquote><b>🚨 MISSING TOPICS IN TARGET GROUP ({len(missing_topics)}):</b>\n"
+                f"{missing_str}\n\n"
+                f"<i>Click <b>Create & Sync Missing Topics</b> below to auto-create them and copy content!</i></blockquote>\n\n"
+            )
+        else:
+            missing_section = "<blockquote>✅ <b>ALL SOURCE TOPICS EXIST IN TARGET GROUP!</b> (0 Missing)</blockquote>\n\n"
 
         report = (
             f"<blockquote><b>🔍 TOPIC MIRROR — LIVE SCAN & COMPARISON REPORT</b></blockquote>\n\n"
-            f"📤 **Source:** `{src_title}`\n"
-            f"📥 **Target:** `{tgt_title}`\n\n"
-            f"<blockquote><b>📊 OVERALL CONTENT SYNC METRICS:</b>\n"
+            f"📤 <b>Source:</b> <code>{src_title}</code>\n"
+            f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+            f"<blockquote><b>📊 STAGE 1: TOPICS COMPARISON</b>\n"
             f"• 📁 <b>Source Topics:</b> <code>{len(source_topics)}</code>\n"
+            f"• 📥 <b>Target Topics Existing:</b> <code>{len(existing_topics)}</code>\n"
+            f"• 🚨 <b>Missing in Target:</b> <code>{len(missing_topics)}</code></blockquote>\n\n"
+            f"{missing_section}"
+            f"<blockquote><b>📊 STAGE 2: CONTENT MESSAGE METRICS</b>\n"
             f"• ✉️ <b>Total Source Messages:</b> <code>{total_src_msgs}</code>\n"
             f"• ✅ <b>Synced in Target:</b> <code>{total_synced_msgs}</code>\n"
             f"• ⏳ <b>Pending / Remaining:</b> <code>{total_pending_msgs}</code>\n"
             f"• 📊 <b>Overall Sync Progress:</b> {progress_bar} <code>{sync_percent}%</code></blockquote>\n\n"
             f"<blockquote><b>📂 TOPIC COMPARISON BREAKDOWN:</b>\n"
-            f"{breakdown_str}</blockquote>\n\n"
-            f"<i>Click <b>Sync & Update Pending Content</b> below to immediately copy all remaining content!</i>"
+            f"{breakdown_str}</blockquote>"
         )
-        return report
+        return report, missing_topics, total_pending_msgs
 
     finally:
         if is_temp_userbot and userbot:
@@ -1573,25 +1639,47 @@ async def scan_session_callback(_, query: CallbackQuery):
     src_chat_id = int(match.group(1))
     tgt_chat_id = int(match.group(2))
 
-    await query.answer("🔍 Scanning groups and comparing content... Please wait...")
-    
+    await query.answer("🔍 Scanning topics & comparing content... Please wait...")
+
     try:
-        await query.message.edit_text("🔍 **Scanning Source & Target groups... Comparing message counts per topic...**")
+        await query.message.edit_text("🔍 **Stage 1: Scanning topics in Source & Target groups...\nStage 2: Comparing content message counts per topic...**")
     except Exception:
         pass
-    
-    report = await scan_and_compare_session(user_id, src_chat_id, tgt_chat_id)
-    html_text = format_caption_to_html(report)
 
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
-        [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
-        [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
-        [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
+    report_text, missing_topics, pending_msgs = await scan_and_compare_session(user_id, src_chat_id, tgt_chat_id)
+    html_text = format_caption_to_html(report_text)
+
+    # Dynamic button construction based on scan results
+    button_rows = []
+
+    if missing_topics:
+        button_rows.append([
+            InlineKeyboardButton(f"➕ Create & Sync Missing Topics ({len(missing_topics)})", callback_data=f"tm_syncnew_{src_chat_id}_{tgt_chat_id}")
+        ])
+        button_rows.append([
+            InlineKeyboardButton(f"⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲 (All {len(missing_topics)} + Pending)", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")
+        ])
+    elif pending_msgs > 0:
+        button_rows.append([
+            InlineKeyboardButton(f"⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲 ({pending_msgs} Pending Msgs)", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")
+        ])
+    else:
+        button_rows.append([
+            InlineKeyboardButton("🌐 All Topics & Content 100% Synced", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")
+        ])
+
+    button_rows.append([
+        InlineKeyboardButton("🔎 Refresh Live Scan", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}"),
+        InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")
+    ])
+    button_rows.append([
+        InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")
     ])
 
+    buttons = InlineKeyboardMarkup(button_rows)
+
     await query.message.edit_text(
-        html_text if html_text else report,
+        html_text if html_text else report_text,
         parse_mode=ParseMode.HTML,
         reply_markup=buttons
     )
