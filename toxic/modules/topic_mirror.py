@@ -405,13 +405,15 @@ def parse_topic_link(link: str):
 DIAMOND_EMOJI_ID = 5312389333909511107
 
 def clean_topic_title(title: str) -> str:
-    """Cleans topic title by removing leading/trailing decorative emoji prefixes or clutter, preserving the pure title text."""
+    """
+    Returns the original topic title with only leading whitespace stripped.
+    Topic names must be preserved EXACTLY as they are in Telegram so that
+    matching between source and target topics is never broken by title mutations.
+    Only strips leading/trailing plain whitespace — no emoji, no punctuation removal.
+    """
     if not title:
         return "Topic"
-    clean = str(title).strip()
-    clean = re.sub(r'^[💎🔹🔷⚡📁📂📌📍🔸💠✦★☆•\s\-\.\:\?\!]+', '', clean).strip()
-    clean = re.sub(r'[\s\-\.\:\?\!•]+$', '', clean).strip()
-    return clean or str(title).strip() or "Topic"
+    return str(title).strip() or "Topic"
 
 format_topic_title_with_diamond = clean_topic_title
 
@@ -594,18 +596,28 @@ def alphanumeric_topic_title(title: str) -> str:
 
 
 def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> int:
-    """Matches a source topic title against existing target topics using exact & clean/normalized title matching."""
+    """
+    Matches a source topic title against existing target topics.
+    Priority order:
+      1. Raw exact match (case-insensitive) — preserves special chars like •, ★, emojis
+      2. Normalized variants (Unicode NFKD, spaces, punctuation collapsed)
+      3. Alphanumeric-only variant (last resort)
+    Returns the tgt_topic_id (int) or None.
+    """
     if not st_title or not target_topics_by_title:
         return None
 
-    clean_t = clean_topic_title(st_title)
+    raw = str(st_title).strip()
+
+    # Priority 1: exact raw title (case-insensitive) — handles "MITESH SIR - ECO•" etc.
+    raw_lower = raw.lower()
+    if raw_lower in target_topics_by_title:
+        return target_topics_by_title[raw_lower]
+
+    # Priority 2: normalized variants
     variants = [
-        st_title.strip().lower(),
-        clean_t.strip().lower(),
-        normalize_topic_title(st_title),
-        normalize_topic_title(clean_t),
-        alphanumeric_topic_title(st_title),
-        alphanumeric_topic_title(clean_t)
+        normalize_topic_title(raw),
+        alphanumeric_topic_title(raw),
     ]
 
     for var in variants:
@@ -676,19 +688,16 @@ def _register_topic(topics_by_title: dict, topics_by_id: dict, title: str, tid: 
     """Registers a topic into both lookup dicts under ALL title variants to prevent any future duplicate creation."""
     if not title or not tid:
         return
-    clean_t = clean_topic_title(title)
+    raw = str(title).strip()
     for var in [
-        title.strip().lower(),
-        clean_t.strip().lower(),
-        normalize_topic_title(title),
-        normalize_topic_title(clean_t),
-        alphanumeric_topic_title(title),
-        alphanumeric_topic_title(clean_t),
+        raw.lower(),                       # exact raw (case-insensitive) — highest priority
+        normalize_topic_title(raw),        # normalized (Unicode + whitespace)
+        alphanumeric_topic_title(raw),     # alphanumeric only
     ]:
         if var:
             topics_by_title[var] = tid
     if topics_by_id is not None:
-        topics_by_id[tid] = title
+        topics_by_id[tid] = raw
 
 
 async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query: str) -> int:
@@ -1070,12 +1079,23 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 pass
 
     # ─────────────────────────────────────────────────────────────
+    # Compute effective target topic ID:
+    #   - None or 1  → General topic (no message_thread_id param)
+    #   - any int>1  → must be forwarded into that specific thread
+    #   - 0 or negative → unmapped/invalid, ABORT (never fallback to General)
+    # ─────────────────────────────────────────────────────────────
+    if tgt_topic_id is not None and int(tgt_topic_id) <= 0:
+        print(f"[Transfer] ⚠️ tgt_topic_id={tgt_topic_id} is invalid (0 or negative). Aborting msg {msg.id} to prevent General leakage.")
+        return False, "invalid_topic_id", None
+    effective_tgt_topic_id = None if (tgt_topic_id is None or int(tgt_topic_id) == 1) else int(tgt_topic_id)
+
+    # ─────────────────────────────────────────────────────────────
     # METHOD 1: Direct forward_messages (zero-bandwidth, instant)
     # Works when: bot/userbot is admin/member of source and target
     # ─────────────────────────────────────────────────────────────
     fwd_kwargs = {"chat_id": tgt_chat_id, "from_chat_id": src_chat_id, "message_ids": msg.id}
-    if tgt_topic_id:
-        fwd_kwargs["message_thread_id"] = tgt_topic_id
+    if effective_tgt_topic_id:
+        fwd_kwargs["message_thread_id"] = effective_tgt_topic_id
 
     for fwd_client in [app, userbot]:
         try:
@@ -1101,7 +1121,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 chat_id=tgt_chat_id,
                 from_chat_id=src_chat_id,
                 message_id=msg.id,
-                reply_to_message_id=tgt_topic_id
+                reply_to_message_id=effective_tgt_topic_id
             )
             sent_id = getattr(copied_m, 'id', None)
             if sent_id:
@@ -1126,7 +1146,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             sent_txt = await app.send_message(
                 chat_id=tgt_chat_id,
                 text=html_text if html_text else (final_text or msg.text),
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True
             )
@@ -1239,7 +1259,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 width=width if width > 0 else None,
                 height=height if height > 0 else None,
                 thumb=thumb_path,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML,
                 supports_streaming=True,
                 has_spoiler=has_spoiler
@@ -1281,7 +1301,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 document=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML
             )
         elif msg.photo:
@@ -1290,7 +1310,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 chat_id=tgt_chat_id,
                 photo=temp_file,
                 caption=caption_html,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML,
                 has_spoiler=has_spoiler
             )
@@ -1320,7 +1340,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 performer=clean_performer,
                 title=clean_title,
                 thumb=thumb_path,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML
             )
         elif msg.voice:
@@ -1328,7 +1348,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 chat_id=tgt_chat_id,
                 voice=temp_file,
                 caption=caption_html,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML
             )
         elif msg.animation:
@@ -1336,14 +1356,14 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 chat_id=tgt_chat_id,
                 animation=temp_file,
                 caption=caption_html,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML
             )
         elif msg.sticker:
             sent_media = await app.send_sticker(
                 chat_id=tgt_chat_id,
                 sticker=temp_file,
-                reply_to_message_id=tgt_topic_id
+                reply_to_message_id=effective_tgt_topic_id
             )
         else:
             if thumb_path and os.path.isfile(thumb_path):
@@ -1353,7 +1373,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 document=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=tgt_topic_id,
+                reply_to_message_id=effective_tgt_topic_id,
                 parse_mode=ParseMode.HTML
             )
 
@@ -2547,12 +2567,13 @@ async def run_single_link_mirror(
             f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
         )
         try:
-            if tgt_topic_id:
+            target_thread_id = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
+            if target_thread_id:
                 await app.send_message(
                     chat_id=tgt_chat_id,
                     text=completion_msg,
                     parse_mode=ParseMode.HTML,
-                    reply_to_message_id=tgt_topic_id
+                    reply_to_message_id=target_thread_id
                 )
             else:
                 await app.send_message(
@@ -3114,32 +3135,38 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
 
         # Pre-populate already mapped topics from MongoDB and lock them in lookup dicts
+        # CRITICAL: Trust saved Mongo mappings unless they point to tgt_id=1 for a named topic.
+        # Do NOT discard valid mappings due to title normalization mismatches.
         if saved_topics:
             for st_id_str, info in saved_topics.items():
                 try:
                     s_id = int(st_id_str)
                     tgt_id = info.get("tgt_topic_id")
                     t_title = info.get("title", f"Topic {s_id}")
-                    if tgt_id:
-                        tgt_id_int = int(tgt_id)
-                        if tgt_id_int == 1:
-                            if s_id == 1 or normalize_topic_title(t_title) in ("general", "1", "main"):
-                                topic_map[s_id] = 1
-                                topic_names[s_id] = t_title
+                    if not tgt_id:
+                        continue
+                    tgt_id_int = int(tgt_id)
+                    if tgt_id_int == 1:
+                        # Only accept General mapping for actual General topic
+                        if s_id == 1 or normalize_topic_title(t_title) in ("general", "1", "main"):
+                            topic_map[s_id] = 1
+                            topic_names[s_id] = t_title
                         else:
-                            actual_tgt_title = target_topics_by_id.get(tgt_id_int)
-                            if actual_tgt_title:
-                                if match_existing_target_topic(t_title, {actual_tgt_title: tgt_id_int}):
-                                    topic_map[s_id] = tgt_id_int
-                                    topic_names[s_id] = t_title
-                                    _register_topic(target_topics_by_title, target_topics_by_id, t_title, tgt_id_int)
-                                else:
-                                    print(f"[TopicMirror] ⚠️ Saved mapping for src '{t_title}' pointed to mismatched tgt topic '{actual_tgt_title}' ({tgt_id_int}). Unbinding.")
-                            else:
-                                topic_map[s_id] = tgt_id_int
-                                topic_names[s_id] = t_title
-                except Exception:
-                    pass
+                            # Named topic erroneously mapped to General — DISCARD
+                            print(f"[TopicMirror] ⚠️ Discarding corrupt Mongo mapping: src '{t_title}' ({s_id}) → General (1). Will re-resolve.")
+                    else:
+                        # Valid non-General tgt_id — accept it
+                        # Even if target_topics_by_id doesn't have it yet (topic may be newly created), trust the DB
+                        topic_map[s_id] = tgt_id_int
+                        topic_names[s_id] = t_title
+                        # Register under both original and normalized keys to avoid re-creating
+                        _register_topic(target_topics_by_title, target_topics_by_id, t_title, tgt_id_int)
+                        actual_tgt_title = target_topics_by_id.get(tgt_id_int, t_title)
+                        if actual_tgt_title != t_title:
+                            _register_topic(target_topics_by_title, target_topics_by_id, actual_tgt_title, tgt_id_int)
+                        print(f"[TopicMirror] ✅ Restored Mongo mapping: src '{t_title}' ({s_id}) → tgt topic ({tgt_id_int})")
+                except Exception as restore_err:
+                    print(f"[TopicMirror] Mongo restore notice for '{st_id_str}': {restore_err}")
 
         # If forced_tgt_topic_id is set (Direct Topic Link Mirroring)
         if forced_tgt_topic_id is not None and detected_topic_id is not None:
@@ -3193,107 +3220,89 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             topic_names[st_id] = st_title
             norm_title = normalize_topic_title(st_title)
 
-            # 1. Already mapped in topic_map
+            # 1. Already mapped in topic_map (e.g. from Mongo restore above) — skip
             if st_id in topic_map and topic_map[st_id]:
+                print(f"[TopicMirror] ✅ Using pre-mapped tgt_topic_id={topic_map[st_id]} for src '{st_title}' ({st_id})")
                 continue
 
-            # 2. General topic (id 1) always maps to target General topic (1)
+            # 2. General topic (id 1) always maps to target General (1)
             if st_id == 1 or norm_title in ("general", "1", "main"):
                 topic_map[st_id] = 1
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, 1)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
-            # 3. Check persistent MongoDB session (validate target title matches before reusing)
+            # 3. Recheck MongoDB (in case pre-populate loop missed it)
             saved_info = saved_topics.get(str(st_id))
-            if saved_info and saved_info.get("tgt_topic_id"):
+            if saved_info:
                 try:
-                    existing_tgt_id = int(saved_info["tgt_topic_id"])
+                    existing_tgt_id = int(saved_info.get("tgt_topic_id", 0))
                     if existing_tgt_id > 1:
-                        actual_tgt_title = target_topics_by_id.get(existing_tgt_id)
-                        if not actual_tgt_title or match_existing_target_topic(st_title, {actual_tgt_title: existing_tgt_id}):
-                            topic_map[st_id] = existing_tgt_id
-                            _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
-                            print(f"[TopicMirror] ✅ Reusing verified Mongo mapped tgt_topic_id {existing_tgt_id} for '{st_title}'")
-                            continue
-                        else:
-                            print(f"[TopicMirror] ⚠️ Saved Mongo mapping for '{st_title}' was mismatched with tgt '{actual_tgt_title}'. Creating/finding correct topic.")
-                except Exception as e:
-                    print(f"[TopicMirror] Saved info parse notice for '{st_title}': {e}")
+                        topic_map[st_id] = existing_tgt_id
+                        _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
+                        print(f"[TopicMirror] ✅ Mongo secondary check: '{st_title}' ({st_id}) → tgt ({existing_tgt_id})")
+                        continue
+                except Exception:
+                    pass
 
-            # 4. Check if target group already has a topic with matching title (Multi-level match)
+            # 4. Exact match against already-scanned target topics
+            #    Use ORIGINAL st_title — no cleaning, no normalization mutations
             existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
-                print(f"[TopicMirror] ✅ Found existing matching target topic {existing_tgt_id} for '{st_title}'")
+                print(f"[TopicMirror] ✅ In-memory match: '{st_title}' → tgt ({existing_tgt_id})")
                 continue
 
-            # 5. Direct Telegram Server RPC Query (q=st_title) to guarantee no duplicate created if scan missed it
+            # 5. Direct Telegram Server RPC search (q=st_title) — guarantees no duplicate on Telegram side
             rpc_matched_id = await search_target_topic_by_rpc(userbot, app, tgt_chat_id, st_title)
             if rpc_matched_id:
                 topic_map[st_id] = rpc_matched_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, rpc_matched_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, rpc_matched_id, st_title)
-                print(f"[TopicMirror] ✅ Direct Telegram RPC server query found '{st_title}' → tgt topic {rpc_matched_id}")
+                print(f"[TopicMirror] ✅ RPC search found '{st_title}' → tgt ({rpc_matched_id})")
                 continue
 
-            # 6. Fresh re-scan right before creating a new topic as extra safeguard
+            # 6. Fresh full re-scan of target group before creating (final dedup guard)
             fresh_target_topics, fresh_target_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
             target_topics_by_title.update(fresh_target_topics)
             target_topics_by_id.update(fresh_target_by_id)
-            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics) or match_existing_target_topic(clean_topic_title(st_title), fresh_target_topics)
+            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
-                print(f"[TopicMirror] ✅ Fresh scan found '{st_title}' → tgt topic {existing_tgt_id}")
+                print(f"[TopicMirror] ✅ Fresh scan match: '{st_title}' → tgt ({existing_tgt_id})")
                 continue
 
-            # ─────────────────────────────────────────────────────────────
-            # STEP 7: Create topic ONLY if confirmed absent everywhere
-            # ─────────────────────────────────────────────────────────────
-            clean_st_title = clean_topic_title(st_title)
+            # ────────────────────────────────────────────────────────────
+            # STEP 7: Create a new topic in target — EXACT original title
+            # Only reached if topic confirmed absent in target everywhere
+            # ────────────────────────────────────────────────────────────
             src_icon_color = st.get("icon_color") or 0x6FB9F0
             src_icon_emoji_id = st.get("icon_emoji_id") or None
-
-            # Final check against clean title
-            existing_tgt_id = (
-                match_existing_target_topic(clean_st_title, fresh_target_topics)
-                or match_existing_target_topic(st_title, fresh_target_topics)
-                or await search_target_topic_by_rpc(userbot, app, tgt_chat_id, clean_st_title)
-            )
-            if existing_tgt_id:
-                topic_map[st_id] = existing_tgt_id
-                _register_topic(target_topics_by_title, target_topics_by_id, clean_st_title, existing_tgt_id)
-                _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
-                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
-                print(f"[TopicMirror] ✅ Pre-create scan/RPC found '{clean_st_title}' → tgt topic {existing_tgt_id}")
-                continue
-
-            # ── Single create attempt (high-level Pyrogram first, raw RPC on failure) ──
             new_tgt_topic_id = None
 
-            # Attempt 1: high-level API
+            # Attempt 1: Pyrogram high-level API with EXACT original title
             try:
-                create_kwargs = {"chat_id": tgt_chat_id, "title": clean_st_title, "icon_color": src_icon_color}
+                create_kwargs = {"chat_id": tgt_chat_id, "title": st_title, "icon_color": src_icon_color}
                 if src_icon_emoji_id:
                     create_kwargs["icon_emoji_id"] = src_icon_emoji_id
                 created = await app.create_forum_topic(**create_kwargs)
                 new_tgt_topic_id = extract_topic_id_from_result(created)
                 if new_tgt_topic_id:
-                    print(f"[TopicMirror] ✅ Created brand new topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via high-level API")
+                    print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Pyrogram API")
             except Exception as hl_err:
-                print(f"[TopicMirror] create_forum_topic notice for '{clean_st_title}': {hl_err}")
+                print(f"[TopicMirror] create_forum_topic notice for '{st_title}': {hl_err}")
 
-            # Attempt 2: Raw RPC ONLY if Attempt 1 failed to produce a topic ID
+            # Attempt 2: Raw RPC CreateForumTopic if Pyrogram failed
             if not new_tgt_topic_id:
                 try:
                     peer = await app.resolve_peer(tgt_chat_id)
                     rpc_kwargs = dict(
                         peer=peer,
-                        title=clean_st_title,
+                        title=st_title,
                         icon_color=src_icon_color,
                         random_id=random.randint(1000000, 9999999)
                     )
@@ -3302,45 +3311,29 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
                     new_tgt_topic_id = extract_topic_id_from_result(res)
                     if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created brand new topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
+                        print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{clean_st_title}': {rpc_create_err}")
+                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{st_title}': {rpc_create_err}")
 
-            verified_id = new_tgt_topic_id
-            if not verified_id:
+            # After creation, verify by re-scanning if ID not returned
+            if new_tgt_topic_id:
+                verified_id = new_tgt_topic_id
+            else:
                 await asyncio.sleep(1.5)
                 verify_topics, verify_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
                 target_topics_by_title.update(verify_topics)
                 target_topics_by_id.update(verify_by_id)
-                verified_id = (
-                    match_existing_target_topic(clean_st_title, verify_topics)
-                    or match_existing_target_topic(st_title, verify_topics)
-                )
-
-                # Post-RPC-create scan
-                if new_tgt_topic_id:
-                    await asyncio.sleep(1.5)
-                    verify_topics2, verify_by_id2 = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-                    target_topics_by_title.update(verify_topics2)
-                    target_topics_by_id.update(verify_by_id2)
-                    verified_id = (
-                        match_existing_target_topic(clean_st_title, verify_topics2)
-                        or match_existing_target_topic(st_title, verify_topics2)
-                        or new_tgt_topic_id
-                    )
+                verified_id = match_existing_target_topic(st_title, verify_topics)
 
             if verified_id:
                 topic_map[st_id] = verified_id
-                _register_topic(target_topics_by_title, target_topics_by_id, clean_st_title, verified_id)
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, verified_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, verified_id, st_title)
-                print(f"[TopicMirror] 📌 Mapped src topic '{clean_st_title}' ({st_id}) → tgt topic ({verified_id})")
+                print(f"[TopicMirror] 📌 Mapped '{st_title}' ({st_id}) → tgt ({verified_id})")
             else:
-                if st_id == 1 or norm_title in ("general", "1"):
-                    topic_map[st_id] = 1
-                    await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, clean_st_title)
-                else:
-                    print(f"[TopicMirror] ⚠️ Topic '{clean_st_title}' FAILED to create — ensure bot has 'Manage Topics' admin rights in target!")
+                # Cannot create — skip this topic entirely (never fall back to General)
+                print(f"[TopicMirror] ❌ Could NOT create or find topic '{st_title}' in target. "
+                      f"Ensure bot has 'Manage Topics' admin right. Skipping this topic.")
 
 
 
