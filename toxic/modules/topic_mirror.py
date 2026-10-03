@@ -405,11 +405,12 @@ def parse_topic_link(link: str):
 DIAMOND_EMOJI_ID = 5312389333909511107
 
 def clean_topic_title(title: str) -> str:
-    """Cleans topic title by removing leading decorative emoji prefixes or clutter, preserving the pure title text."""
+    """Cleans topic title by removing leading/trailing decorative emoji prefixes or clutter, preserving the pure title text."""
     if not title:
         return "Topic"
     clean = str(title).strip()
-    clean = re.sub(r'^[💎🔹🔷⚡📁📂📌📍🔸💠✦★☆\s\-\.\:\?\!]+', '', clean).strip()
+    clean = re.sub(r'^[💎🔹🔷⚡📁📂📌📍🔸💠✦★☆•\s\-\.\:\?\!]+', '', clean).strip()
+    clean = re.sub(r'[\s\-\.\:\?\!•]+$', '', clean).strip()
     return clean or str(title).strip() or "Topic"
 
 format_topic_title_with_diamond = clean_topic_title
@@ -593,7 +594,7 @@ def alphanumeric_topic_title(title: str) -> str:
 
 
 def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> int:
-    """Matches a source topic title against existing target topics using multi-level matching."""
+    """Matches a source topic title against existing target topics using exact & clean/normalized title matching."""
     if not st_title or not target_topics_by_title:
         return None
 
@@ -610,14 +611,6 @@ def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> 
     for var in variants:
         if var and var in target_topics_by_title:
             return target_topics_by_title[var]
-
-    # Partial word-set match
-    st_words = set(re.findall(r'\w+', clean_t.lower()))
-    if len(st_words) >= 1:
-        for key, tid in target_topics_by_title.items():
-            key_words = set(re.findall(r'\w+', str(key).lower()))
-            if st_words == key_words or (len(key_words) >= 2 and st_words.issubset(key_words)) or (len(st_words) >= 2 and key_words.issubset(st_words)):
-                return tid
 
     return None
 
@@ -887,23 +880,24 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
     Fetches all pending messages for a specific forum topic up to max_limit (default 4000).
     Returns messages sorted oldest→newest (ascending by id).
     Only messages strictly > min_msg_id are returned (checkpoint resume).
-    Guarantees messages belong ONLY to this topic — no cross-topic leakage.
+    Guarantees messages belong ONLY to this topic — zero cross-topic leakage.
     """
     collected_messages = []
     seen_ids = set()
 
     # ─── Strategy 1: get_discussion_replies (Pyrogram high-level, most accurate) ───
-    # get_discussion_replies returns thread replies newest→oldest.
-    # We collect ALL of them and filter by min_msg_id after, so we never miss messages.
     if topic_id and topic_id != 1:
         try:
             async for m in userbot.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
                 if not m or m.id in seen_ids:
                     continue
+                # Verify thread consistency (never pull messages belonging to another topic)
+                m_thread = getattr(m, "message_thread_id", None)
+                if m_thread and m_thread != topic_id and m_thread != 1:
+                    continue
                 seen_ids.add(m.id)
                 collected_messages.append(m)
             if collected_messages:
-                # Filter to only pending messages after checkpoint
                 collected_messages = [m for m in collected_messages if m.id > min_msg_id]
                 collected_messages.sort(key=lambda x: x.id)
                 return collected_messages
@@ -959,10 +953,8 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
             collected_messages.clear()
             seen_ids.clear()
 
-    # ─── Strategy 3: Chat history scan — for General topic or when both above fail ───
-    # WARNING: This is a full scan. For non-General topics it matches via reply chain.
+    # ─── Strategy 3: Chat history scan — for General topic or fallback ───
     try:
-        # First pass: collect candidate message IDs that belong to this topic
         topic_msg_ids: set = set()
         all_scanned = []
 
@@ -979,24 +971,14 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
                 reply_top = getattr(rt_msg, "reply_to_top_id", None) or getattr(rt_msg, "message_thread_id", None)
 
             if topic_id == 1:
-                # General: messages with no thread assignment
-                if m_thread in (None, 1) and reply_to in (None, 1) and reply_top in (None, 1):
+                # General topic ONLY: messages with no thread assignment and no thread reply
+                if (m_thread in (None, 1)) and (reply_top in (None, 1)) and (reply_to in (None, 1)):
                     topic_msg_ids.add(m.id)
             else:
-                # Topic thread: match via thread ID or reply chain pointing to topic root
-                if (m_thread == topic_id or
-                        reply_to == topic_id or
-                        reply_top == topic_id or
-                        m.id == topic_id):  # the root message itself
+                # Specific topic thread ONLY:
+                if m_thread == topic_id or (m_thread is None and (reply_top == topic_id or reply_to == topic_id or m.id == topic_id)):
                     topic_msg_ids.add(m.id)
 
-        # Second pass: expand via reply chain (replies to known topic messages also belong)
-        for m in all_scanned:
-            reply_to = getattr(m, "reply_to_message_id", None)
-            if reply_to and reply_to in topic_msg_ids and m.id not in topic_msg_ids:
-                topic_msg_ids.add(m.id)
-
-        # Third pass: collect actual message objects for matched IDs, filtering by checkpoint
         for m in all_scanned:
             if m.id in topic_msg_ids and m.id > min_msg_id and m.id not in seen_ids:
                 seen_ids.add(m.id)
@@ -3140,9 +3122,22 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     t_title = info.get("title", f"Topic {s_id}")
                     if tgt_id:
                         tgt_id_int = int(tgt_id)
-                        topic_map[s_id] = tgt_id_int
-                        topic_names[s_id] = t_title
-                        _register_topic(target_topics_by_title, target_topics_by_id, t_title, tgt_id_int)
+                        if tgt_id_int == 1:
+                            if s_id == 1 or normalize_topic_title(t_title) in ("general", "1", "main"):
+                                topic_map[s_id] = 1
+                                topic_names[s_id] = t_title
+                        else:
+                            actual_tgt_title = target_topics_by_id.get(tgt_id_int)
+                            if actual_tgt_title:
+                                if match_existing_target_topic(t_title, {actual_tgt_title: tgt_id_int}):
+                                    topic_map[s_id] = tgt_id_int
+                                    topic_names[s_id] = t_title
+                                    _register_topic(target_topics_by_title, target_topics_by_id, t_title, tgt_id_int)
+                                else:
+                                    print(f"[TopicMirror] ⚠️ Saved mapping for src '{t_title}' pointed to mismatched tgt topic '{actual_tgt_title}' ({tgt_id_int}). Unbinding.")
+                            else:
+                                topic_map[s_id] = tgt_id_int
+                                topic_names[s_id] = t_title
                 except Exception:
                     pass
 
@@ -3209,16 +3204,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
-            # 3. Check persistent MongoDB session FIRST (ALWAYS reuse saved mapping to prevent duplicates)
+            # 3. Check persistent MongoDB session (validate target title matches before reusing)
             saved_info = saved_topics.get(str(st_id))
             if saved_info and saved_info.get("tgt_topic_id"):
                 try:
                     existing_tgt_id = int(saved_info["tgt_topic_id"])
                     if existing_tgt_id > 1:
-                        topic_map[st_id] = existing_tgt_id
-                        _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
-                        print(f"[TopicMirror] ✅ Reusing saved Mongo mapped tgt_topic_id {existing_tgt_id} for '{st_title}'")
-                        continue
+                        actual_tgt_title = target_topics_by_id.get(existing_tgt_id)
+                        if not actual_tgt_title or match_existing_target_topic(st_title, {actual_tgt_title: existing_tgt_id}):
+                            topic_map[st_id] = existing_tgt_id
+                            _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
+                            print(f"[TopicMirror] ✅ Reusing verified Mongo mapped tgt_topic_id {existing_tgt_id} for '{st_title}'")
+                            continue
+                        else:
+                            print(f"[TopicMirror] ⚠️ Saved Mongo mapping for '{st_title}' was mismatched with tgt '{actual_tgt_title}'. Creating/finding correct topic.")
                 except Exception as e:
                     print(f"[TopicMirror] Saved info parse notice for '{st_title}': {e}")
 

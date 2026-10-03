@@ -2639,7 +2639,11 @@ async def split_and_upload_file(app, sender, target_chat_id, file_path, caption,
                     os.remove(part_file)
                 break
 
-            edit = await app.send_message(target_chat_id, f"⬆️ Uploading Part {part_number}...")
+            edit = await app.send_message(
+                target_chat_id,
+                f"⬆️ Uploading Part {part_number}...",
+                reply_to_message_id=topic_id if (topic_id and topic_id != 1) else None
+            )
             part_caption = f"{caption}\n\n**Part : {part_number}**" if caption else f"**Part : {part_number}**"
             part_caption_html = format_caption_to_html(part_caption)
 
