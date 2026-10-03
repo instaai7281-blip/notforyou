@@ -303,53 +303,105 @@ mirror_db = mongo.user_data.topic_mirror_sessions
 
 async def get_mirror_session(src_chat_id, tgt_chat_id):
     """Retrieves saved topic mappings and progress for a source-target pair."""
-    doc = await mirror_db.find_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
-    return doc if doc else {}
+    try:
+        s_id = int(src_chat_id)
+        t_id = int(tgt_chat_id)
+        doc = await mirror_db.find_one({
+            "$or": [
+                {"_id": f"{s_id}_{t_id}"},
+                {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+                {"src_chat_id": s_id, "tgt_chat_id": t_id}
+            ]
+        })
+        return doc if doc else {}
+    except Exception as e:
+        print(f"[MongoDB] get_mirror_session error: {e}")
+        return {}
 
 async def save_mirror_topic_mapping(src_chat_id, tgt_chat_id, src_topic_id, tgt_topic_id, title):
     """Saves or updates a topic mapping between source and target."""
-    key = f"topics.{str(src_topic_id)}"
-    await mirror_db.update_one(
-        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
-        {
-            "$set": {
-                f"{key}.tgt_topic_id": tgt_topic_id,
-                f"{key}.title": title,
-                "updated_at": datetime.datetime.now()
-            }
-        },
-        upsert=True
-    )
+    try:
+        s_id = int(src_chat_id)
+        t_id = int(tgt_chat_id)
+        st_id = int(src_topic_id)
+        tt_id = int(tgt_topic_id)
+        key = f"topics.{str(st_id)}"
+        await mirror_db.update_one(
+            {"_id": f"{s_id}_{t_id}"},
+            {
+                "$set": {
+                    "src_chat_id": s_id,
+                    "tgt_chat_id": t_id,
+                    f"{key}.src_topic_id": st_id,
+                    f"{key}.tgt_topic_id": tt_id,
+                    f"{key}.title": str(title),
+                    "updated_at": datetime.datetime.now()
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[MongoDB] save_mirror_topic_mapping error: {e}")
 
 async def update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, last_msg_id):
     """Updates the highest message ID copied for a topic."""
-    key = f"topics.{str(src_topic_id)}.last_msg_id"
-    await mirror_db.update_one(
-        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
-        {"$set": {key: last_msg_id, "updated_at": datetime.datetime.now()}},
-        upsert=True
-    )
+    try:
+        s_id = int(src_chat_id)
+        t_id = int(tgt_chat_id)
+        st_id = int(src_topic_id)
+        lm_id = int(last_msg_id)
+        key = f"topics.{str(st_id)}.last_msg_id"
+        await mirror_db.update_one(
+            {"_id": f"{s_id}_{t_id}"},
+            {
+                "$set": {
+                    "src_chat_id": s_id,
+                    "tgt_chat_id": t_id,
+                    key: lm_id,
+                    "updated_at": datetime.datetime.now()
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[MongoDB] update_mirror_topic_checkpoint error: {e}")
 
 async def reset_mirror_session(src_chat_id, tgt_chat_id):
     """Resets progress checkpoints for a source-target mirror session."""
-    await mirror_db.delete_one({"_id": f"{src_chat_id}_{tgt_chat_id}"})
+    try:
+        s_id = int(src_chat_id)
+        t_id = int(tgt_chat_id)
+        await mirror_db.delete_one({
+            "$or": [
+                {"_id": f"{s_id}_{t_id}"},
+                {"_id": f"{src_chat_id}_{tgt_chat_id}"}
+            ]
+        })
+    except Exception as e:
+        print(f"[MongoDB] reset_mirror_session error: {e}")
 
 async def save_mirror_session_info(user_id, src_chat_id, tgt_chat_id, src_title, tgt_title):
     """Saves session metadata for quick resume buttons."""
-    await mirror_db.update_one(
-        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
-        {
-            "$set": {
-                "user_id": user_id,
-                "src_chat_id": src_chat_id,
-                "tgt_chat_id": tgt_chat_id,
-                "src_title": src_title,
-                "tgt_title": tgt_title,
-                "updated_at": datetime.datetime.now()
-            }
-        },
-        upsert=True
-    )
+    try:
+        s_id = int(src_chat_id)
+        t_id = int(tgt_chat_id)
+        u_id = int(user_id) if user_id else 0
+        await mirror_db.update_one(
+            {"_id": f"{s_id}_{t_id}"},
+            {
+                "$set": {
+                    "user_id": u_id,
+                    "src_chat_id": s_id,
+                    "tgt_chat_id": t_id,
+                    "src_title": str(src_title),
+                    "tgt_title": str(tgt_title),
+                    "updated_at": datetime.datetime.now()
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[MongoDB] save_mirror_session_info error: {e}")
 
 async def get_user_mirror_sessions(user_id, limit=8):
     """Retrieves all saved mirror sessions for a user, sorted by last updated."""

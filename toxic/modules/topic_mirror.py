@@ -405,12 +405,12 @@ def parse_topic_link(link: str):
 DIAMOND_EMOJI_ID = 5312389333909511107
 
 def clean_topic_title(title: str) -> str:
-    """Cleans topic title by removing leading diamond emoji prefixes or clutter, preserving the pure title text."""
+    """Cleans topic title by removing leading decorative emoji prefixes or clutter, preserving the pure title text."""
     if not title:
         return "Topic"
     clean = str(title).strip()
-    clean = re.sub(r'^[💎\s]+', '', clean).strip()
-    return clean or "Topic"
+    clean = re.sub(r'^[💎🔹🔷⚡📁📂📌📍🔸💠✦★☆\s\-\.\:\?\!]+', '', clean).strip()
+    return clean or str(title).strip() or "Topic"
 
 format_topic_title_with_diamond = clean_topic_title
 
@@ -613,10 +613,10 @@ def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> 
 
     # Partial word-set match
     st_words = set(re.findall(r'\w+', clean_t.lower()))
-    if len(st_words) >= 2:
+    if len(st_words) >= 1:
         for key, tid in target_topics_by_title.items():
             key_words = set(re.findall(r'\w+', str(key).lower()))
-            if st_words == key_words or (len(key_words) >= 2 and st_words.issubset(key_words)):
+            if st_words == key_words or (len(key_words) >= 2 and st_words.issubset(key_words)) or (len(st_words) >= 2 and key_words.issubset(st_words)):
                 return tid
 
     return None
@@ -631,7 +631,7 @@ async def get_highest_topic_checkpoint(src_chat_id: int, src_topic_id: int, tgt_
     highest = current_saved_checkpoint
     try:
         from toxic.core.mongo.db import mirror_db
-        query = {"src_chat_id": src_chat_id}
+        query = {"src_chat_id": int(src_chat_id)}
         if tgt_chat_id is not None:
             query["tgt_chat_id"] = int(tgt_chat_id)
         async for doc in mirror_db.find(query):
@@ -694,7 +694,8 @@ def _register_topic(topics_by_title: dict, topics_by_id: dict, title: str, tid: 
     ]:
         if var:
             topics_by_title[var] = tid
-    topics_by_id[tid] = title
+    if topics_by_id is not None:
+        topics_by_id[tid] = title
 
 
 async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query: str) -> int:
@@ -706,30 +707,32 @@ async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query
         return None
     clean_q = clean_topic_title(title_query).strip()
     clients_to_try = []
-    if userbot:
-        clients_to_try.append(userbot)
-    if app and app not in clients_to_try:
+    if app:
         clients_to_try.append(app)
+    if userbot and userbot not in clients_to_try:
+        clients_to_try.append(userbot)
 
+    query_terms = [t for t in [clean_q, title_query.strip(), clean_q[:20].strip(), title_query[:20].strip()] if t]
     for client in clients_to_try:
         try:
             peer = await client.resolve_peer(tgt_chat_id)
-            for q_term in (clean_q, title_query.strip()):
+            for q_term in query_terms:
                 res = await client.invoke(raw.functions.messages.GetForumTopics(
                     peer=peer,
                     q=q_term,
                     offset_date=0,
                     offset_id=0,
                     offset_topic=0,
-                    limit=20
+                    limit=50
                 ))
                 topics = getattr(res, "topics", [])
                 for t in topics:
                     tid = getattr(t, "id", None)
                     t_title = getattr(t, "title", "") or ""
                     if tid and t_title:
-                        c_t = clean_topic_title(t_title).strip()
-                        if c_t.lower() == clean_q.lower() or normalize_topic_title(c_t) == normalize_topic_title(clean_q) or alphanumeric_topic_title(c_t) == alphanumeric_topic_title(clean_q):
+                        single_dict = {}
+                        _register_topic(single_dict, {}, t_title, tid)
+                        if match_existing_target_topic(title_query, single_dict) or match_existing_target_topic(clean_q, single_dict):
                             return tid
         except Exception:
             pass
@@ -745,10 +748,10 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     topics_by_id = {}
 
     clients_to_try = []
-    if userbot:
-        clients_to_try.append(userbot)
-    if app and app not in clients_to_try:
+    if app:
         clients_to_try.append(app)
+    if userbot and userbot not in clients_to_try:
+        clients_to_try.append(userbot)
 
     for client in clients_to_try:
         try:
@@ -786,7 +789,7 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
                     offset_id = top_msg if top_msg else tid
                     offset_topic = tid
 
-                if new_count == 0 or len(topics) < 100:
+                if new_count == 0:
                     break
         except Exception as scan_err:
             print(f"[TopicMirror] get_all_target_forum_topics scan notice: {scan_err}")
@@ -795,6 +798,87 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
             break
 
     return topics_by_norm_title, topics_by_id
+
+
+async def get_all_source_forum_topics(userbot, src_chat_id: int):
+    """
+    Scans ALL forum topics from the source group using raw RPC GetForumTopics with pagination.
+    Falls back to deep history scanning if needed.
+    Returns: list of dicts [{"id": tid, "title": title, "icon_color": ..., "icon_emoji_id": ...}]
+    """
+    source_topics = []
+    seen_ids = set()
+
+    # 1. Primary Strategy: Raw RPC GetForumTopics with pagination
+    try:
+        peer = await userbot.resolve_peer(src_chat_id)
+        offset_date = 0
+        offset_id = 0
+        offset_topic = 0
+        while True:
+            res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                peer=peer,
+                offset_date=offset_date,
+                offset_id=offset_id,
+                offset_topic=offset_topic,
+                limit=100
+            ))
+            topics_list = getattr(res, "topics", [])
+            if not topics_list:
+                break
+            new_found = 0
+            for t in topics_list:
+                tid = getattr(t, "id", None)
+                if not tid or tid in seen_ids:
+                    continue
+                seen_ids.add(tid)
+                new_found += 1
+                source_topics.append({
+                    "id": tid,
+                    "title": getattr(t, "title", f"Topic {tid}") or f"Topic {tid}",
+                    "icon_color": getattr(t, "icon_color", None),
+                    "icon_emoji_id": getattr(t, "icon_emoji_id", None)
+                })
+                offset_date = getattr(t, "date", offset_date)
+                top_msg = getattr(t, "top_message", 0)
+                offset_id = top_msg if top_msg else tid
+                offset_topic = tid
+            if new_found == 0:
+                break
+        if source_topics:
+            print(f"[TopicMirror] ✅ Discovered {len(source_topics)} source topics via raw RPC GetForumTopics")
+    except Exception as rpc_err:
+        print(f"[TopicMirror] Raw RPC GetForumTopics source scan notice: {rpc_err}")
+
+    # 2. Fallback: Deep chat history topic discovery if RPC failed or returned nothing
+    if not source_topics:
+        discovered_tids = set()
+        try:
+            async for m in userbot.get_chat_history(src_chat_id, limit=600):
+                if not m:
+                    continue
+                m_thread = getattr(m, "message_thread_id", None)
+                reply_to = getattr(m, "reply_to_message_id", None)
+                reply_top_id = getattr(getattr(m, "reply_to_message", None), "reply_to_top_id", None)
+                for tid in (m_thread, reply_to, reply_top_id):
+                    if tid and isinstance(tid, int) and tid > 1 and tid not in seen_ids:
+                        discovered_tids.add(tid)
+
+            for tid in sorted(discovered_tids):
+                t_title = f"Topic {tid}"
+                try:
+                    async for rep in userbot.get_discussion_replies(src_chat_id, tid, limit=3):
+                        if getattr(rep, "forum_topic_created", None) and getattr(rep.forum_topic_created, "title", None):
+                            t_title = rep.forum_topic_created.title
+                            break
+                except Exception:
+                    pass
+                seen_ids.add(tid)
+                source_topics.append({"id": tid, "title": t_title, "icon_color": None, "icon_emoji_id": None})
+        except Exception as hist_err:
+            print(f"[TopicMirror] Deep History Topic Discovery notice: {hist_err}")
+
+    return source_topics
 
 
 
@@ -1395,26 +1479,9 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
         saved_topics = saved_session.get("topics", {})
 
         # Fetch all source topics
-        source_topics = []
-        try:
-            peer = await userbot.resolve_peer(src_chat_id)
-            res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
-            ))
-            for t in getattr(res, "topics", []):
-                if getattr(t, "id", None):
-                    source_topics.append({
-                        "id": t.id,
-                        "title": getattr(t, "title", f"Topic {t.id}"),
-                        "icon_color": getattr(t, "icon_color", None),
-                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
-                    })
-        except Exception:
-            source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
-
-
+        source_topics = await get_all_source_forum_topics(userbot, src_chat_id)
         if not source_topics:
-            source_topics = [{"id": 1, "title": "General"}]
+            source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
 
         total_src_msgs = 0
         total_synced_msgs = 0
@@ -3050,6 +3117,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         )
 
         # -------------------------------------------------------------
+        # -------------------------------------------------------------
         # PHASE 1: DISCOVER SOURCE TOPICS & MAP WITHOUT DUPLICATES
         # -------------------------------------------------------------
         # Save session metadata to MongoDB FIRST
@@ -3060,17 +3128,21 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         topic_map = {}   # src_topic_id -> tgt_topic_id
         topic_names = {} # src_topic_id -> title
 
-        # Pre-populate already mapped topics from MongoDB (rejecting invalid fallback 1s for non-general topics)
+        # Scan existing target topics in supergroup
+        target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+
+        # Pre-populate already mapped topics from MongoDB and lock them in lookup dicts
         if saved_topics:
             for st_id_str, info in saved_topics.items():
                 try:
                     s_id = int(st_id_str)
                     tgt_id = info.get("tgt_topic_id")
                     t_title = info.get("title", f"Topic {s_id}")
-                    # Only pre-populate if valid AND non-general topic is NOT mapped to 1
-                    if tgt_id and (s_id == 1 or normalize_topic_title(t_title) in ("general", "1") or tgt_id != 1):
-                        topic_map[s_id] = tgt_id
+                    if tgt_id:
+                        tgt_id_int = int(tgt_id)
+                        topic_map[s_id] = tgt_id_int
                         topic_names[s_id] = t_title
+                        _register_topic(target_topics_by_title, target_topics_by_id, t_title, tgt_id_int)
                 except Exception:
                     pass
 
@@ -3091,82 +3163,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
             topic_map[detected_topic_id] = forced_tgt_topic_id
             topic_names[detected_topic_id] = st_title
+            _register_topic(target_topics_by_title, target_topics_by_id, st_title, forced_tgt_topic_id)
             await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, detected_topic_id, forced_tgt_topic_id, st_title)
 
-        source_topics = []
-        # Strategy 1 & 2 merged: Raw RPC GetForumTopics via Userbot with pagination (most reliable in Pyrogram 2.3.69)
-        try:
-            peer = await userbot.resolve_peer(src_chat_id)
-            offset_date = 0
-            offset_id = 0
-            offset_topic = 0
-            seen_src_ids = set()
-            while True:
-                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                    peer=peer,
-                    offset_date=offset_date,
-                    offset_id=offset_id,
-                    offset_topic=offset_topic,
-                    limit=100
-                ))
-                topics_list = getattr(res, "topics", [])
-                if not topics_list:
-                    break
-                new_found = 0
-                for t in topics_list:
-                    tid = getattr(t, "id", None)
-                    if not tid or tid in seen_src_ids:
-                        continue
-                    seen_src_ids.add(tid)
-                    new_found += 1
-                    source_topics.append({
-                        "id": tid,
-                        "title": getattr(t, "title", f"Topic {tid}"),
-                        "icon_color": getattr(t, "icon_color", None),
-                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
-                    })
-                    offset_date = getattr(t, "date", offset_date)
-                    top_msg = getattr(t, "top_message", 0)
-                    offset_id = top_msg if top_msg else tid
-                    offset_topic = tid
-                if new_found == 0 or len(topics_list) < 100:
-                    break
-            if source_topics:
-                print(f"[TopicMirror] ✅ Discovered {len(source_topics)} source topics via raw RPC GetForumTopics")
-        except Exception as rpc_err:
-            print(f"[TopicMirror] Raw RPC GetForumTopics notice: {rpc_err}")
+        # Fetch all source topics with complete pagination & deep history fallback
+        source_topics = await get_all_source_forum_topics(userbot, src_chat_id)
 
-
-
-        # Strategy 3: Deep Chat History & Discussion Reply Topic Discovery (if get_forum_topics failed)
-        if not source_topics:
-            print(f"[TopicMirror] get_forum_topics unavailable. Starting Deep History Topic Discovery for {src_chat_id}...")
-            discovered_tids = set()
-            try:
-                async for m in userbot.get_chat_history(src_chat_id, limit=600):
-                    if not m:
-                        continue
-                    m_thread = getattr(m, "message_thread_id", None)
-                    reply_to = getattr(m, "reply_to_message_id", None)
-                    reply_top_id = getattr(getattr(m, "reply_to_message", None), "reply_to_top_id", None)
-                    for tid in (m_thread, reply_to, reply_top_id):
-                        if tid and isinstance(tid, int) and tid > 1:
-                            discovered_tids.add(tid)
-
-                for tid in sorted(discovered_tids):
-                    t_title = f"Topic {tid}"
-                    try:
-                        async for rep in userbot.get_discussion_replies(src_chat_id, tid, limit=3):
-                            if getattr(rep, "forum_topic_created", None) and getattr(rep.forum_topic_created, "title", None):
-                                t_title = rep.forum_topic_created.title
-                                break
-                    except Exception:
-                        pass
-                    source_topics.append({"id": tid, "title": t_title, "icon_color": None, "icon_emoji_id": None})
-            except Exception as hist_err:
-                print(f"[TopicMirror] Deep History Topic Discovery notice: {hist_err}")
-
-        # Strategy 4: Load persistent topics from MongoDB session if previously saved
+        # Include any historically saved topics from MongoDB not returned by live scan
         if saved_topics:
             existing_src_ids = {t["id"] for t in source_topics}
             for st_id_str, info in saved_topics.items():
@@ -3189,22 +3192,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         if not source_topics:
             source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
 
-        # Scan target topics to match existing topics in target supergroup
-        target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-
         for st in source_topics:
             st_id = st["id"]
             st_title = st["title"].strip()
             topic_names[st_id] = st_title
             norm_title = normalize_topic_title(st_title)
 
-            # 1. Already mapped from memory (only if not mapped improperly to 1 for non-general topic)
-            if st_id in topic_map and (st_id == 1 or norm_title in ("general", "1") or topic_map[st_id] != 1):
+            # 1. Already mapped in topic_map
+            if st_id in topic_map and topic_map[st_id]:
                 continue
 
             # 2. General topic (id 1) always maps to target General topic (1)
-            if st_id == 1 or norm_title in ("general", "1"):
+            if st_id == 1 or norm_title in ("general", "1", "main"):
                 topic_map[st_id] = 1
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, 1)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
                 continue
 
@@ -3213,8 +3214,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             if saved_info and saved_info.get("tgt_topic_id"):
                 try:
                     existing_tgt_id = int(saved_info["tgt_topic_id"])
-                    if existing_tgt_id > 1 or st_id == 1 or norm_title in ("general", "1"):
+                    if existing_tgt_id > 1:
                         topic_map[st_id] = existing_tgt_id
+                        _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                         print(f"[TopicMirror] ✅ Reusing saved Mongo mapped tgt_topic_id {existing_tgt_id} for '{st_title}'")
                         continue
                 except Exception as e:
@@ -3224,7 +3226,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
+                print(f"[TopicMirror] ✅ Found existing matching target topic {existing_tgt_id} for '{st_title}'")
                 continue
 
             # 5. Direct Telegram Server RPC Query (q=st_title) to guarantee no duplicate created if scan missed it
@@ -3238,11 +3242,14 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
             # 6. Fresh re-scan right before creating a new topic as extra safeguard
             fresh_target_topics, fresh_target_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics)
+            target_topics_by_title.update(fresh_target_topics)
+            target_topics_by_id.update(fresh_target_by_id)
+            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics) or match_existing_target_topic(clean_topic_title(st_title), fresh_target_topics)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
+                print(f"[TopicMirror] ✅ Fresh scan found '{st_title}' → tgt topic {existing_tgt_id}")
                 continue
 
             # ─────────────────────────────────────────────────────────────
@@ -3261,6 +3268,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 _register_topic(target_topics_by_title, target_topics_by_id, clean_st_title, existing_tgt_id)
+                _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
                 print(f"[TopicMirror] ✅ Pre-create scan/RPC found '{clean_st_title}' → tgt topic {existing_tgt_id}")
                 continue
@@ -3276,7 +3284,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 created = await app.create_forum_topic(**create_kwargs)
                 new_tgt_topic_id = extract_topic_id_from_result(created)
                 if new_tgt_topic_id:
-                    print(f"[TopicMirror] ✅ Created topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via high-level API")
+                    print(f"[TopicMirror] ✅ Created brand new topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via high-level API")
             except Exception as hl_err:
                 print(f"[TopicMirror] create_forum_topic notice for '{clean_st_title}': {hl_err}")
 
@@ -3295,7 +3303,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
                     new_tgt_topic_id = extract_topic_id_from_result(res)
                     if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
+                        print(f"[TopicMirror] ✅ Created brand new topic '{clean_st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
                 except Exception as rpc_create_err:
                     print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{clean_st_title}': {rpc_create_err}")
 
