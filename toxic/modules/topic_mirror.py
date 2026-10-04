@@ -3690,7 +3690,29 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         except Exception:
                             pass
 
-                    await asyncio.sleep(0.1)
+                # Send Completion Message DIRECTLY into the specific target topic thread where content was synced
+                effective_thread = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
+                if effective_thread and (topic_stats[src_topic_id]["copied"] > 0 or topic_stats[src_topic_id]["skipped"] > 0):
+                    try:
+                        t_copied = topic_stats[src_topic_id]["copied"]
+                        t_skipped = topic_stats[src_topic_id]["skipped"]
+                        t_elapsed = time.time() - topic_start_time
+                        topic_done_msg = (
+                            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+                            f"📁 <b>Topic:</b> <code>{topic_title}</code>\n"
+                            f"📥 <b>New Files Downloaded:</b> <code>{t_copied}</code> files\n"
+                            f"⏩ <b>Already Up-to-date:</b> <code>{t_skipped}</code> files\n"
+                            f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(t_elapsed*1000))}</code></blockquote>"
+                        )
+                        await app.send_message(
+                            chat_id=tgt_chat_id,
+                            text=topic_done_msg,
+                            parse_mode=ParseMode.HTML,
+                            reply_to_message_id=effective_thread
+                        )
+                        print(f"[TopicMirror] Sent topic completion message to topic '{topic_title}' (thread {effective_thread}) in target group {tgt_chat_id}")
+                    except Exception as t_msg_err:
+                        print(f"[TopicMirror] Failed to send topic completion msg to thread {effective_thread}: {t_msg_err}")
 
             except Exception as topic_err:
                 print(f"[TopicMirror] Error processing topic '{topic_title}': {topic_err}. Continuing to next topic...")
@@ -3749,7 +3771,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
         # Send Clean Completion Message to Target Forum Group (General Topic only)
         try:
-            elapsed_total = time.time() - start_time
+            elapsed_total = time.time() - start_overall_time
             target_group_msg = (
                 "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
                 f"📁 <b>New Files Downloaded:</b> <code>{overall_copied}</code> files\n"
