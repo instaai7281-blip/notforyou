@@ -95,7 +95,7 @@ async def token_handler(client, message):
         await message.reply_text(
             "**👋 Hello Group Members!**\n\n"
             "⚡ *I'm active in this group!* \n"
-            "🚀 Use me in private chat to save restricted posts safely.\n\n"
+            "🚀 Use me in private chat to extract posts safely.\n\n"
             "**➡ Click below to start me in PM.**",
             reply_markup=group_btn
         )
@@ -117,7 +117,7 @@ async def token_handler(client, message):
     if len(message.command) <= 1:
         image_url = "https://freeimage.host/i/F5dGOsj"
         join_button = InlineKeyboardButton("✈️ Main Channel", url="https://t.me/II_LevelUP_II")
-        premium_contact = InlineKeyboardButton("👑 𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝", url="https://t.me/SRC_PRO_BOT")
+        premium_contact = InlineKeyboardButton("👑 𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝", url="https://t.me/CHOSEN_ONEx_bot")
         keyboard = InlineKeyboardMarkup([
             [join_button],
             [premium_contact]
@@ -129,14 +129,14 @@ async def token_handler(client, message):
         await message.reply_photo(
             image_url,            
             caption=(
-                f"👋 **Hello, {user_mention}! Welcome to Save Restricted Bot!**\n\n"
-                "🔒 I Can Help You To **Save And Forward Content** from channels or groups that don't allow forwarding.😎\n\n"
+                f"👋 **Hello, {user_mention}! Welcome to Xtractor Bot!**\n\n"
+                "🔒 I Can Help You To **Extract And Forward Content** from channels or groups that don't allow forwarding.😎\n\n"
                 "📌 **How to use me:**\n"
                 "➤ Just **send me the post link** if it's Public\n"
                 "🔓 I'll send that post(s) to you.\n\n"
                 "> 💠 Use /batch For Bulk Forwarding...💀\n"
                 "🔐 **Private channel post?**\n\n"                
-                "➤ First do /login to save posts from Private Channel\n\n"
+                "➤ First do /login to extract posts from Private Channel\n\n"
                 "💡 Need help? Send /guide\n For More Features Use /settings 😉 \n\n"
             ),
             reply_markup=keyboard,

@@ -94,7 +94,7 @@ def build_speedtest_report(result: dict) -> str:
     uptime_str = get_readable_time(time.time() - botStartTime)
     
     report_text = (
-        "<blockquote><b>⚡ TOXIC BOT PRO — SERVER SPEED TEST ⚡</b></blockquote>\n\n"
+        "<blockquote><b>⚡ XTRACTOR BOT PRO — SERVER SPEED TEST ⚡</b></blockquote>\n\n"
         "<blockquote><b>📊 SPEED METRICS:</b>\n"
         f"• <b>📥 Download Speed:</b> <code>{speed_convert(dl_bps)}</code>\n"
         f"• <b>📤 Upload Speed:</b> <code>{speed_convert(ul_bps)}</code>\n"

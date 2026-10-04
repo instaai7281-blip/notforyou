@@ -71,7 +71,7 @@ def remove_chaudhary_fancy(text: str) -> str:
         r'team\s*hs[^a-zA-Z0-9\s]*',
         r'team\s*hs\s*亗?',
         r'toxic',
-        r'@Src_pro_bot',
+        r'@Xtractor_bot',
         r'Chosen\s*One',
         r'team[\s_\-\.]*jnc',
         r'team[\s_\-\.]*sp[ay]+',
@@ -1030,7 +1030,7 @@ def extract_topic_id_from_result(created) -> int:
     return None
 
 
-async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int):
+async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False):
     """
     Transfers a single message using the fastest available method:
       1. Direct forward_messages (zero-bandwidth, instant — if forward allowed or bot is member)
@@ -1079,15 +1079,18 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 pass
 
     # ─────────────────────────────────────────────────────────────
-    # Compute effective target topic ID:
-    #   - None or 1  → General topic (no message_thread_id param)
-    #   - any int>1  → must be forwarded into that specific thread
-    #   - 0 or negative → unmapped/invalid, ABORT (never fallback to General)
+    # STRICT ANTI-LEAKAGE GUARD:
+    #   - If this is a named source topic (is_general_topic is False),
+    #     tgt_topic_id MUST be a valid thread ID (>1).
+    #   - If tgt_topic_id is None, 0, or 1 for a named topic, REJECT immediately.
     # ─────────────────────────────────────────────────────────────
-    if tgt_topic_id is not None and int(tgt_topic_id) <= 0:
-        print(f"[Transfer] ⚠️ tgt_topic_id={tgt_topic_id} is invalid (0 or negative). Aborting msg {msg.id} to prevent General leakage.")
-        return False, "invalid_topic_id", None
-    effective_tgt_topic_id = None if (tgt_topic_id is None or int(tgt_topic_id) == 1) else int(tgt_topic_id)
+    if not is_general_topic:
+        if tgt_topic_id is None or int(tgt_topic_id) <= 1:
+            print(f"[Transfer] 🛑 ANTI-LEAKAGE GUARD: Refusing transfer of msg {msg.id} for named topic! tgt_topic_id={tgt_topic_id} is General/None.")
+            return False, "general_leakage_blocked", None
+        effective_tgt_topic_id = int(tgt_topic_id)
+    else:
+        effective_tgt_topic_id = None
 
     # ─────────────────────────────────────────────────────────────
     # METHOD 1: Direct forward_messages (zero-bandwidth, instant)
@@ -1129,7 +1132,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 return True, "copied", sent_id
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
         except Exception as copy_err:
             print(f"[Transfer] Server copy notice ({copy_client.__class__.__name__}): {copy_err}")
             continue  # Try next client
@@ -1155,7 +1158,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             return True, "text_sent", sent_id
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
         except Exception as txt_err:
             print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
             return False, str(txt_err), None
@@ -1385,7 +1388,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
     except FloodWait as fw:
         await asyncio.sleep(fw.value + 1)
-        return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id)
+        return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
     except Exception as dl_up_err:
         print(f"[TopicMirror] Save-Restricted extraction error for msg {msg.id}: {dl_up_err}")
         return False, str(dl_up_err), None
@@ -1498,7 +1501,7 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
             norm_title = normalize_topic_title(st_title)
 
             # Check if mapped in General (1)
-            if st_id == 1 or norm_title in ("general", "1", "main"):
+            if st_id == 1:
                 existing_topics.append({"src_id": st_id, "tgt_id": 1, "title": st_title})
                 continue
 
@@ -2570,15 +2573,16 @@ async def run_single_link_mirror(
             for retry in range(1, 4):
                 try:
                     await ensure_userbot_connected(userbot)
-                    effective_tgt_topic_id = None if (tgt_topic_id == 1) else tgt_topic_id
+                    is_gen = (src_topic_id in (None, 1))
                     success, method, sent_msg_id = await transfer_single_message(
                         userbot=userbot,
                         app=app,
                         src_chat_id=src_chat_id,
                         tgt_chat_id=tgt_chat_id,
-                        tgt_topic_id=effective_tgt_topic_id,
+                        tgt_topic_id=tgt_topic_id,
                         msg=msg,
-                        user_id=user_id
+                        user_id=user_id,
+                        is_general_topic=is_gen
                     )
                     if success or method in ("service_skipped", "skipped_filter"):
                         break
@@ -3235,8 +3239,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         continue
                     tgt_id_int = int(tgt_id)
                     if tgt_id_int == 1:
-                        # Only accept General mapping for actual General topic
-                        if s_id == 1 or normalize_topic_title(t_title) in ("general", "1", "main"):
+                        # Only accept General mapping for actual General topic (id=1)
+                        if s_id == 1:
                             topic_map[s_id] = 1
                             topic_names[s_id] = t_title
                         else:
@@ -3314,7 +3318,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 continue
 
             # 2. General topic (id 1) always maps to target General (1)
-            if st_id == 1 or norm_title in ("general", "1", "main"):
+            if st_id == 1:
                 topic_map[st_id] = 1
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, 1)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, 1, st_title)
@@ -3402,6 +3406,34 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
                 except Exception as rpc_create_err:
                     print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{st_title}': {rpc_create_err}")
+
+            # Attempt 3: Userbot creation if Bot App failed
+            if not new_tgt_topic_id and userbot:
+                try:
+                    create_kwargs = {"chat_id": tgt_chat_id, "title": st_title, "icon_color": src_icon_color}
+                    if src_icon_emoji_id:
+                        create_kwargs["icon_emoji_id"] = src_icon_emoji_id
+                    created = await userbot.create_forum_topic(**create_kwargs)
+                    new_tgt_topic_id = extract_topic_id_from_result(created)
+                    if new_tgt_topic_id:
+                        print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Userbot API")
+                except Exception as ub_err:
+                    try:
+                        peer = await userbot.resolve_peer(tgt_chat_id)
+                        rpc_kwargs = dict(
+                            peer=peer,
+                            title=st_title,
+                            icon_color=src_icon_color,
+                            random_id=random.randint(1000000, 9999999)
+                        )
+                        if src_icon_emoji_id:
+                            rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
+                        res = await userbot.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+                        new_tgt_topic_id = extract_topic_id_from_result(res)
+                        if new_tgt_topic_id:
+                            print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Userbot raw RPC")
+                    except Exception as ub_rpc_err:
+                        print(f"[TopicMirror] ⚠️ Userbot CreateForumTopic RPC failed for '{st_title}': {ub_rpc_err}")
 
             # After creation, verify by re-scanning if ID not returned
             if new_tgt_topic_id:
@@ -3575,22 +3607,16 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     for attempt in range(1, 6):
                         try:
                             await ensure_userbot_connected(userbot)
-                            # CRITICAL: Never pass None as tgt_topic_id — it sends to General
-                            # Only pass None for the actual General topic (id=1), otherwise always pass the real topic ID
-                            effective_tgt_topic_id = None if (tgt_topic_id == 1) else tgt_topic_id
-                            if effective_tgt_topic_id is None and tgt_topic_id not in (1, None):
-                                # tgt_topic_id is some non-1 value but became None — this is a bug guard
-                                print(f"[TopicMirror] ⚠️ tgt_topic_id={tgt_topic_id} invalid for topic '{topic_title}'. Skipping msg {msg.id}.")
-                                success, method, sent_msg_id = False, "invalid_topic", None
-                                break
+                            is_gen = (src_topic_id == 1)
                             success, method, sent_msg_id = await transfer_single_message(
                                 userbot=userbot,
                                 app=app,
                                 src_chat_id=src_chat_id,
                                 tgt_chat_id=tgt_chat_id,
-                                tgt_topic_id=effective_tgt_topic_id,
+                                tgt_topic_id=tgt_topic_id,
                                 msg=msg,
-                                user_id=user_id
+                                user_id=user_id,
+                                is_general_topic=is_gen
                             )
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break

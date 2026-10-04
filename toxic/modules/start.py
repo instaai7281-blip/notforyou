@@ -40,7 +40,7 @@ async def start_cmd(client, message: Message):
     user_name = message.from_user.first_name if message.from_user else "User"
 
     start_text = (
-        f"<blockquote><b>🚀 Welcome to TOXIC BOT PRO, {user_name}! 🖤</b></blockquote>\n\n"
+        f"<blockquote><b>🚀 Welcome to Xtractor Bot Pro, {user_name}! 🖤</b></blockquote>\n\n"
         f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
         f"<blockquote><b>✨ WHAT I CAN DO FOR YOU:</b>\n"
         f"• <b>Ultra Fast Xtractor Pro:</b> Extract & sync content from private channels & groups!\n"
@@ -231,7 +231,7 @@ async def terms(client, message):
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/SRC_PRO_BOT")],
+            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
         ]
     )
     await message.reply_text(terms_text, reply_markup=buttons)
@@ -247,7 +247,7 @@ def get_bot_username():
 async def plan(client, message):
     bot_username = get_bot_username()
     plan_text = (
-        "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
+        "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
         "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
         "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
         "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
@@ -279,7 +279,7 @@ async def plan(client, message):
 async def see_plan(client, callback_query):
     bot_username = get_bot_username()
     plan_text = (
-        "<blockquote><b>💎 TOXIC BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
+        "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
         "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
         "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
         "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
@@ -356,12 +356,12 @@ async def check_subscription_callback(client, callback_query: CallbackQuery):
 async def guide_command(_, message: Message):
     bot_username = get_bot_username()
     guide_p1_text = (
-        f"<blockquote><b>📘 USER GUIDE — SAVE RESTRICTED CONTENT (1/3)</b></blockquote>\n\n"
+        f"<blockquote><b>📘 USER GUIDE — XTRACTOR BOT PRO (1/3)</b></blockquote>\n\n"
         f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
         "<blockquote><b>✨ 1. PUBLIC CHANNEL / GROUP POSTS:</b>\n"
         f"Send any public Telegram post link directly to <code>{bot_username}</code>.\n"
         "<i>Example:</i> <code>https://t.me/public_channel/1234</code></blockquote>\n\n"
-        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (SAVE-RESTRICTED):</b>\n"
+        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (XTRACTOR PRO):</b>\n"
         f"1️⃣ Send <code>/login</code> to <code>{bot_username}</code>.\n"
         "2️⃣ Enter your phone number with country code: <code>+91XXXXXXXXXX</code>\n"
         "3️⃣ Check Telegram official chat for your OTP code.\n"
@@ -395,12 +395,12 @@ async def guide_command(_, message: Message):
 async def guide_page_1(_, query: CallbackQuery):
     bot_username = get_bot_username()
     guide_p1_text = (
-        f"<blockquote><b>📘 USER GUIDE — SAVE RESTRICTED CONTENT (1/3)</b></blockquote>\n\n"
+        f"<blockquote><b>📘 USER GUIDE — XTRACTOR BOT PRO (1/3)</b></blockquote>\n\n"
         f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
         "<blockquote><b>✨ 1. PUBLIC CHANNEL / GROUP POSTS:</b>\n"
         f"Send any public Telegram post link directly to <code>{bot_username}</code>.\n"
         "<i>Example:</i> <code>https://t.me/public_channel/1234</code></blockquote>\n\n"
-        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (SAVE-RESTRICTED):</b>\n"
+        "<blockquote><b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (XTRACTOR PRO):</b>\n"
         f"1️⃣ Send <code>/login</code> to <code>{bot_username}</code>.\n"
         "2️⃣ Enter your phone number with country code: <code>+91XXXXXXXXXX</code>\n"
         "3️⃣ Check Telegram official chat for your OTP code.\n"
