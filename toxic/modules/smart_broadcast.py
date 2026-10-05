@@ -122,15 +122,18 @@ async def sync_all_broadcast_destinations():
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
 
-        # 3. Sync from Bot App Dialogs (up to 300 limit)
+        # 3. Sync from Userbot Dialogs (up to 300 limit)
         try:
-            async for dialog in app.get_dialogs(limit=300):
-                chat = dialog.chat
-                c_type = "private" if chat.type == ChatType.PRIVATE else ("channel" if chat.type == ChatType.CHANNEL else "supergroup")
-                title = chat.title or chat.first_name or chat.username or f"Chat {chat.id}"
-                await add_sb_destination(chat.id, title, c_type)
+            from toxic.modules.topic_mirror import get_client
+            ub_client = get_client()
+            if ub_client and getattr(ub_client, "is_connected", False):
+                async for dialog in ub_client.get_dialogs(limit=300):
+                    chat = dialog.chat
+                    c_type = "private" if chat.type == ChatType.PRIVATE else ("channel" if chat.type == ChatType.CHANNEL else "supergroup")
+                    title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or getattr(chat, "username", None) or f"Chat {chat.id}"
+                    await add_sb_destination(chat.id, title, c_type)
         except Exception as d_err:
-            print(f"[SmartBroadcast Sync] Bot app dialog sync notice: {d_err}")
+            pass
 
     except Exception as err:
         print(f"[SmartBroadcast Sync] Sync error: {err}")
@@ -412,6 +415,9 @@ def get_sb_main_keyboard(cfg: dict):
             InlineKeyboardButton(f"👤 DMs: {'ON ✅' if ed else 'OFF ❌'}", callback_data="sb_toggle_target_dms")
         ],
         [
+            InlineKeyboardButton("👁️ Preview Broadcast Message", callback_data="sb_preview_msg")
+        ],
+        [
             InlineKeyboardButton("🛑 Stop Next Broadcast", callback_data="sb_stop_next"),
             InlineKeyboardButton("🗑️ Delete Last Broadcast Now", callback_data="sb_delete_last")
         ],
@@ -545,9 +551,19 @@ async def render_smart_broadcast_menu(client: Client, message_or_query):
 
     kb = get_sb_main_keyboard(cfg)
     if isinstance(message_or_query, CallbackQuery):
-        await message_or_query.message.edit_text(text, reply_markup=kb)
+        try:
+            await message_or_query.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            try:
+                user_id = message_or_query.from_user.id
+                await client.send_message(user_id, text, reply_markup=kb)
+            except Exception:
+                pass
     else:
-        await message_or_query.reply_text(text, reply_markup=kb)
+        try:
+            await message_or_query.reply_text(text, reply_markup=kb)
+        except Exception:
+            pass
 
 # ─── Commands & Handlers ───
 SB_COMMANDS = ["smartbroadcast", "sbcast", "autobcast", "smartbcast", "sb", "autobroadcast", "abc", "broadcast", "bcast"]
@@ -883,8 +899,66 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
                 })
                 await ask.reply("✅ **Broadcast message saved successfully!**")
 
-        await asyncio.sleep(0.5)
-        await render_smart_broadcast_menu(client, ask)
+    elif data == "sb_preview_msg":
+        src_chat_id = cfg.get("source_chat_id")
+        src_msg_id = cfg.get("source_msg_id")
+        msg_text = cfg.get("message_text")
+
+        if not src_msg_id and (not msg_text or msg_text == "None"):
+            await callback_query.answer("❌ No broadcast payload saved yet! Set a message payload first.", show_alert=True)
+            return
+
+        await callback_query.answer("👁️ Sending broadcast preview to your DM...")
+
+        header_text = (
+            "👁️ <b>[SMART BROADCAST MESSAGE PREVIEW]</b>\n"
+            "<i>This is how your broadcast message will look when delivered to groups, channels & DMs:</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        try:
+            await client.send_message(user_id, header_text, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+        sent_preview = None
+        if src_chat_id and src_msg_id:
+            try:
+                if cfg.get("fast_forward_mode", True):
+                    sent_preview = await client.copy_message(user_id, src_chat_id, src_msg_id)
+                else:
+                    sent_preview = await client.forward_messages(user_id, src_chat_id, src_msg_id)
+            except Exception:
+                try:
+                    from toxic.modules.topic_mirror import get_client
+                    ub = get_client()
+                    if ub:
+                        sent_preview = await ub.copy_message(user_id, src_chat_id, src_msg_id)
+                except Exception as e:
+                    print(f"[SmartBroadcast Preview Error]: {e}")
+
+        if not sent_preview and msg_text and msg_text != "None":
+            try:
+                from toxic.core.func import format_caption_to_html
+                html_txt = format_caption_to_html(msg_text)
+                sent_preview = await client.send_message(
+                    user_id,
+                    html_txt if html_txt else msg_text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=cfg.get("disable_web_page_preview", True)
+                )
+            except Exception as txt_err:
+                print(f"[SmartBroadcast Preview Text Error]: {txt_err}")
+
+        del_s = cfg.get("delete_after_seconds", 0)
+        footer = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n✅ <b>Preview Sent!</b>"
+        if del_s > 0:
+            footer += f"\n<i>⏱ Auto-delete timer is active: <b>{format_time_duration(del_s)}</b> after delivery.</i>"
+
+        try:
+            await client.send_message(user_id, footer, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        return
 
     elif data == "sb_launch_now":
         await callback_query.message.edit_text("🚀 **Launching Smart Broadcast to enabled destinations in background...**")

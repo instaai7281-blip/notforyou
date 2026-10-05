@@ -58,10 +58,9 @@ async def get_all_registered_users():
     from toxic.core.mongo.db import db as settings_db
     async for doc in settings_db.find({}):
       if "_id" in doc:
-        try:
-          users.append(int(doc["_id"]))
-        except ValueError:
-          pass
+        val = str(doc["_id"])
+        if val.isdigit() or (val.startswith('-') and val[1:].isdigit()):
+          users.append(int(val))
   except Exception as e:
     print(f"Error getting users from settings db: {e}")
   return list(set(users))
