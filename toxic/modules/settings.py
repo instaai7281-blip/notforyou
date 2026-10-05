@@ -1,9 +1,43 @@
 import asyncio
+import os
 from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from toxic import app
 from toxic.core.mongo import db
-from toxic.core.get_func import get_user_branding_tag, set_user_branding_tag, get_user_custom_tags, add_user_custom_tag, delete_user_custom_tag, get_user_spoiler_preference, set_user_spoiler_preference
+from toxic.core.get_func import (
+    get_user_branding_tag,
+    set_user_branding_tag,
+    get_user_custom_tags,
+    add_user_custom_tag,
+    delete_user_custom_tag,
+    get_user_spoiler_preference,
+    set_user_spoiler_preference,
+    save_user_data,
+    load_user_data,
+    save_user_upload_method
+)
+
+SETTINGS_PHOTO_URL = "https://freeimage.host/i/n7cbXDX"
+
+# ────── Helper for Editing Message (Photo Caption vs Text) ──────
+
+async def edit_settings_view(callback_query: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup = None):
+    """Safely edits caption if message has photo/media, else edits text."""
+    try:
+        msg = callback_query.message
+        if msg.photo or msg.video or msg.document:
+            await msg.edit_caption(caption=text, reply_markup=reply_markup)
+        else:
+            await msg.edit_text(text=text, reply_markup=reply_markup)
+    except Exception:
+        try:
+            await callback_query.edit_message_caption(caption=text, reply_markup=reply_markup)
+        except Exception:
+            try:
+                await callback_query.edit_message_text(text=text, reply_markup=reply_markup)
+            except Exception:
+                pass
+
 
 # ────── Keyboards ──────
 
@@ -23,6 +57,10 @@ def get_main_settings_keyboard(user_id):
             InlineKeyboardButton("🏷️ Branding Tag", callback_data="settings_tag")
         ],
         [
+            InlineKeyboardButton("📄 PDF Watermark", callback_data="settings_watermark"),
+            InlineKeyboardButton("📤 Upload Method", callback_data="settings_uploadmethod")
+        ],
+        [
             InlineKeyboardButton(f"🌶️ Spoiler Mode: {'ON ✅' if is_spoiler else 'OFF ❌'}", callback_data="toggle_spoiler_settings")
         ],
         [
@@ -33,7 +71,7 @@ def get_main_settings_keyboard(user_id):
     return InlineKeyboardMarkup(buttons)
 
 def get_filters_keyboard(user_data):
-    filters_data = user_data.get("filters", {})
+    filters_data = user_data.get("filters", {}) if user_data else {}
     def toggle_text(key):
         return "✅" if filters_data.get(key, True) else "❌"
 
@@ -45,13 +83,13 @@ def get_filters_keyboard(user_data):
         [InlineKeyboardButton(f"{toggle_text('sticker')} Sticker", callback_data="toggle_sticker"),
          InlineKeyboardButton(f"{toggle_text('html')} HTML", callback_data="toggle_html")],
         [InlineKeyboardButton(f"{toggle_text('text')} Text", callback_data="toggle_text"),
-         InlineKeyboardButton("🔄 Reset", callback_data="reset_filters")],
+         InlineKeyboardButton("🔄 Reset Filters", callback_data="reset_filters")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(buttons)
 
 def get_caption_keyboard(user_data):
-    caption_enabled = user_data.get("caption_enabled", True)
+    caption_enabled = user_data.get("caption_enabled", True) if user_data else True
     status_text = "✅ Enabled" if caption_enabled else "❌ Disabled"
     
     buttons = [
@@ -77,7 +115,7 @@ def get_thumb_keyboard(user_data):
 def get_cleaning_keyboard(user_data):
     buttons = [
         [
-            InlineKeyboardButton("➕ Add Word", callback_data="add_clean_word"),
+            InlineKeyboardButton("➕ Add Clean Word", callback_data="add_clean_word"),
             InlineKeyboardButton("🗑️ Clear List", callback_data="clear_clean_words")
         ],
         [
@@ -88,11 +126,29 @@ def get_cleaning_keyboard(user_data):
     ]
     return InlineKeyboardMarkup(buttons)
 
+def get_watermark_keyboard(user_data):
+    buttons = [
+        [
+            InlineKeyboardButton("✏️ Set Watermark", callback_data="set_new_watermark"),
+            InlineKeyboardButton("🗑️ Remove", callback_data="delete_watermark")
+        ],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_upload_method_keyboard(current_method):
+    pyro_check = " ✅" if current_method == "Pyrogram" else ""
+    tele_check = " ✅" if current_method == "Telethon" else ""
+    buttons = [
+        [InlineKeyboardButton(f"⚡ Pyrogram v1 (Fast & Stable){pyro_check}", callback_data="set_upload_pyrogram")],
+        [InlineKeyboardButton(f"⚠️ Telethon v2 (Beta){tele_check}", callback_data="set_upload_telethon")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
 def get_tag_keyboard(user_id):
     current_tag = get_user_branding_tag(user_id)
     custom_tags = get_user_custom_tags(user_id)
-    
-    from toxic.core.get_func import load_user_data
     is_keep_original = load_user_data(user_id, "keep_original_caption", False)
     
     buttons = []
@@ -119,75 +175,85 @@ def get_tag_keyboard(user_id):
     buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")])
     return InlineKeyboardMarkup(buttons)
 
+MAIN_SETTINGS_TEXT = (
+    "⚙️ **Personalize Your Experience**\n\n"
+    "Configure your extraction preferences, watermarks, branding, and filters using the buttons below."
+)
+
+
 # ────── Command Handler ──────
 
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_command(client, message):
-    image_url = "https://freeimage.host/i/n7cbXDX"
-    caption_text = "⚙️ **Personalize Your Experience**\n\nConfigure your extraction preferences, branding, and filters using the buttons below."
     try:
         await message.reply_photo(
-            photo=image_url,
-            caption=caption_text,
+            photo=SETTINGS_PHOTO_URL,
+            caption=MAIN_SETTINGS_TEXT,
             reply_markup=get_main_settings_keyboard(message.chat.id)
         )
     except Exception:
         await message.reply_text(
-            caption_text,
+            MAIN_SETTINGS_TEXT,
             reply_markup=get_main_settings_keyboard(message.chat.id)
         )
 
 
 # ────── Navigation & Main Callbacks ──────
 
-@app.on_callback_query(filters.regex(r"^(settings_filters|back_to_main|close_settings|settings_thumb|settings_chatid|settings_cleaning|settings_tag)$"))
+@app.on_callback_query(filters.regex(r"^(settings_filters|back_to_main|close_settings|settings_thumb|settings_chatid|settings_cleaning|settings_tag|settings_watermark|settings_uploadmethod)$"))
 async def main_nav_callback(client, callback_query: CallbackQuery):
     data = callback_query.data
     user_id = callback_query.from_user.id
     user_data = await db.get_data(user_id) or {}
     
     if data == "close_settings":
-        await callback_query.message.delete()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
         return
     elif data == "back_to_main":
-        await callback_query.message.edit_text(
-            "⚙️ **Personalize Your Experience**\n\nConfigure your extraction preferences, branding, and filters using the buttons below.",
+        await edit_settings_view(
+            callback_query,
+            MAIN_SETTINGS_TEXT,
             reply_markup=get_main_settings_keyboard(user_id)
         )
     elif data == "settings_filters":
-        await callback_query.message.edit_text(
-            "📁 **Media Filters**\n\nToggle which media types you want the bot to process:",
+        await edit_settings_view(
+            callback_query,
+            "📁 **Media Filters**\n\nToggle which media types you want the bot to extract and process:",
             reply_markup=get_filters_keyboard(user_data)
         )
     elif data == "settings_thumb":
         thumb_status = "✅ Set" if user_data.get("thumb") else "❌ Not Set"
-        await callback_query.message.edit_text(
+        await edit_settings_view(
+            callback_query,
             f"🖼️ **Custom Thumbnail Settings**\n\n**Current Status:** {thumb_status}\n\nSetting a custom thumbnail will apply it to all videos and documents extracted.",
             reply_markup=get_thumb_keyboard(user_data)
         )
     elif data == "settings_chatid":
         chat_id = user_data.get("chat_id", "Your DM (Default)")
-        await callback_query.message.edit_text(
-            f"📢 **Auto-Forward Settings**\n\n**Currently Uploading To:** `{chat_id}`\n\nIf you set a Channel/Group ID, the bot will automatically upload all extracted content there instead of your DM.",
+        await edit_settings_view(
+            callback_query,
+            f"📢 **Auto-Forward / Destination Settings**\n\n**Currently Uploading To:** `{chat_id}`\n\nIf you set a Channel/Group ID, the bot will automatically upload all extracted content there instead of your DM.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ Set Chat ID", callback_data="set_new_chatid"),
-                 InlineKeyboardButton("🗑️ Reset", callback_data="delete_chatid")],
+                 InlineKeyboardButton("🗑️ Reset to DM", callback_data="delete_chatid")],
                 [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
             ])
         )
     elif data == "settings_cleaning":
-        clean_words = user_data.get("clean_words", [])
-        replace_words = user_data.get("replacement_words", {})
+        clean_words = user_data.get("clean_words", []) or []
+        replace_words = user_data.get("replacement_words", {}) or {}
         
         text = "🧹 **Text Cleaning & Replacements**\n\n"
         text += f"**Clean Words:** {', '.join(clean_words) if clean_words else 'None'}\n"
         text += f"**Replacements:** {len(replace_words)} active rules\n\n"
-        text += "> These rules apply to original captions before your custom caption is added."
+        text += "> These rules apply to original filenames and captions."
         
-        await callback_query.message.edit_text(text, reply_markup=get_cleaning_keyboard(user_data))
+        await edit_settings_view(callback_query, text, reply_markup=get_cleaning_keyboard(user_data))
     elif data == "settings_tag":
-        current_tag = user_data.get("branding_tag", "🖤 Sᴛꪮʟᴇɴ Hᴀᴘപ⚝")
-        current_tag = user_data.get("branding_tag", "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝")
+        current_tag = get_user_branding_tag(user_id)
         preview_text = (
             f"🏷️ **Branding Tag Settings**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -198,10 +264,37 @@ async def main_nav_callback(client, callback_query: CallbackQuery):
             f"> **{current_tag}**\n\n"
             f"This branding tag appears in the captions of your files and on PDF document pages. Select a preset or set a custom tag below:"
         )
-        await callback_query.message.edit_text(
+        await edit_settings_view(
+            callback_query,
             preview_text,
-            reply_markup=get_tag_keyboard(callback_query.from_user.id)
+            reply_markup=get_tag_keyboard(user_id)
         )
+    elif data == "settings_watermark":
+        watermark_text = user_data.get("watermark_text") or load_user_data(user_id, "watermark_text", "Not Set")
+        text = (
+            f"📄 **PDF Watermark Settings**\n\n"
+            f"**Current Watermark:** `{watermark_text}`\n\n"
+            f"> When set, your watermark text will be stamped on all pages of extracted PDF documents automatically."
+        )
+        await edit_settings_view(
+            callback_query,
+            text,
+            reply_markup=get_watermark_keyboard(user_data)
+        )
+    elif data == "settings_uploadmethod":
+        current_method = user_data.get("upload_method") or load_user_data(user_id, "upload_method", "Pyrogram")
+        text = (
+            f"📤 **Upload Method Settings**\n\n"
+            f"**Current Method:** `{current_method}`\n\n"
+            f"> • **Pyrogram v1 (Recommended):** High-speed, stable, and supports large media files up to 2GB/4GB.\n"
+            f"> • **Telethon v2 (Beta):** Alternative uploader engine."
+        )
+        await edit_settings_view(
+            callback_query,
+            text,
+            reply_markup=get_upload_method_keyboard(current_method)
+        )
+
 
 # ────── Caption Actions ──────
 
@@ -212,7 +305,7 @@ async def caption_settings_callback(client, callback_query: CallbackQuery):
     caption = user_data.get("caption", "Not Set")
     
     text = f"📝 **Custom Caption Settings**\n\n**Current Caption:**\n`{caption}`\n\n> You can use `{{caption}}` placeholder to keep the original caption alongside your custom text."
-    await callback_query.message.edit_text(text, reply_markup=get_caption_keyboard(user_data))
+    await edit_settings_view(callback_query, text, reply_markup=get_caption_keyboard(user_data))
 
 @app.on_callback_query(filters.regex(r"^(toggle_caption_status|delete_caption|set_new_caption)$"))
 async def caption_actions_callback(client, callback_query: CallbackQuery):
@@ -224,14 +317,19 @@ async def caption_actions_callback(client, callback_query: CallbackQuery):
         current_status = user_data.get("caption_enabled", True)
         new_status = not current_status
         await db.update_data(user_id, {"caption_enabled": new_status})
+        save_user_data(user_id, "caption_enabled", new_status)
         await callback_query.answer(f"Caption {'Enabled' if new_status else 'Disabled'}")
         
     elif data == "delete_caption":
         await db.remove_caption(user_id)
+        save_user_data(user_id, "caption", None)
         await callback_query.answer("Caption deleted successfully", show_alert=True)
         
     elif data == "set_new_caption":
-        await callback_query.message.delete()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
         try:
             ask = await client.ask(user_id, "📝 **Send your new custom caption now.**\n\n> Use `{caption}` where you want the original text to appear.\n> Send /cancel to abort.", timeout=120)
         except Exception:
@@ -242,6 +340,8 @@ async def caption_actions_callback(client, callback_query: CallbackQuery):
             await ask.reply("Action cancelled.")
         else:
             await db.set_caption(user_id, ask.text)
+            save_user_data(user_id, "caption", ask.text)
+            save_user_data(user_id, "caption_enabled", True)
             await ask.reply(f"✅ **Caption updated successfully!**\n\n`{ask.text}`")
         
         await asyncio.sleep(0.5)
@@ -249,6 +349,7 @@ async def caption_actions_callback(client, callback_query: CallbackQuery):
         return
 
     await caption_settings_callback(client, callback_query)
+
 
 # ────── Thumbnail Actions ──────
 
@@ -260,7 +361,6 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
     if data == "delete_thumb":
         await db.remove_thumbnail(user_id)
         from config import THUMBNAIL_DIR
-        import os
         thumbnail_path = os.path.join(THUMBNAIL_DIR, f"{user_id}.jpg")
         if os.path.exists(thumbnail_path):
             try:
@@ -269,7 +369,10 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
                 pass
         await callback_query.answer("Thumbnail deleted", show_alert=True)
     elif data == "set_new_thumb":
-        await callback_query.message.delete()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
         try:
             ask = await client.ask(user_id, "🖼️ **Send the photo you want to set as thumbnail.**\n\n> Send /cancel to abort.", timeout=120)
         except Exception:
@@ -277,7 +380,6 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
             return
         
         if ask.photo:
-            import os
             from config import THUMBNAIL_DIR
             from toxic.core.func import optimize_thumbnail
             thumbnail_path = os.path.join(THUMBNAIL_DIR, f"{user_id}.jpg")
@@ -299,9 +401,14 @@ async def thumb_actions_callback(client, callback_query: CallbackQuery):
         await settings_command(client, ask)
         return
 
-
     user_data = await db.get_data(user_id) or {}
-    await main_nav_callback(client, callback_query)
+    thumb_status = "✅ Set" if user_data.get("thumb") else "❌ Not Set"
+    await edit_settings_view(
+        callback_query,
+        f"🖼️ **Custom Thumbnail Settings**\n\n**Current Status:** {thumb_status}\n\nSetting a custom thumbnail will apply it to all videos and documents extracted.",
+        reply_markup=get_thumb_keyboard(user_data)
+    )
+
 
 # ────── Chat ID Actions ──────
 
@@ -312,9 +419,13 @@ async def chatid_actions_callback(client, callback_query: CallbackQuery):
 
     if data == "delete_chatid":
         await db.remove_channel(user_id)
+        save_user_data(user_id, "target_chat_id", None)
         await callback_query.answer("Auto-forward reset to DM", show_alert=True)
     elif data == "set_new_chatid":
-        await callback_query.message.delete()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
         try:
             ask = await client.ask(
                 user_id,
@@ -343,13 +454,25 @@ async def chatid_actions_callback(client, callback_query: CallbackQuery):
                 pass
                 
             await db.set_channel(user_id, chat_to_save)
+            save_user_data(user_id, "target_chat_id", chat_to_save)
             await ask.reply(f"✅ **Auto-forward set to:** `{chat_to_save}`")
         
         await asyncio.sleep(0.5)
         await settings_command(client, ask)
         return
 
-    await main_nav_callback(client, callback_query)
+    user_data = await db.get_data(user_id) or {}
+    chat_id = user_data.get("chat_id", "Your DM (Default)")
+    await edit_settings_view(
+        callback_query,
+        f"📢 **Auto-Forward / Destination Settings**\n\n**Currently Uploading To:** `{chat_id}`\n\nIf you set a Channel/Group ID, the bot will automatically upload all extracted content there instead of your DM.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ Set Chat ID", callback_data="set_new_chatid"),
+             InlineKeyboardButton("🗑️ Reset to DM", callback_data="delete_chatid")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_main")]
+        ])
+    )
+
 
 # ────── Cleaning Actions ──────
 
@@ -360,14 +483,19 @@ async def cleaning_actions_callback(client, callback_query: CallbackQuery):
 
     if data == "clear_clean_words":
         await db.all_words_remove(user_id)
+        save_user_data(user_id, "delete_words", [])
         await callback_query.answer("Clean words list cleared")
     elif data == "clear_replacements":
         await db.remove_replace(user_id)
+        save_user_data(user_id, "replacement_words", {})
         await callback_query.answer("Replacement rules cleared")
     elif data == "add_clean_word":
-        await callback_query.message.delete()
         try:
-            ask = await client.ask(user_id, "🧹 **Send the word you want to clean from captions.**\n\n> Separate multiple words with spaces.\n> Send /cancel to abort.", timeout=120)
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        try:
+            ask = await client.ask(user_id, "🧹 **Send the word(s) you want to clean from captions & filenames.**\n\n> Separate multiple words with spaces.\n> Send /cancel to abort.", timeout=120)
         except Exception:
             await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
             return
@@ -375,31 +503,123 @@ async def cleaning_actions_callback(client, callback_query: CallbackQuery):
         if ask.text != "/cancel":
             words = ask.text.split()
             await db.clean_words(user_id, words)
-            await ask.reply(f"✅ **Added {len(words)} words to cleaning list.**")
+            existing_del = set(load_user_data(user_id, "delete_words", []))
+            existing_del.update(words)
+            save_user_data(user_id, "delete_words", list(existing_del))
+            await ask.reply(f"✅ **Added {len(words)} word(s) to cleaning list.**")
         await asyncio.sleep(0.5)
         await settings_command(client, ask)
         return
     elif data == "set_replacement":
-        await callback_query.message.delete()
         try:
-            ask = await client.ask(user_id, "🔄 **Send the words in format:** `word > replacement`\n\n> Example: `oldword > newword`\n> Send /cancel to abort.", timeout=120)
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        try:
+            ask = await client.ask(user_id, "🔄 **Send the words in format:** `word > replacement` or `'old' 'new'`\n\n> Example: `oldword > newword`\n> Send /cancel to abort.", timeout=120)
         except Exception:
             await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
             return
 
-        if ask.text != "/cancel" and ">" in ask.text:
-            parts = ask.text.split(">")
-            to_replace = parts[0].strip()
-            replace_with = parts[1].strip()
-            await db.replace_caption(user_id, replace_with, to_replace)
-            await ask.reply(f"✅ **Rule added:** `{to_replace}` ➜ `{replace_with}`")
-        else:
-             await ask.reply("❌ **Invalid format.**")
+        if ask.text != "/cancel":
+            to_replace = None
+            replace_with = None
+            if ">" in ask.text:
+                parts = ask.text.split(">", 1)
+                to_replace = parts[0].strip()
+                replace_with = parts[1].strip()
+            elif "'" in ask.text:
+                import re
+                m = re.match(r"'(.+)' '(.+)'", ask.text)
+                if m:
+                    to_replace, replace_with = m.groups()
+            
+            if to_replace is not None and replace_with is not None:
+                await db.replace_caption(user_id, replace_with, to_replace)
+                curr_repl = load_user_data(user_id, "replacement_words", {})
+                curr_repl[to_replace] = replace_with
+                save_user_data(user_id, "replacement_words", curr_repl)
+                await ask.reply(f"✅ **Rule added:** `{to_replace}` ➜ `{replace_with}`")
+            else:
+                await ask.reply("❌ **Invalid format.** Use `oldword > newword` or `'old' 'new'`")
         await asyncio.sleep(0.5)
         await settings_command(client, ask)
         return
 
-    await main_nav_callback(client, callback_query)
+    user_data = await db.get_data(user_id) or {}
+    clean_words = user_data.get("clean_words", []) or []
+    replace_words = user_data.get("replacement_words", {}) or {}
+    text = "🧹 **Text Cleaning & Replacements**\n\n"
+    text += f"**Clean Words:** {', '.join(clean_words) if clean_words else 'None'}\n"
+    text += f"**Replacements:** {len(replace_words)} active rules\n\n"
+    text += "> These rules apply to original filenames and captions."
+    await edit_settings_view(callback_query, text, reply_markup=get_cleaning_keyboard(user_data))
+
+
+# ────── PDF Watermark Actions ──────
+
+@app.on_callback_query(filters.regex(r"^(set_new_watermark|delete_watermark)$"))
+async def watermark_actions_callback(client, callback_query: CallbackQuery):
+    data = callback_query.data
+    user_id = callback_query.from_user.id
+
+    if data == "delete_watermark":
+        await db.update_data(user_id, {"watermark_text": ""})
+        save_user_data(user_id, "watermark_text", "")
+        await callback_query.answer("PDF Watermark removed ✅", show_alert=True)
+    elif data == "set_new_watermark":
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        try:
+            ask = await client.ask(user_id, "📄 **Send the text you want to use as your PDF watermark.**\n\n> Send /cancel to abort.", timeout=120)
+        except Exception:
+            await client.send_message(user_id, "⏰ **Timed out!** Action aborted due to inactivity.")
+            return
+
+        if ask.text == "/cancel":
+            await ask.reply("Action cancelled.")
+        else:
+            w_text = ask.text.strip()
+            await db.update_data(user_id, {"watermark_text": w_text})
+            save_user_data(user_id, "watermark_text", w_text)
+            await ask.reply(f"✅ **PDF Watermark set to:** `{w_text}`")
+
+        await asyncio.sleep(0.5)
+        await settings_command(client, ask)
+        return
+
+    user_data = await db.get_data(user_id) or {}
+    watermark_text = user_data.get("watermark_text") or load_user_data(user_id, "watermark_text", "Not Set")
+    text = (
+        f"📄 **PDF Watermark Settings**\n\n"
+        f"**Current Watermark:** `{watermark_text or 'Not Set'}`\n\n"
+        f"> When set, your watermark text will be stamped on all pages of extracted PDF documents automatically."
+    )
+    await edit_settings_view(callback_query, text, reply_markup=get_watermark_keyboard(user_data))
+
+
+# ────── Upload Method Actions ──────
+
+@app.on_callback_query(filters.regex(r"^set_upload_(pyrogram|telethon)$"))
+async def set_upload_method_callback(client, callback_query: CallbackQuery):
+    method_choice = "Pyrogram" if callback_query.data == "set_upload_pyrogram" else "Telethon"
+    user_id = callback_query.from_user.id
+
+    await db.update_data(user_id, {"upload_method": method_choice})
+    save_user_upload_method(user_id, method_choice)
+    save_user_data(user_id, "upload_method", method_choice)
+
+    await callback_query.answer(f"Upload method set to {method_choice} ✅")
+    text = (
+        f"📤 **Upload Method Settings**\n\n"
+        f"**Current Method:** `{method_choice}`\n\n"
+        f"> • **Pyrogram v1 (Recommended):** High-speed, stable, and supports large media files up to 2GB/4GB.\n"
+        f"> • **Telethon v2 (Beta):** Alternative uploader engine."
+    )
+    await edit_settings_view(callback_query, text, reply_markup=get_upload_method_keyboard(method_choice))
+
 
 # ────── Branding Tag Actions ──────
 
@@ -409,7 +629,6 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
 
     if data == "toggle_keep_original":
-        from toxic.core.get_func import save_user_data, load_user_data
         current_val = load_user_data(user_id, "keep_original_caption", False)
         new_val = not current_val
         save_user_data(user_id, "keep_original_caption", new_val)
@@ -425,7 +644,10 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
             await callback_query.answer("❌ You can save up to 5 custom tags only! Delete one first.", show_alert=True)
             return
             
-        await callback_query.message.delete()
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
         try:
             ask = await client.ask(user_id, "🏷️ **Send your custom branding tag now.**\n\n> Send /cancel to abort.", timeout=120)
         except Exception:
@@ -440,7 +662,6 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
         await asyncio.sleep(0.5)
         await settings_command(client, ask)
         return
-
 
     elif data.startswith("set_tag_select_"):
         tag_index = int(data.split("_")[-1])
@@ -458,8 +679,7 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
         await callback_query.answer(msg, show_alert=True)
 
     # Refresh page
-    user_data = await db.get_data(user_id) or {}
-    current_tag = user_data.get("branding_tag", "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝")
+    current_tag = get_user_branding_tag(user_id)
     preview_text = (
         f"🏷️ **Branding Tag Settings**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -470,10 +690,12 @@ async def tag_actions_callback(client, callback_query: CallbackQuery):
         f"> **{current_tag}**\n\n"
         f"This branding tag appears in the captions of your files and on PDF document pages. Select a preset or set a custom tag below:"
     )
-    await callback_query.message.edit_text(
+    await edit_settings_view(
+        callback_query,
         preview_text,
-        reply_markup=get_tag_keyboard(callback_query.from_user.id)
+        reply_markup=get_tag_keyboard(user_id)
     )
+
 
 # ────── Filter & Reset Actions ──────
 
@@ -488,7 +710,11 @@ async def toggle_filter(client, callback_query: CallbackQuery):
     
     await db.set_filter(user_id, media_type, new_status)
     updated_data = await db.get_data(user_id) or {}
-    await callback_query.message.edit_reply_markup(reply_markup=get_filters_keyboard(updated_data))
+    await edit_settings_view(
+        callback_query,
+        "📁 **Media Filters**\n\nToggle which media types you want the bot to extract and process:",
+        reply_markup=get_filters_keyboard(updated_data)
+    )
     await callback_query.answer(f"{media_type.capitalize()} turned {'ON' if new_status else 'OFF'}")
 
 @app.on_callback_query(filters.regex(r"^(reset_filters|reset_all_settings)$"))
@@ -499,12 +725,17 @@ async def reset_actions_callback(client, callback_query: CallbackQuery):
     if data == "reset_filters":
         for media_type in ["video", "document", "audio", "photo", "text", "sticker", "html"]:
             await db.set_filter(user_id, media_type, True)
-        await callback_query.answer("Filters reset")
+        await callback_query.answer("Filters reset to default ✅")
+        updated_data = await db.get_data(user_id) or {}
+        await edit_settings_view(
+            callback_query,
+            "📁 **Media Filters**\n\nToggle which media types you want the bot to extract and process:",
+            reply_markup=get_filters_keyboard(updated_data)
+        )
     elif data == "reset_all_settings":
-        # Full wipe (except session/premium status if they exist elsewhere)
+        # Full reset
         await db.remove_thumbnail(user_id)
         from config import THUMBNAIL_DIR
-        import os
         thumbnail_path = os.path.join(THUMBNAIL_DIR, f"{user_id}.jpg")
         if os.path.exists(thumbnail_path):
             try:
@@ -515,10 +746,24 @@ async def reset_actions_callback(client, callback_query: CallbackQuery):
         await db.remove_replace(user_id)
         await db.all_words_remove(user_id)
         await db.remove_channel(user_id)
-        await callback_query.answer("All settings reset to default", show_alert=True)
-    
-    updated_data = await db.get_data(user_id) or {}
-    await main_nav_callback(client, callback_query)
+        await db.update_data(user_id, {"watermark_text": "", "branding_tag": "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝"})
+        
+        save_user_data(user_id, "delete_words", [])
+        save_user_data(user_id, "replacement_words", {})
+        save_user_data(user_id, "watermark_text", "")
+        save_user_data(user_id, "target_chat_id", None)
+        set_user_branding_tag(user_id, "🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝")
+
+        for media_type in ["video", "document", "audio", "photo", "text", "sticker", "html"]:
+            await db.set_filter(user_id, media_type, True)
+
+        await callback_query.answer("All settings reset to default! 🔄", show_alert=True)
+        await edit_settings_view(
+            callback_query,
+            MAIN_SETTINGS_TEXT,
+            reply_markup=get_main_settings_keyboard(user_id)
+        )
+
 
 # ────── Spoiler Settings Toggle ──────
 

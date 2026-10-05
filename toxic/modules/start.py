@@ -57,7 +57,7 @@ async def start_cmd(client, message: Message):
         [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
 
-    image_url = "https://freeimage.host/i/n7cbXDX"
+    image_url = "https://freeimage.host/i/n04TxVa"
     try:
         await message.reply_photo(
             photo=image_url,

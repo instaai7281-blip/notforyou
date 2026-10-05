@@ -83,8 +83,24 @@ async def check_and_remove_expired_mirror_users():
     async for data in mirror_db.find():
         expire_date = data.get("expire_date")
         if expire_date and expire_date < current_time:
-            await remove_mirror_premium(data["_id"])
-            print(f"Removed mirror user {data['_id']} due to expired plan.")
+            user_id = data["_id"]
+            await remove_mirror_premium(user_id)
+            print(f"Removed mirror user {user_id} due to expired plan / trial.")
+            try:
+                from toxic import app
+                await app.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "⚠️ <b>TOPIC MIRROR ACCESS EXPIRED</b> ⚠️\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "Your Topic Mirror / Demo Access has expired.\n\n"
+                        "💬 <b>To purchase a full plan, contact:</b> @CrazyxDeveloper_Bot\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    ),
+                    disable_web_page_preview=True
+                )
+            except Exception:
+                pass
 
 # ────── TOXIC_ID Security Keys Collection ──────
 toxic_id_db = mongo.premium.toxic_id_db

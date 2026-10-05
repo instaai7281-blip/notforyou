@@ -1878,8 +1878,9 @@ m = None
 SET_PIC = "settings.jpg"
 MESS = "Customize settings ..."
 
-@gf.on(events.NewMessage(incoming=True, pattern='/settings'))
-async def settings_command(event):
+# Telethon legacy settings command disabled to prevent duplicate responses with Pyrogram settings
+# @gf.on(events.NewMessage(incoming=True, pattern='/settings'))
+async def telethon_settings_command(event):
     user_id = event.sender_id
     await send_settings_message(event.chat_id, user_id)
 

@@ -30,7 +30,7 @@ async def schedule_expiry_check():
     while True:
         await scheduler.spawn(check_and_remove_expired_users())
         await scheduler.spawn(check_and_remove_expired_mirror_users())
-        await asyncio.sleep(3600)  # Check every hour
+        await asyncio.sleep(60)  # Check every 60 seconds for accurate demo/hourly expirations
         gc.collect()
 
 

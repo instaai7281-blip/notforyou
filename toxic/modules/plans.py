@@ -238,6 +238,87 @@ async def give_mirror_premium_cmd_handler(client, message):
         await message.reply_text("Usage: `/addmirror user_id duration` (e.g. `/addmirror 123456789 1 month` or `30 days`)")
 
 
+# ─── 1-Hour Topic Mirror Demo Command (Hidden Owner Command) ───
+@app.on_message(filters.command(["mirrordemo", "demomirror", "adddemo"]) & filters.user(OWNER_ID))
+async def give_mirror_demo_cmd_handler(client, message):
+    """
+    Hidden Owner command to provide 1-hour Topic Mirror trial demo to potential buyers.
+    Automatically expires and revokes access exactly after 1 hour.
+    Usage: /mirrordemo <user_id>  (or /demomirror <user_id> / /adddemo <user_id>)
+    """
+    if len(message.command) >= 2:
+        try:
+            target_user_id = int(message.command[1])
+        except ValueError:
+            await message.reply_text("❌ **Invalid user ID.** Please provide a numeric user ID.\n\nUsage: `/mirrordemo <user_id>`")
+            return
+
+        user_mention = f"User (`{target_user_id}`)"
+        user_name = "User"
+        try:
+            user = await client.get_users(target_user_id)
+            if user:
+                user_mention = user.mention
+                user_name = user.first_name or "User"
+        except Exception:
+            pass
+
+        # Calculate exact 1 hour expiry
+        demo_seconds = 3600
+        expiry_time = datetime.datetime.utcnow() + datetime.timedelta(seconds=demo_seconds)
+        
+        await plans_db.add_mirror_premium(target_user_id, expiry_time)
+        
+        ist_now = datetime.datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%I:%M:%S %p")
+        expiry_ist = expiry_time.replace(tzinfo=pytz.utc).astimezone(pytz.timezone("Asia/Kolkata")).strftime("%I:%M:%S %p")
+
+        # Admin confirmation
+        admin_text = (
+            f"🎉 <b>TOPIC MIRROR 1-HOUR DEMO ACTIVATED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>User:</b> {user_mention}\n"
+            f"🆔 <b>ID:</b> <code>{target_user_id}</code>\n"
+            f"⏳ <b>Duration:</b> <code>1 Hour (Trial Demo)</code>\n"
+            f"📅 <b>Started:</b> <code>{ist_now}</code> (IST)\n"
+            f"⌛ <b>Auto-Expires At:</b> <code>{expiry_ist}</code> (IST)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Access will be revoked automatically in 1 hour.</i>"
+        )
+        await message.reply_text(admin_text, parse_mode=ParseMode.HTML)
+
+        # Direct notification to the user
+        user_notice = (
+            f"🎁 <b>CONGRATULATIONS! 1-HOUR TOPIC MIRROR DEMO UNLOCKED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👋 Hey <b>{user_name}</b>,\n"
+            f"You have been granted a <b>1-Hour Free Demo</b> of the <b>Topic Mirroring Plan</b>! 🎛️\n\n"
+            f"⚡ <b>Unlocked Demo Features:</b>\n"
+            f"• 📁 1-Click Supergroup Topic Cloning (/topicmirror / /mirror)\n"
+            f"• 🎯 Topic-to-Topic Direct Thread Syncing\n"
+            f"• 🔄 Auto Topic Creation & Mapping\n"
+            f"• 🚀 Zero-Bandwidth High Speed Copying\n\n"
+            f"⏳ <b>Trial Validity:</b> <code>1 Hour</code> (Expires at: <code>{expiry_ist}</code> IST)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🚀 <i>Send <code>/mirror</code> or <code>/topicmirror</code> in bot PM to test now!</i>"
+        )
+        try:
+            await client.send_message(
+                chat_id=target_user_id,
+                text=user_notice,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        except Exception as notify_err:
+            print(f"[MirrorDemo] Notice delivery failed: {notify_err}")
+    else:
+        await message.reply_text(
+            "🎁 **1-Hour Topic Mirror Demo Utility**\n\n"
+            "**Usage:** `/mirrordemo <user_id>`\n"
+            "**Example:** `/mirrordemo 123456789`\n\n"
+            "*(Grants 1 hour full Topic Mirror access and automatically removes access when the hour expires)*"
+        )
+
+
 @app.on_message(filters.command("remmirror") & filters.user(OWNER_ID))
 async def remove_mirror_premium_cmd(client, message):
     if len(message.command) == 2:
