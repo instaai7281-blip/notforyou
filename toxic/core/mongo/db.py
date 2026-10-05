@@ -450,7 +450,7 @@ async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_cha
 DEFAULT_GROUP_BIO = (
     "Don't DM to anyone ⚠️\n\n"
     "https://telegra.ph/Disclaimer-cum-DMCA-09-13-2\n\n"
-    "Contact: @CrazyxDeveloper_Bot"
+    "Contact: @CHOSEN_ONEx_bot"
 )
 
 async def get_custom_group_bio() -> str:
@@ -467,6 +467,23 @@ async def set_custom_group_bio(bio: str):
 async def reset_custom_group_bio():
     """Resets global group bio to default."""
     await db.delete_one({"_id": "global_group_bio"})
+
+
+DEFAULT_MAIN_CHANNEL_LINK = "https://t.me/+mMVhzHHfVcA4MDI1"
+
+async def get_main_channel_link() -> str:
+    """Retrieves custom configured main/force sub channel link from MongoDB, or default."""
+    try:
+        doc = await db.find_one({"_id": "global_main_channel_link"})
+        if doc and doc.get("link"):
+            return doc["link"]
+    except Exception:
+        pass
+    return DEFAULT_MAIN_CHANNEL_LINK
+
+async def set_main_channel_link(link: str):
+    """Sets custom global main/force sub channel link in MongoDB."""
+    await db.update_one({"_id": "global_main_channel_link"}, {"$set": {"link": link}}, upsert=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -22,7 +22,8 @@ from toxic import app
 from toxic.core.func import *
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import MONGO_DB, WEBSITE_URL, AD_API, LOG_GROUP  
+from config import MONGO_DB, WEBSITE_URL, AD_API, LOG_GROUP, OWNER_ID
+from toxic.core.mongo.db import get_main_channel_link, set_main_channel_link
 from pyrogram.types import Message
 
 tclient = AsyncIOMotorClient(MONGO_DB)
@@ -80,15 +81,22 @@ async def is_user_verified(user_id):
 async def token_handler(client, message):
     """Handle the /start command."""
     
+    main_channel_url = await get_main_channel_link()
+    
     # ---- GROUP / SUPERGROUP MESSAGE ----
     if message.chat.type in ["group", "supergroup"]:
-        
+        try:
+            bot_obj = await client.get_me()
+            bot_un = bot_obj.username or "YourBotUsername"
+        except Exception:
+            bot_un = "YourBotUsername"
+            
         group_btn = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🤖 Add Me to Your PM", url="https://t.me/YourBotUsername?start=grp")
+                InlineKeyboardButton("🤖 Add Me to Your PM", url=f"https://t.me/{bot_un}?start=grp")
             ],
             [
-                InlineKeyboardButton("📢 Main Channel", url="https://t.me/II_LevelUP_II")
+                InlineKeyboardButton("📢 Main Channel", url=main_channel_url)
             ]
         ])
 
@@ -101,12 +109,6 @@ async def token_handler(client, message):
         )
         return
     
-    """Handle the /start command."""
-    join = 0  # Skip force sub always
-    # join = await subscribe(client, message)
-    # if join == 1:
-    #     return
-
     user_id = message.chat.id
     try:
         from toxic.core.mongo.users_db import add_user
@@ -116,11 +118,11 @@ async def token_handler(client, message):
 
     if len(message.command) <= 1:
         image_url = "https://freeimage.host/i/F5dGOsj"
-        join_button = InlineKeyboardButton("✈️ Main Channel", url="https://t.me/II_LevelUP_II")
-        premium_contact = InlineKeyboardButton("👑 𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝", url="https://t.me/CrazyxDeveloper_Bot")
+        join_button = InlineKeyboardButton("✈️ Main Channel", url=main_channel_url)
+        developer_button = InlineKeyboardButton("⚡ 𝘾𝙧𝙖𝙯𝙮 𝘿𝙚𝙫𝙚𝙡𝙤𝙥𝙚𝙧 </\\>", url="https://t.me/CrazyxDeveloper_Bot")
         keyboard = InlineKeyboardMarkup([
             [join_button],
-            [premium_contact]
+            [developer_button]
         ])
 
         # Mention the user in the caption
@@ -288,5 +290,26 @@ async def sharelink_handler(client, message: Message):
         f"Click a button below 👇 share me with your friends!",
         reply_markup=reply_markup
     )
+
+
+# 🔗 Dynamic Main / Force Sub Channel Link Setter (Owner Only)
+@app.on_message(filters.command(["setmainchannel", "setfsub", "setchannel"]) & filters.user(OWNER_ID))
+async def set_main_channel_cmd(client, message: Message):
+    if len(message.command) < 2:
+        current_link = await get_main_channel_link()
+        await message.reply_text(
+            f"ℹ️ **Current Main Channel Link:**\n`{current_link}`\n\n"
+            f"**Usage:** `/setmainchannel <invite_link_or_channel_username>`\n"
+            f"**Example:** `/setmainchannel https://t.me/+mMVhzHHfVcA4MDI1`"
+        )
+        return
+    new_link = message.command[1].strip()
+    await set_main_channel_link(new_link)
+    await message.reply_text(
+        f"✅ **Main Channel Link updated successfully in database!**\n\n"
+        f"🔗 **New Link:** `{new_link}`\n\n"
+        f"<i>All start buttons now dynamically point to this new channel!</i>"
+    )
+
 
  
