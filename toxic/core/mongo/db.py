@@ -231,6 +231,80 @@ async def is_user_banned(user_id):
     x = await db.find_one({"_id": user_id})
     return x.get("banned", False) if x else False
 
+# ─── Dynamic Bot Admins Collection & In-Memory Sync ───
+admins_db = mongo.user_data.admins_collection
+BOT_ADMINS = set()
+
+async def load_all_admins():
+    global BOT_ADMINS
+    try:
+        cursor = admins_db.find({})
+        admins = set()
+        async for doc in cursor:
+            adm_id = doc.get("user_id") or doc.get("_id")
+            if adm_id:
+                try:
+                    admins.add(int(adm_id))
+                except ValueError:
+                    pass
+        BOT_ADMINS = admins
+        return BOT_ADMINS
+    except Exception as e:
+        print(f"[ERROR] Failed to load admins from MongoDB: {e}")
+        return BOT_ADMINS
+
+async def add_admin_db(user_id: int):
+    global BOT_ADMINS
+    user_id = int(user_id)
+    BOT_ADMINS.add(user_id)
+    await admins_db.update_one(
+        {"_id": user_id},
+        {"$set": {"user_id": user_id, "added_at": datetime.datetime.utcnow()}},
+        upsert=True
+    )
+
+async def remove_admin_db(user_id: int):
+    global BOT_ADMINS
+    user_id = int(user_id)
+    BOT_ADMINS.discard(user_id)
+    await admins_db.delete_one({"_id": user_id})
+    await admins_db.delete_one({"user_id": user_id})
+
+async def get_all_admins_db():
+    global BOT_ADMINS
+    if not BOT_ADMINS:
+        await load_all_admins()
+    return list(BOT_ADMINS)
+
+def is_admin_or_owner(user_id: int) -> bool:
+    from config import OWNER_ID
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    return (user_id in owner_list) or (user_id in BOT_ADMINS)
+
+def is_owner(user_id: int) -> bool:
+    from config import OWNER_ID
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    return user_id in owner_list
+
+from pyrogram import filters
+
+async def _admin_filter_func(_, __, update):
+    user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
+    if not user:
+        return False
+    return is_admin_or_owner(user.id)
+
+admin_filter = filters.create(_admin_filter_func)
+
+async def _owner_filter_func(_, __, update):
+    user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
+    if not user:
+        return False
+    return is_owner(user.id)
+
+owner_filter = filters.create(_owner_filter_func)
+
+
 # Collection for global broadcast configuration settings
 config_db = mongo.user_data.global_config
 

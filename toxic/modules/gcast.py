@@ -18,6 +18,7 @@ from pyrogram import filters
 from pyrogram.errors import FloodWait, InputUserDeactivated, UserIsBlocked, PeerIdInvalid
 from config import OWNER_ID
 from toxic import app
+from toxic.core.mongo.db import admin_filter
 from toxic.core.mongo.users_db import get_all_registered_users
 
 async def send_msg(user_id, message):
@@ -43,7 +44,7 @@ async def send_msg(user_id, message):
         return 500, f"{user_id} : {traceback.format_exc()}\n"
 
 
-@app.on_message(filters.command("gcast") & filters.user(OWNER_ID))
+@app.on_message(filters.command("gcast") & admin_filter)
 async def broadcast(_, message):
     if not message.reply_to_message:
         await message.reply_text("ʀᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ ɪᴛ.")
@@ -71,7 +72,7 @@ async def broadcast(_, message):
         )
 
 
-@app.on_message(filters.command("acast") & filters.user(OWNER_ID))
+@app.on_message(filters.command("acast") & admin_filter)
 async def announced(_, message):
     if not message.reply_to_message:
         return await message.reply_text("Reply To Some Post To Broadcast")

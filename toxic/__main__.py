@@ -192,14 +192,15 @@ async def devggn_boot():
     from toxic import restrict_bot
     await restrict_bot()
 
-    # Restore custom thumbnails from DB on startup
-    from toxic.core.mongo.db import load_all_thumbnails
+    # Restore custom thumbnails and dynamic admins from DB on startup
+    from toxic.core.mongo.db import load_all_thumbnails, load_all_admins
 
     from config import THUMBNAIL_DIR
     try:
         await load_all_thumbnails(THUMBNAIL_DIR)
+        await load_all_admins()
     except Exception as e:
-        print(f"Failed to load thumbnails: {e}")
+        print(f"Failed to load thumbnails/admins: {e}")
 
     for all_module in ALL_MODULES:
         importlib.import_module("toxic.modules." + all_module)

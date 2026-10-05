@@ -20,13 +20,22 @@ import asyncio
 from config import OWNER_ID
 from toxic.core.func import get_seconds
 from toxic.core.mongo import plans_db  
+from toxic.core.mongo.db import (
+    admin_filter,
+    owner_filter,
+    add_admin_db,
+    remove_admin_db,
+    get_all_admins_db,
+    is_owner,
+    is_admin_or_owner
+)
 from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 
 
 # -*- coding: utf-8 -*-
 
-@app.on_message(filters.command("rem") & filters.user(OWNER_ID))
+@app.on_message(filters.command("rem") & admin_filter)
 async def remove_premium(client, message):
     if len(message.command) == 2:
         try:
@@ -166,7 +175,7 @@ async def myplan(client, message):
     await message.reply_text("\n".join(status_lines))
 
 
-@app.on_message(filters.command("addmirror") & filters.user(OWNER_ID))
+@app.on_message(filters.command("addmirror") & admin_filter)
 async def give_mirror_premium_cmd_handler(client, message):
     if len(message.command) == 4:
         time_zone = datetime.datetime.now(pytz.timezone("Asia/Kolkata"))
@@ -238,11 +247,11 @@ async def give_mirror_premium_cmd_handler(client, message):
         await message.reply_text("Usage: `/addmirror user_id duration` (e.g. `/addmirror 123456789 1 month` or `30 days`)")
 
 
-# ─── 1-Hour Topic Mirror Demo Command (Hidden Owner Command) ───
-@app.on_message(filters.command(["mirrordemo", "demomirror", "adddemo"]) & filters.user(OWNER_ID))
+# ─── 1-Hour Topic Mirror Demo Command (Hidden Admin/Owner Command) ───
+@app.on_message(filters.command(["mirrordemo", "demomirror", "adddemo"]) & admin_filter)
 async def give_mirror_demo_cmd_handler(client, message):
     """
-    Hidden Owner command to provide 1-hour Topic Mirror trial demo to potential buyers.
+    Hidden Owner/Admin command to provide 1-hour Topic Mirror trial demo to potential buyers.
     Automatically expires and revokes access exactly after 1 hour.
     Usage: /mirrordemo <user_id>  (or /demomirror <user_id> / /adddemo <user_id>)
     """
@@ -319,17 +328,185 @@ async def give_mirror_demo_cmd_handler(client, message):
         )
 
 
+# ─── Dynamic Bot Admins Management (Owner Only) ───
+
+@app.on_message(filters.command(["addadmin", "promote", "newadmin"]) & owner_filter)
+async def add_admin_cmd_handler(client, message):
+    """Promotes a user to bot admin with full access to /admin commands. Owner only."""
+    if len(message.command) >= 2:
+        try:
+            target_user_id = int(message.command[1])
+        except ValueError:
+            await message.reply_text("❌ **Invalid User ID.** Please provide a numeric Telegram ID.\n\nUsage: `/addadmin <user_id>`")
+            return
+
+        user_mention = f"User (`{target_user_id}`)"
+        user_name = "User"
+        try:
+            target_user = await client.get_users(target_user_id)
+            if target_user:
+                user_mention = target_user.mention
+                user_name = target_user.first_name or "User"
+        except Exception:
+            pass
+
+        await add_admin_db(target_user_id)
+
+        admin_card = (
+            f"👑 <b>NEW BOT ADMIN APPOINTED</b> 👑\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Admin:</b> {user_mention}\n"
+            f"🆔 <b>User ID:</b> <code>{target_user_id}</code>\n"
+            f"📅 <b>Promoted By:</b> {message.from_user.mention if message.from_user else 'Owner'}\n"
+            f"⚡ <b>Permissions:</b> Full Access to <code>/admin</code> Commands\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Dynamic admin stored persistently in database.</i>"
+        )
+        image_url = "https://freeimage.host/i/n04TxVa"
+        try:
+            await message.reply_photo(photo=image_url, caption=admin_card, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply_text(admin_card, parse_mode=ParseMode.HTML)
+
+        # Send DM notification to the new admin
+        try:
+            await client.send_message(
+                chat_id=target_user_id,
+                text=(
+                    f"🎉 <b>CONGRATULATIONS! YOU ARE NOW A BOT ADMIN</b> 👑\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👋 Hey <b>{user_name}</b>,\n"
+                    f"You have been granted <b>Admin Privileges</b> by the Bot Owner!\n\n"
+                    f"⚡ <b>What you can do:</b>\n"
+                    f"• Issue 1-Hour Topic Mirror Demos (/mirrordemo)\n"
+                    f"• Add & Manage Topic Mirror Plans (/addmirror, /mirrorusers)\n"
+                    f"• Add & Manage Standard Premium Plans (/add, /rem, /check)\n"
+                    f"• Broadcast to users & groups (/gcast)\n"
+                    f"• Access the Admin Control Panel via <code>/admin</code>\n\n"
+                    f"🚀 <i>Send <code>/admin</code> in bot PM to view all available commands.</i>"
+                ),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        except Exception:
+            pass
+    else:
+        await message.reply_text(
+            "👑 **Add Bot Admin Utility (Owner Only)**\n\n"
+            "**Usage:** `/addadmin <user_id>`\n"
+            "**Example:** `/addadmin 123456789`\n\n"
+            "*(Promotes the specified user to bot admin with full `/admin` access)*"
+        )
+
+
+@app.on_message(filters.command(["remadmin", "demote", "deladmin", "removeadmin"]) & owner_filter)
+async def remove_admin_cmd_handler(client, message):
+    """Demotes / revokes a bot admin. Owner only."""
+    if len(message.command) >= 2:
+        try:
+            target_user_id = int(message.command[1])
+        except ValueError:
+            await message.reply_text("❌ **Invalid User ID.** Please provide a numeric Telegram ID.\n\nUsage: `/remadmin <user_id>`")
+            return
+
+        user_mention = f"User (`{target_user_id}`)"
+        try:
+            target_user = await client.get_users(target_user_id)
+            if target_user:
+                user_mention = target_user.mention
+        except Exception:
+            pass
+
+        await remove_admin_db(target_user_id)
+
+        demote_card = (
+            f"🗑️ <b>BOT ADMIN REMOVED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>User:</b> {user_mention}\n"
+            f"🆔 <b>User ID:</b> <code>{target_user_id}</code>\n"
+            f"❌ <b>Status:</b> Admin privileges revoked.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        image_url = "https://freeimage.host/i/n04TxVa"
+        try:
+            await message.reply_photo(photo=image_url, caption=demote_card, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply_text(demote_card, parse_mode=ParseMode.HTML)
+
+        # Notify user
+        try:
+            await client.send_message(
+                chat_id=target_user_id,
+                text="⚠️ <b>Notice:</b> Your Bot Admin privileges have been revoked by the Owner.",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
+    else:
+        await message.reply_text(
+            "🗑️ **Remove Bot Admin Utility (Owner Only)**\n\n"
+            "**Usage:** `/remadmin <user_id>`\n"
+            "**Example:** `/remadmin 123456789`"
+        )
+
+
+@app.on_message(filters.command(["admins", "adminlist", "listadmins"]) & admin_filter)
+async def list_admins_cmd_handler(client, message):
+    """Lists all owners and dynamic admins."""
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    dyn_admins = await get_all_admins_db()
+
+    text_lines = [
+        "👑 <b>BOT AUTHORIZED PERSONNEL LIST</b> 👑",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+        "⚡ <b>Primary Bot Owners (Config):</b>"
+    ]
+    for oid in owner_list:
+        try:
+            u = await client.get_users(oid)
+            mention = u.mention if u else f"Owner (`{oid}`)"
+        except Exception:
+            mention = f"Owner (`{oid}`)"
+        text_lines.append(f"• 👑 {mention} — <code>{oid}</code>")
+
+    text_lines.append("\n🛡️ <b>Promoted Bot Admins (Database):</b>")
+    if dyn_admins:
+        for aid in dyn_admins:
+            try:
+                u = await client.get_users(aid)
+                mention = u.mention if u else f"Admin (`{aid}`)"
+            except Exception:
+                mention = f"Admin (`{aid}`)"
+            text_lines.append(f"• 🛡️ {mention} — <code>{aid}</code>")
+    else:
+        text_lines.append("<i>No dynamic admins added yet. Use <code>/addadmin &lt;user_id&gt;</code> to promote admins.</i>")
+
+    text_lines.append(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    text_lines.append(f"📊 <b>Total Owners:</b> <code>{len(owner_list)}</code> | <b>Total Admins:</b> <code>{len(dyn_admins)}</code>")
+
+    image_url = "https://freeimage.host/i/n04TxVa"
+    full_text = "\n".join(text_lines)
+    try:
+        await message.reply_photo(photo=image_url, caption=full_text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.reply_text(full_text, parse_mode=ParseMode.HTML)
+
+
 # ─── Admin Help & Control Panel Command (Guarded: Owner/Admin Only) ───
-@app.on_message(filters.command(["admin", "adminhelp", "panel", "owner"]) & filters.user(OWNER_ID))
+@app.on_message(filters.command(["admin", "adminhelp", "panel", "owner"]) & admin_filter)
 async def admin_panel_cmd_handler(client, message):
     """
     Admin control panel command that displays all secret & admin commands.
-    Strictly restricted to OWNER_ID / Admins.
+    Restricted to Owner and Promoted Admins.
     """
     admin_text = (
         f"<blockquote>👑 <b>XTRACTOR PRO — ADMIN CONTROL PANEL</b> 👑</blockquote>\n\n"
         f"👋 <b>Welcome Admin / Owner!</b>\n"
         f"Here is your secret list of admin commands and their usages:\n\n"
+        f"<blockquote>👑 <b>OWNER EXCLUSIVE COMMANDS</b>\n"
+        f"• <code>/addadmin &lt;user_id&gt;</code> — Promote user to Bot Admin\n"
+        f"• <code>/remadmin &lt;user_id&gt;</code> — Demote / revoke Bot Admin\n"
+        f"• <code>/admins</code> — List all active bot owners & admins</blockquote>\n\n"
         f"<blockquote>🎁 <b>1-HOUR TRIAL DEMO (HIDDEN)</b>\n"
         f"• <code>/mirrordemo &lt;user_id&gt;</code> — Give 1-hour Topic Mirror trial demo (auto-expires in 60m)\n"
         f"• <i>Aliases:</i> <code>/demomirror</code>, <code>/adddemo</code></blockquote>\n\n"
@@ -368,7 +545,7 @@ async def admin_panel_cmd_handler(client, message):
         await message.reply_text(admin_text, parse_mode=ParseMode.HTML)
 
 
-@app.on_message(filters.command("remmirror") & filters.user(OWNER_ID))
+@app.on_message(filters.command("remmirror") & admin_filter)
 async def remove_mirror_premium_cmd(client, message):
     if len(message.command) == 2:
         try:
@@ -396,7 +573,7 @@ async def remove_mirror_premium_cmd(client, message):
         await message.reply_text("Usage: `/remmirror user_id`")
 
 
-@app.on_message(filters.command("checkmirror") & filters.user(OWNER_ID))
+@app.on_message(filters.command("checkmirror") & admin_filter)
 async def check_mirror_premium_cmd(client, message):
     if len(message.command) == 2:
         try:
@@ -583,7 +760,7 @@ async def build_single_mirror_user_panel(client, user_id: int, page: int = 1):
     return text, kb
 
 
-@app.on_message(filters.command(["mirrorusers", "musers", "manage_mirror"]) & filters.user(OWNER_ID))
+@app.on_message(filters.command(["mirrorusers", "musers", "manage_mirror"]) & admin_filter)
 async def mirror_users_manager_cmd(client, message):
     text, kb = await build_mirror_users_panel(client, page=1)
     await message.reply_text(text, reply_markup=kb)
@@ -592,8 +769,7 @@ async def mirror_users_manager_cmd(client, message):
 @app.on_callback_query(filters.regex(r"^muser_"))
 async def mirror_users_callback_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    if not any(str(user_id) == str(o) for o in owner_list):
+    if not is_admin_or_owner(user_id):
         await query.answer("❌ Access Denied!", show_alert=True)
         return
 
@@ -689,7 +865,7 @@ async def mirror_users_callback_handler(client: Client, query: CallbackQuery):
         
 
 
-@app.on_message(filters.command("check") & filters.user(OWNER_ID))
+@app.on_message(filters.command("check") & admin_filter)
 async def get_premium(client, message):
     if len(message.command) == 2:
         try:
@@ -740,7 +916,7 @@ async def get_premium(client, message):
         await message.reply_text("Usage: `/check user_id`")
 
 
-@app.on_message(filters.command("add") & filters.user(OWNER_ID))
+@app.on_message(filters.command("add") & admin_filter)
 async def give_premium_cmd_handler(client, message):
     if len(message.command) == 4:
         time_zone = datetime.datetime.now(pytz.timezone("Asia/Kolkata"))
@@ -952,7 +1128,7 @@ async def premium_remover():
     return removed_users, not_removed_users
 
 
-@app.on_message(filters.command("freez") & filters.user(OWNER_ID))
+@app.on_message(filters.command("freez") & admin_filter)
 async def refresh_users(_, message):
     removed_users, not_removed_users = await premium_remover()
     # Create a summary message
@@ -968,7 +1144,7 @@ async def refresh_users(_, message):
 # Admin Administration: Clear Premium, Ban, and Unban features
 from toxic.core.mongo.db import is_user_banned, ban_user, unban_user
 
-@app.on_message(filters.command("clearpremium") & filters.user(OWNER_ID))
+@app.on_message(filters.command("clearpremium") & admin_filter)
 async def clear_all_premium_cmd(client, message):
     try:
         await plans_db.db.delete_many({})
@@ -976,7 +1152,7 @@ async def clear_all_premium_cmd(client, message):
     except Exception as e:
         await message.reply_text(f"❌ **Failed to clear premium users:** `{e}`")
 
-@app.on_message(filters.command("ban") & filters.user(OWNER_ID))
+@app.on_message(filters.command("ban") & admin_filter)
 async def ban_user_cmd(client, message):
     if len(message.command) == 2:
         try:
@@ -1001,7 +1177,7 @@ async def ban_user_cmd(client, message):
     else:
         await message.reply_text("Usage: `/ban user_id`")
 
-@app.on_message(filters.command("unban") & filters.user(OWNER_ID))
+@app.on_message(filters.command("unban") & admin_filter)
 async def unban_user_cmd(client, message):
     if len(message.command) == 2:
         try:
@@ -1021,8 +1197,8 @@ async def check_banned_user(client, message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id:
         return
-    # Exclude OWNER_ID from ban checks
-    if user_id in OWNER_ID:
+    # Exclude OWNER_ID and Admins from ban checks
+    if is_admin_or_owner(user_id):
         return
     if await is_user_banned(user_id):
         await message.reply_text("❌ **You are banned from using this bot.**\n\n💬 Please contact the admin to unban.")
@@ -1032,7 +1208,7 @@ async def check_banned_user(client, message):
 @app.on_callback_query(group=-1)
 async def check_banned_user_callback(client, query):
     user_id = query.from_user.id
-    if user_id in OWNER_ID:
+    if is_admin_or_owner(user_id):
         return
     if await is_user_banned(user_id):
         await query.answer("❌ You are banned from using this bot. Contact admin to unban.", show_alert=True)
@@ -1040,7 +1216,7 @@ async def check_banned_user_callback(client, query):
 
 
 # ────── TOXIC_ID Security Management Commands (Owner Only) ──────
-@app.on_message(filters.command("addtoxic") & filters.user(OWNER_ID))
+@app.on_message(filters.command("addtoxic") & owner_filter)
 async def add_toxic_cmd(client, message):
     if len(message.command) < 2:
         await message.reply_text("⚠️ **Usage:** `/addtoxic <KEY_NAME>`\n\nExample: `/addtoxic TOXIC-PRO-998877`")
@@ -1049,7 +1225,7 @@ async def add_toxic_cmd(client, message):
     await plans_db.add_toxic_id(key)
     await message.reply_text(f"✅ **TOXIC_ID Authorized Successfully!**\n\n🔑 **Key:** `{key}`\n\nAny bot container with `TOXIC_ID={key}` can now run!")
 
-@app.on_message(filters.command("remtoxic") & filters.user(OWNER_ID))
+@app.on_message(filters.command("remtoxic") & owner_filter)
 async def rem_toxic_cmd(client, message):
     if len(message.command) < 2:
         await message.reply_text("⚠️ **Usage:** `/remtoxic <KEY_NAME>`")
@@ -1058,7 +1234,7 @@ async def rem_toxic_cmd(client, message):
     await plans_db.remove_toxic_id(key)
     await message.reply_text(f"❌ **TOXIC_ID Revoked Successfully!**\n\n🔑 **Key:** `{key}`\n\nContainers running with this key will fail security check!")
 
-@app.on_message(filters.command("checktoxic") & filters.user(OWNER_ID))
+@app.on_message(filters.command("checktoxic") & owner_filter)
 async def check_toxic_cmd(client, message):
     from config import MASTER_TOXIC_ID
     from pyrogram.enums import ParseMode

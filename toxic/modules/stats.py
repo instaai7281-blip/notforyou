@@ -20,6 +20,7 @@ import motor
 from toxic import app
 from pyrogram import filters
 from config import OWNER_ID
+from toxic.core.mongo.db import admin_filter
 from toxic.core.mongo.users_db import get_users, add_user, get_user, get_all_registered_users
 from toxic.core.mongo.plans_db import premium_users
 from pyrogram.types import Message
@@ -101,7 +102,7 @@ def time_formatter():
         return "0 s"
 
 
-@app.on_message(filters.command("stats") & filters.user(OWNER_ID))
+@app.on_message(filters.command("stats") & admin_filter)
 async def stats(client, message):
     start = time.time()
     users = len(await get_all_registered_users())
@@ -135,8 +136,8 @@ from pyrogram.enums import ParseMode
 # PAGINATION CONFIG
 PREMIUM_USERS_PER_PAGE = 8
 
-# /getusers command — OWNER only, private chat
-@app.on_message(filters.command("getusers") & filters.user(OWNER_ID) & filters.private)
+# /getusers command — Admin/OWNER only, private chat
+@app.on_message(filters.command("getusers") & admin_filter & filters.private)
 async def getusers_paginated(client, message: Message):
     await show_premium_users_page(client, message.chat.id, page=0)
 
@@ -210,7 +211,7 @@ async def show_premium_users_page(client, chat_id, page=0, message_to_edit=None)
 
 
 # Callback Query Handler for Premium Users Page
-@app.on_callback_query(filters.regex(r"^p_page_(\d+)$") & filters.user(OWNER_ID))
+@app.on_callback_query(filters.regex(r"^p_page_(\d+)$") & admin_filter)
 async def handle_p_page_callback(client, query: CallbackQuery):
     page = int(query.matches[0].group(1))
     await show_premium_users_page(client, query.message.chat.id, page, query.message)
@@ -218,7 +219,7 @@ async def handle_p_page_callback(client, query: CallbackQuery):
 
 
 # Callback Query Handler to Manage a Specific Premium User
-@app.on_callback_query(filters.regex(r"^manage_p_(\d+)_(\d+)$") & filters.user(OWNER_ID))
+@app.on_callback_query(filters.regex(r"^manage_p_(\d+)_(\d+)$") & admin_filter)
 async def manage_p_user_callback(client, query: CallbackQuery):
     user_id = int(query.matches[0].group(1))
     page = int(query.matches[0].group(2))
@@ -281,7 +282,7 @@ async def manage_p_user_callback(client, query: CallbackQuery):
 
 
 # Callback Query Handler to Extend Premium
-@app.on_callback_query(filters.regex(r"^extend_p_(\d+)_(\d+)_(\d+)$") & filters.user(OWNER_ID))
+@app.on_callback_query(filters.regex(r"^extend_p_(\d+)_(\d+)_(\d+)$") & admin_filter)
 async def extend_p_user_callback(client, query: CallbackQuery):
     user_id = int(query.matches[0].group(1))
     days_to_add = int(query.matches[0].group(2))
@@ -324,7 +325,7 @@ async def extend_p_user_callback(client, query: CallbackQuery):
 
 
 # Callback Query Handler to Revoke Premium
-@app.on_callback_query(filters.regex(r"^revoke_p_(\d+)_(\d+)$") & filters.user(OWNER_ID))
+@app.on_callback_query(filters.regex(r"^revoke_p_(\d+)_(\d+)$") & admin_filter)
 async def revoke_p_user_callback(client, query: CallbackQuery):
     user_id = int(query.matches[0].group(1))
     page = int(query.matches[0].group(2))
