@@ -54,7 +54,7 @@ async def start_cmd(client, message: Message):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📁 Topic Mirror Hub", callback_data="tm_hub"), InlineKeyboardButton("🔗 Link Mirror", callback_data="tm_topiclink")],
         [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("⚙️ Settings", callback_data="back_to_main")],
-        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
 
     image_url = "https://freeimage.host/i/n7cbXDX"
@@ -231,7 +231,7 @@ async def terms(client, message):
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
     await message.reply_text(terms_text, reply_markup=buttons)
@@ -268,7 +268,7 @@ async def plan(client, message):
    
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
             [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
         ]
     )
@@ -300,7 +300,7 @@ async def see_plan(client, callback_query):
      
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
             [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
         ]
     )
@@ -320,7 +320,7 @@ async def see_terms(client, callback_query):
     buttons = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")],
+            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
     await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
@@ -376,7 +376,7 @@ async def guide_command(_, message: Message):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📁 Topic Mirror Guide ➡️", callback_data="guide_page_2")],
         [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
-        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
     image_url = "https://freeimage.host/i/n7cbXDX"
     try:
@@ -415,7 +415,7 @@ async def guide_page_1(_, query: CallbackQuery):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📁 Topic Mirror Guide ➡️", callback_data="guide_page_2")],
         [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
-        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
     try:
         await query.message.edit_caption(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
@@ -445,7 +445,7 @@ async def guide_page_2(_, query: CallbackQuery):
     )
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Restricted Guide", callback_data="guide_page_1"), InlineKeyboardButton("Extra Features ➡️", callback_data="guide_page_3")],
-        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
     try:
         await query.message.edit_caption(guide_p2_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
@@ -476,7 +476,7 @@ async def guide_page_3(_, query: CallbackQuery):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Topic Mirror Guide", callback_data="guide_page_2")],
         [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Terms & Conditions", callback_data="see_terms")],
-        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
     try:
         await query.message.edit_caption(guide_p3_text, reply_markup=buttons, parse_mode=ParseMode.HTML)

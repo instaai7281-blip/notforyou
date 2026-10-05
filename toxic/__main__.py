@@ -56,7 +56,7 @@ async def daily_plans_broadcast_task():
         buttons = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-                [InlineKeyboardButton("💬 Contact Now", url="https://t.me/SRC_PRO_BOT")],
+                [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CrazyxDeveloper_Bot")],
             ]
         )
         

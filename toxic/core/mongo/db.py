@@ -450,7 +450,7 @@ async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_cha
 DEFAULT_GROUP_BIO = (
     "Don't DM to anyone ⚠️\n\n"
     "https://telegra.ph/Disclaimer-cum-DMCA-09-13-2\n\n"
-    "Contact: @CHOSEN_ONEx_bot"
+    "Contact: @CrazyxDeveloper_Bot"
 )
 
 async def get_custom_group_bio() -> str:
@@ -518,4 +518,4 @@ async def reset_link_mirror_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, t
     try:
         await link_mirror_db.delete_one({"_id": _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id)})
     except Exception:
-        pass
+        pass

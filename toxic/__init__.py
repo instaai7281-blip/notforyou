@@ -179,7 +179,7 @@ async def restrict_bot():
         print(f"   Provided TOXIC_ID: '{TOXIC_ID}'")
         print("🛡️ This bot repository is protected. You need a valid TOXIC_ID key")
         print("   provided by the Bot Owner to deploy or run this codebase.")
-        print("💬 Contact Admin @CHOSEN_ONEx_bot to request authorization.")
+        print("💬 Contact Admin @CrazyxDeveloper_Bot to request authorization.")
         print("=" * 65 + "\n")
         sys.exit(1)
     else:

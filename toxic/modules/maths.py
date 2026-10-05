@@ -4,7 +4,7 @@ from toxic import app, sex
 from telethon import functions
 from telethon.tl.types import InputRichMessageMarkdown
 
-SIGNATURE = "\n\n---\n🛡️ **Owner:** [𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝](https://t.me/CHOSEN_ONEx_bot)"
+SIGNATURE = "\n\n---\n🛡️ **Owner:** [𝗖𝗛𝗢𝗦𝗘𝗡 𝗢𝗡𝗘 ⚝](https://t.me/CrazyxDeveloper_Bot)"
 
 START_TEXT = r"""
 # 🎓 Ultimate Study & Math Reference Bot

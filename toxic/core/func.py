@@ -68,7 +68,7 @@ async def subscribe(app, message):
             await message.reply_text(
                 "<blockquote><b>❌ ACCESS BANNED</b></blockquote>\n\n"
                 "You are banned from using this bot.\n"
-                "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot",
+                "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot",
                 parse_mode=enums.ParseMode.HTML
             )
             return 1
@@ -88,7 +88,7 @@ async def subscribe(app, message):
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Join Official Channel", url=f"{url}")],
             [InlineKeyboardButton("🔄 Check Access / Try Again", callback_data="check_subscription")],
-            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CHOSEN_ONEx_bot")]
+            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
         ])
         photo_url = "https://freeimage.host/i/n7cbXDX"
         try:

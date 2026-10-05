@@ -1893,7 +1893,7 @@ def get_telethon_settings_buttons(user_id):
         [Button.inline("📄 Set PDF Watermark", b'setpdfwatermark'), Button.inline("🗑️ Remove PDF Watermark", b'rempdfwatermark')],
         [Button.inline("📤 Upload Method", b'uploadmethod'), Button.inline(f"🌶️ Spoiler: {'ON' if is_spoiler else 'OFF'}", b'togglespoiler')],
         [Button.inline("♻️ Reset All Settings ☢️", b'reset'), Button.inline("⛔ Logout", b'logout')],
-        [Button.url("💞 Contact Owner 🦋", "https://t.me/CHOSEN_ONEx_bot")]
+        [Button.url("💞 Contact Owner 🦋", "https://t.me/CrazyxDeveloper_Bot")]
     ]
 
 async def send_settings_message(chat_id, user_id):
@@ -2063,7 +2063,7 @@ async def callback_query_handler(event):
             [Button.inline(f"🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝ v1 ⚡{pyrogram_check}", b'pyrogram')],
             [Button.inline(f"⚠️ Coming soon V2 {telethon_check}", b'telethon')]
         ]
-        await event.edit("Choose your preferred upload method:\n\n__**Note:** **🖤 Xᴛʀᴀᴄᴛᴏʀ Bᴏᴛ ⚝ v2 ⚡**, built on Telethon(base), by @CHOSEN_ONEx_bot still in beta.__", buttons=buttons)
+        await event.edit("Choose your preferred upload method:\n\n__**Note:** **🖤 Xᴛʀᴀᴄᴛᴏʀ Bᴏᴛ ⚝ v2 ⚡**, built on Telethon(base), by @CrazyxDeveloper_Bot still in beta.__", buttons=buttons)
 
     elif event.data == b'pyrogram':
         save_user_upload_method(user_id, "Pyrogram")
@@ -2314,7 +2314,7 @@ async def handle_large_file(file, sender, edit, caption):
         if freecheck == 1:
             reply_markup = InlineKeyboardMarkup(
                 [
-                    [InlineKeyboardButton("💎 Get Premium to Forward", url="https://t.me/CHOSEN_ONEx_bot")]
+                    [InlineKeyboardButton("💎 Get Premium to Forward", url="https://t.me/CrazyxDeveloper_Bot")]
                 ]
             )
             await app.copy_message(

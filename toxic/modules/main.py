@@ -492,7 +492,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             buttons = InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-                    [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CHOSEN_ONEx_bot")],
+                    [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CrazyxDeveloper_Bot")],
                 ]
             )
             await app.send_message(user_id, upgrade_msg, reply_markup=buttons)

@@ -2286,9 +2286,9 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
             "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
             "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
-            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
@@ -2391,9 +2391,9 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
             "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
@@ -2426,7 +2426,7 @@ async def run_single_link_mirror(
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CHOSEN_ONEx_bot to purchase access.</blockquote>"
+            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CrazyxDeveloper_Bot to purchase access.</blockquote>"
         )
         if status_msg:
             try:
@@ -2712,9 +2712,9 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
             "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
@@ -3082,9 +3082,9 @@ async def topic_mirror_cmd(client, message):
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
             "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
             "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
-            "💬 <b>Contact Admin:</b> @CHOSEN_ONEx_bot to purchase or upgrade your plan!</blockquote>"
+            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
         await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
 
@@ -3112,9 +3112,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
             "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CHOSEN_ONEx_bot to purchase access.</blockquote>"
+            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CrazyxDeveloper_Bot to purchase access.</blockquote>"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CHOSEN_ONEx_bot")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
         if status_msg:
             try:
                 await status_msg.edit(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
