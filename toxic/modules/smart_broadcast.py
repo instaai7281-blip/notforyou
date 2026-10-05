@@ -139,12 +139,18 @@ async def sync_all_broadcast_destinations():
         print(f"[SmartBroadcast Sync] Sync error: {err}")
 
 
+_last_dest_sync_time = 0
+
 async def get_sb_destinations(cfg: dict = None):
+    global _last_dest_sync_time
     if cfg is None:
         cfg = await get_sb_config()
 
-    # Auto-sync destinations from all DBs & dialogs first
-    await sync_all_broadcast_destinations()
+    # Non-blocking background sync (throttled to once every 10 minutes)
+    now = time.time()
+    if now - _last_dest_sync_time > 600:
+        _last_dest_sync_time = now
+        asyncio.create_task(sync_all_broadcast_destinations())
 
     allowed_types = []
     if cfg.get("enable_groups", True):
