@@ -64,7 +64,7 @@ async def remove_premium(client, message):
                 await tokens_col.delete_one({"user_id": user_id})
 
             await message.reply_text(
-                f"⚙️ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ⚙️\n"
+                f"⚙️ ⚡ **XTRACTOR BOT PRO** ⚡ ⚙️\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🗑️ **PREMIUM ACCESS REVOKED**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -80,8 +80,8 @@ async def remove_premium(client, message):
                         f"⚠️ **NOTICE: PREMIUM EXPIRED/TERMINATED** ⚠️\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"Hello, your premium subscription or token session for \n"
-                        f"🖤 **Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝** has been terminated or expired.\n\n"
-                        f"💬 If you think this is a mistake or wish to renew, please contact the owner.\n"
+                        f"⚡ **Xtractor Bot Pro** ⚡ has been terminated or expired.\n\n"
+                        f"💬 If you think this is a mistake or wish to renew, please contact @CrazyxDeveloper_Bot.\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     )
                 )
@@ -92,7 +92,7 @@ async def remove_premium(client, message):
             await plans_db.remove_premium(user_id)
             await tokens_col.delete_one({"user_id": user_id})
             await message.reply_text(
-                f"⚙️ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ⚙️\n"
+                f"⚙️ ⚡ **XTRACTOR BOT PRO** ⚡ ⚙️\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🧹 **FORCE CLEANED**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -119,7 +119,7 @@ async def myplan(client, message):
     current_time = datetime.datetime.now(pytz.timezone("Asia/Kolkata"))
     
     status_lines = [
-        f"✨ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ✨",
+        f"✨ ⚡ **XTRACTOR BOT PRO** ⚡ ✨",
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         f"👑 **YOUR SUBSCRIPTION STATUS** 👑",
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -196,7 +196,7 @@ async def give_mirror_premium_cmd_handler(client, message):
             expiry = data.get("expire_date")   
             expiry_str_in_ist = expiry.astimezone(pytz.timezone("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M:%S %p")         
             await message.reply_text(
-                f"✨ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ✨\n"
+                f"✨ ⚡ **XTRACTOR BOT PRO** ⚡ ✨\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🎛️ **TOPIC MIRROR PLAN ACTIVATED** 🎛️\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -591,7 +591,7 @@ async def get_premium(client, message):
             
             time_left_str = f"{days} days, {hours} hours, {minutes} minutes"
             await message.reply_text(
-                f"🔍 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 🔍\n"
+                f"🔍 ⚡ **XTRACTOR BOT PRO** ⚡ 🔍\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"👑 **PREMIUM USER DETAILS** 👑\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -640,7 +640,7 @@ async def give_premium_cmd_handler(client, message):
             expiry = data.get("expire_date")   
             expiry_str_in_ist = expiry.astimezone(pytz.timezone("Asia/Kolkata")).strftime("%d-%m-%Y %I:%M:%S %p")         
             await message.reply_text(
-                f"✨ 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 ✨\n"
+                f"✨ ⚡ **XTRACTOR BOT PRO** ⚡ ✨\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🌟 **PREMIUM ACCESS ACTIVATED** 🌟\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -660,7 +660,7 @@ async def give_premium_cmd_handler(client, message):
                         f"🎉 **CONGRATULATIONS! PREMIUM ACTIVATED** 🎉\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"👋 Hey {user_name},\n"
-                        f"Thank you for supporting 🖤 **Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝**!\n"
+                        f"Thank you for supporting ⚡ **Xtractor Bot Pro** ⚡!\n"
                         f"Your account has been upgraded to Premium status. Enjoy! 👑\n\n"
                         f"⚡ **BENEFITS ACTIVATED:**\n"
                         f"  • Max download & upload speed 🚀\n"
@@ -727,7 +727,7 @@ async def transfer_premium(client, message):
             current_time = time_zone.strftime("%d-%m-%Y %I:%M:%S %p")
             
             await message.reply_text(
-                f"🔄 🖤 **𝗦𝗧𝗢𝗟𝗘𝗡 𝗛𝗔𝗣𝗣𝗜𝗡𝗘𝗦𝗦** 🖤 🔄\n"
+                f"🔄 ⚡ **XTRACTOR BOT PRO** ⚡ 🔄\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🔄 **PREMIUM PLAN TRANSFERRED**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -785,8 +785,8 @@ async def premium_remover():
                                 f"⚠️ **NOTICE: PREMIUM EXPIRED** ⚠️\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                 f"Hello {name},\n"
-                                f"Your subscription for 🖤 **Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝** has expired.\n\n"
-                                f"Thank you for being with us! If you wish to renew, please contact the owner.\n"
+                                f"Your subscription for ⚡ **Xtractor Bot Pro** ⚡ has expired.\n\n"
+                                f"Thank you for being with us! If you wish to renew, please contact @CrazyxDeveloper_Bot.\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
                         )

@@ -349,7 +349,7 @@ async def revoke_p_user_callback(client, query: CallbackQuery):
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Hello, your premium subscription or token session for \n"
                 f"🖤 **Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝** has been terminated or expired.\n\n"
-                f"💬 If you think this is a mistake or wish to renew, please contact the owner.\n"
+                f"💬 If you think this is a mistake or wish to renew, please contact @CrazyxDeveloper_Bot.\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
         )
