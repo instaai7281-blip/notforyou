@@ -1,26 +1,15 @@
 # ---------------------------------------------------
 # File Name: login.py
-# Description: A Pyrogram bot for downloading files from Telegram channels or groups 
-#              and uploading them back to Telegram.
-# Author: Gagan
-
-
-
-# Created: 2025-01-11
-# Last Modified: 2025-01-11
-# Version: 2.0.5
-# License: MIT License
+# Description: Interactive Userbot Authentication & Session Management Module
 # ---------------------------------------------------
 
-from pyrogram import filters, Client
-from toxic import app
-import random
 import os
-import asyncio
+import random
 import string
-from toxic.core.mongo import db
-from toxic.core.func import subscribe, chk_user
-from config import API_ID as api_id, API_HASH as api_hash
+import asyncio
+from pyrogram import filters, Client
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
+from pyrogram.enums import ParseMode
 from pyrogram.errors import (
     ApiIdInvalid,
     PhoneNumberInvalid,
@@ -31,11 +20,18 @@ from pyrogram.errors import (
     FloodWait
 )
 
+from toxic import app
+from toxic.core.mongo import db
+from toxic.core.func import subscribe, chk_user
+from config import API_ID as api_id, API_HASH as api_hash
+
+
 def generate_random_name(length=7):
     characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))  # Editted ... 
+    return ''.join(random.choice(characters) for _ in range(length))
 
-async def delete_session_files(user_id):
+
+async def delete_session_files(user_id: int) -> bool:
     session_file = f"session_{user_id}.session"
     memory_file = f"session_{user_id}.session-journal"
 
@@ -43,95 +39,290 @@ async def delete_session_files(user_id):
     memory_file_exists = os.path.exists(memory_file)
 
     if session_file_exists:
-        os.remove(session_file)
-    
+        try:
+            os.remove(session_file)
+        except Exception:
+            pass
+
     if memory_file_exists:
-        os.remove(memory_file)
+        try:
+            os.remove(memory_file)
+        except Exception:
+            pass
 
-    # Delete session from the database
-    if session_file_exists or memory_file_exists:
-        await db.remove_session(user_id)
-        return True  # Files were deleted
-    return False  # No files found
-
-@app.on_message(filters.command("logout"))
-async def clear_db(client, message):
-    user_id = message.chat.id
-    files_deleted = await delete_session_files(user_id)
     try:
-        await db.remove_session(user_id)
+        from toxic.core.mongo.db import db as user_data_db
+        await user_data_db.update_one({"_id": user_id}, {"$unset": {"session": ""}})
     except Exception:
         pass
 
-    if files_deleted:
-        await message.reply("✅ Your session data and files have been cleared from memory and disk.")
+    try:
+        from toxic.modules.topic_mirror import userbot_sessions
+        ub = userbot_sessions.pop(user_id, None)
+        if ub:
+            try:
+                await ub.stop()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return True
+
+
+def get_login_status_keyboard(is_logged_in: bool):
+    if is_logged_in:
+        buttons = [
+            [
+                InlineKeyboardButton("🔄 Switch / Re-Login Account", callback_data="login_relogin"),
+                InlineKeyboardButton("🚪 Logout Session", callback_data="login_logout_cb")
+            ],
+            [
+                InlineKeyboardButton("❌ Close Panel", callback_data="login_close_cb")
+            ]
+        ]
     else:
-        await message.reply("✅ Logged out with flag -m")
-        
+        buttons = [
+            [
+                InlineKeyboardButton("📲 Start Userbot Login", callback_data="login_start_cb")
+            ],
+            [
+                InlineKeyboardButton("❌ Close Panel", callback_data="login_close_cb")
+            ]
+        ]
+    return InlineKeyboardMarkup(buttons)
+
+
+@app.on_message(filters.command(["logout", "clear_session"]))
+async def clear_db(client, message: Message):
+    user_id = message.chat.id
+    await delete_session_files(user_id)
     
-@app.on_message(filters.command("login"))
-async def generate_session(_, message):
-    joined = await subscribe(_, message)
+    logout_text = (
+        "🚪 <b>LOGOUT SUCCESSFUL!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "✅ Your Telegram Userbot session string and temporary files have been permanently cleared from memory and disk.\n\n"
+        "<i>Use <code>/login</code> anytime to authenticate a new account session!</i>"
+    )
+    await message.reply_text(logout_text, parse_mode=ParseMode.HTML)
+
+
+@app.on_message(filters.command(["login", "myaccount", "account"]))
+async def generate_session(client, message: Message):
+    user_id = message.chat.id
+
+    joined = await subscribe(client, message)
     if joined == 1:
         return
-        
-    # user_checked = await chk_user(message, message.from_user.id)
-    # if user_checked == 1:
-        # return
-        
-    user_id = message.chat.id   
+
+    # Check if user is already logged in
+    user_data = await db.get_data(user_id) or {}
+    session_string = user_data.get("session")
+
+    if session_string:
+        status_card = (
+            "📱 <b>USERBOT ACCOUNT CONTROL PANEL</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+            "⚡ <b>Session Status:</b> <code>CONNECTED & ACTIVE ✅</code>\n"
+            "🛡️ <b>Database Security:</b> <code>Encrypted Session String</code>\n\n"
+            "ℹ️ <i>Your Userbot session is active and ready to access private/restricted source channels for cloning!</i>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Use the control buttons below to manage your account session:"
+        )
+        await message.reply_text(
+            status_card,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_login_status_keyboard(is_logged_in=True)
+        )
+        return
+
+    # If not logged in, proceed to login flow directly
+    await start_login_flow(client, user_id, message)
+
+
+@app.on_callback_query(filters.regex(r"^login_(relogin|start_cb|logout_cb|close_cb)$"))
+async def login_callback_handler(client, query: CallbackQuery):
+    user_id = query.from_user.id
+    data = query.data
+
+    if data == "login_close_cb":
+        await query.message.delete()
+        return
+
+    if data == "login_logout_cb":
+        await delete_session_files(user_id)
+        await query.answer("🚪 Session logged out successfully!", show_alert=True)
+        logout_card = (
+            "🚪 <b>USERBOT LOGGED OUT</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ Your session string has been deleted.\n\n"
+            "Click below to login a new account anytime:"
+        )
+        await query.message.edit_text(
+            logout_card,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_login_status_keyboard(is_logged_in=False)
+        )
+        return
+
+    if data in ("login_relogin", "login_start_cb"):
+        await query.answer("🚀 Starting Userbot Login...")
+        await query.message.delete()
+        await start_login_flow(client, user_id, query.message)
+
+
+async def start_login_flow(client, user_id: int, message_or_query):
+    """Interactive 3-Step Userbot Authentication Flow with Clean UI Cards."""
     
+    # Step 1: Phone Number Prompt
+    prompt_1_text = (
+        "📱 <b>USERBOT ACCOUNT AUTHENTICATION</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📥 <b>Step 1 of 3 — Phone Number</b>\n"
+        "<i>Send your Telegram account phone number with international country code.</i>\n\n"
+        "📌 <b>Example:</b> <code>+919876543210</code> or <code>+19876543210</code>\n\n"
+        "⚠️ <b>Tip:</b> <i>Use a secondary or extra Telegram account for restricted content cloning.</i>\n\n"
+        "❌ Send <code>/cancel</code> to abort authentication."
+    )
+
     try:
-        number = await _.ask(user_id, 'Please enter your phone number with the country code. \nExample: +19876543210\n\n ⚠️ Use Extra Telegram Account (Number) For Login', filters=filters.text, timeout=300)
+        number = await client.ask(
+            user_id,
+            prompt_1_text,
+            filters=filters.text,
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
     except Exception:
-        await message.reply('⏰ Time limit exceeded. Please restart the session using /login.')
+        await app.send_message(user_id, "⏱ <b>Prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
         return
-    phone_number = number.text
+
+    if not number or number.text == "/cancel":
+        await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    phone_number = number.text.strip()
+
+    sending_msg = await app.send_message(user_id, "📲 <b>Connecting to Telegram servers & sending OTP...</b>", parse_mode=ParseMode.HTML)
+    
+    ub_client = Client(f"session_{user_id}", api_id, api_hash, max_concurrent_transmissions=16)
+
     try:
-        await message.reply("📲 Sending OTP...")
-        client = Client(f"session_{user_id}", api_id, api_hash, max_concurrent_transmissions=16)
-        
-        await client.connect()
+        await ub_client.connect()
     except Exception as e:
-        await message.reply(f"❌ Failed to send OTP {e}. Please wait and try again later.")
+        await sending_msg.edit(f"❌ <b>Connection failed:</b> `{e}`\n\nPlease wait a moment and try again using <code>/login</code>.", parse_mode=ParseMode.HTML)
         return
+
     try:
-        code = await client.send_code(phone_number)
+        code = await ub_client.send_code(phone_number)
     except ApiIdInvalid:
-        await message.reply('❌ Invalid combination of API ID and API HASH. Please restart the session.')
+        await sending_msg.edit("❌ <b>Invalid API ID / API HASH configuration.</b> Please contact admin.", parse_mode=ParseMode.HTML)
         return
     except PhoneNumberInvalid:
-        await message.reply('❌ Invalid phone number. Please restart the session.')
+        await sending_msg.edit("❌ <b>Invalid phone number!</b> Please restart using <code>/login</code> with valid country code.", parse_mode=ParseMode.HTML)
         return
+    except Exception as err:
+        await sending_msg.edit(f"❌ <b>OTP Request Error:</b> `{err}`", parse_mode=ParseMode.HTML)
+        return
+
+    # Step 2: OTP Verification Prompt
+    prompt_2_text = (
+        "📩 <b>USERBOT ACCOUNT AUTHENTICATION</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔑 <b>Step 2 of 3 — OTP Verification Code</b>\n"
+        "<i>Check your official Telegram app for the 5-digit verification code sent by Telegram.</i>\n\n"
+        "💡 <b>Format Requirement:</b>\n"
+        "Please enter the OTP with <b>spaces between digits</b> to prevent Telegram auto-read.\n"
+        "• <b>Example:</b> If OTP is <code>12345</code>, send: <code>1 2 3 4 5</code>\n\n"
+        "❌ Send <code>/cancel</code> to abort authentication."
+    )
+
     try:
-        otp_code = await _.ask(user_id, "Please check for an OTP in your official Telegram account. Once received, enter the OTP in the following format: \nIf the OTP is `12345`, please enter it as `1 2 3 4 5`.", filters=filters.text, timeout=600)
+        otp_code = await client.ask(
+            user_id,
+            prompt_2_text,
+            filters=filters.text,
+            timeout=600,
+            parse_mode=ParseMode.HTML
+        )
     except Exception:
-        await message.reply('⏰ Time limit of 10 minutes exceeded. Please restart the session.')
+        await app.send_message(user_id, "⏱ <b>OTP prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
         return
-    phone_code = otp_code.text.replace(" ", "")
+
+    if not otp_code or otp_code.text == "/cancel":
+        await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    phone_code = otp_code.text.replace(" ", "").strip()
+
     try:
-        await client.sign_in(phone_number, code.phone_code_hash, phone_code)
-                
+        await ub_client.sign_in(phone_number, code.phone_code_hash, phone_code)
     except PhoneCodeInvalid:
-        await message.reply('❌ Invalid OTP. Please restart the session.')
+        await app.send_message(user_id, "❌ <b>Invalid OTP code entered!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
         return
     except PhoneCodeExpired:
-        await message.reply('❌ Expired OTP. Please restart the session.')
+        await app.send_message(user_id, "❌ <b>Expired OTP code!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
         return
     except SessionPasswordNeeded:
+        # Step 3: 2FA Password Required
+        prompt_3_text = (
+            "🔐 <b>USERBOT ACCOUNT AUTHENTICATION</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🛡️ <b>Step 3 of 3 — 2FA Password Required</b>\n"
+            "<i>Your Telegram account has Two-Step Verification enabled.</i>\n\n"
+            "Please send your <b>2FA Password</b> below to complete authentication:\n\n"
+            "❌ Send <code>/cancel</code> to abort authentication."
+        )
         try:
-            two_step_msg = await _.ask(user_id, 'Your account has two-step verification enabled. Please enter your password.', filters=filters.text, timeout=300)
+            two_step_msg = await client.ask(
+                user_id,
+                prompt_3_text,
+                filters=filters.text,
+                timeout=300,
+                parse_mode=ParseMode.HTML
+            )
         except Exception:
-            await message.reply('⏰ Time limit of 5 minutes exceeded. Please restart the session.')
+            await app.send_message(user_id, "⏱ <b>Password prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+            return
+
+        if not two_step_msg or two_step_msg.text == "/cancel":
+            await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
             return
 
         try:
-            password = two_step_msg.text
-            await client.check_password(password=password)
+            password = two_step_msg.text.strip()
+            await ub_client.check_password(password=password)
         except PasswordHashInvalid:
-            await two_step_msg.reply('❌ Invalid password. Please restart the session.')
+            await two_step_msg.reply_text("❌ <b>Invalid 2FA password!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
             return
-    string_session = await client.export_session_string()
+        except Exception as pwd_err:
+            await two_step_msg.reply_text(f"❌ <b>2FA Authentication Error:</b> `{pwd_err}`", parse_mode=ParseMode.HTML)
+            return
+
+    # Export session string and save in MongoDB
+    string_session = await ub_client.export_session_string()
     await db.set_session(user_id, string_session)
-    await client.disconnect()
-    await otp_code.reply("✅ Login successful!")
+
+    try:
+        await ub_client.disconnect()
+    except Exception:
+        pass
+
+    success_card = (
+        "🎉 <b>USERBOT LOGIN SUCCESSFUL!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 <b>Authenticated User:</b> <code>{user_id}</code>\n"
+        "⚡ <b>Session Status:</b> <code>SAVED IN DATABASE ✅</code>\n\n"
+        "🚀 <b>Unlocked Capabilities:</b>\n"
+        "• 📁 Topic-to-Topic Supergroup Cloning\n"
+        "• 📥 Restricted & Private Content Downloads\n"
+        "• ⚡ Zero-Bandwidth High-Speed Server Forwarding\n\n"
+        "<i>Use <code>/clone</code> or <code>/mirror</code> to start cloning your topics!</i>"
+    )
+    await app.send_message(
+        user_id,
+        success_card,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_login_status_keyboard(is_logged_in=True)
+    )
