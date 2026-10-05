@@ -319,6 +319,55 @@ async def give_mirror_demo_cmd_handler(client, message):
         )
 
 
+# ─── Admin Help & Control Panel Command (Guarded: Owner/Admin Only) ───
+@app.on_message(filters.command(["admin", "adminhelp", "panel", "owner"]) & filters.user(OWNER_ID))
+async def admin_panel_cmd_handler(client, message):
+    """
+    Admin control panel command that displays all secret & admin commands.
+    Strictly restricted to OWNER_ID / Admins.
+    """
+    admin_text = (
+        f"<blockquote>👑 <b>XTRACTOR PRO — ADMIN CONTROL PANEL</b> 👑</blockquote>\n\n"
+        f"👋 <b>Welcome Admin / Owner!</b>\n"
+        f"Here is your secret list of admin commands and their usages:\n\n"
+        f"<blockquote>🎁 <b>1-HOUR TRIAL DEMO (HIDDEN)</b>\n"
+        f"• <code>/mirrordemo &lt;user_id&gt;</code> — Give 1-hour Topic Mirror trial demo (auto-expires in 60m)\n"
+        f"• <i>Aliases:</i> <code>/demomirror</code>, <code>/adddemo</code></blockquote>\n\n"
+        f"<blockquote>🎛️ <b>TOPIC MIRROR MANAGEMENT</b>\n"
+        f"• <code>/addmirror &lt;user_id&gt; &lt;duration&gt;</code> — Add Topic Mirror access\n"
+        f"  <i>Example:</i> <code>/addmirror 123456789 1 month</code> or <code>30 days</code>\n"
+        f"• <code>/remmirror &lt;user_id&gt;</code> — Revoke Topic Mirror access\n"
+        f"• <code>/checkmirror &lt;user_id&gt;</code> — Check Topic Mirror plan details\n"
+        f"• <code>/mirrorusers</code> — Interactive dashboard for all mirror subscribers</blockquote>\n\n"
+        f"<blockquote>💎 <b>STANDARD PREMIUM MANAGEMENT</b>\n"
+        f"• <code>/add &lt;user_id&gt; &lt;duration&gt;</code> — Add Standard Premium access\n"
+        f"  <i>Example:</i> <code>/add 123456789 1 month</code>\n"
+        f"• <code>/rem &lt;user_id&gt;</code> — Remove Standard Premium\n"
+        f"• <code>/check &lt;user_id&gt;</code> — Check standard premium status\n"
+        f"• <code>/transfer &lt;to_user_id&gt;</code> — Transfer premium subscription\n"
+        f"• <code>/stats</code> — Bot statistics & server specs\n"
+        f"• <code>/getusers</code> — Interactive premium user manager</blockquote>\n\n"
+        f"<blockquote>📢 <b>BROADCAST & CONFIGURATION</b>\n"
+        f"• <code>/gcast &lt;msg/reply&gt;</code> — Broadcast to all users & groups\n"
+        f"• <code>/autobroadcast</code> — Smart Auto-Broadcast setup\n"
+        f"• <code>/setmainchannel &lt;link/id&gt;</code> — Update main channel / force sub\n"
+        f"• <code>/set</code> — Register public bot commands in Telegram menu\n"
+        f"• <code>/restart</code> — Restart bot process</blockquote>\n\n"
+        f"<i>⚠️ Keep these commands private. Only authorized admins can run them.</i>"
+    )
+
+    image_url = "https://freeimage.host/i/n04TxVa"
+    try:
+        await message.reply_photo(
+            photo=image_url,
+            caption=admin_text,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        print(f"[AdminPanel] Error sending photo: {e}")
+        await message.reply_text(admin_text, parse_mode=ParseMode.HTML)
+
+
 @app.on_message(filters.command("remmirror") & filters.user(OWNER_ID))
 async def remove_mirror_premium_cmd(client, message):
     if len(message.command) == 2:
