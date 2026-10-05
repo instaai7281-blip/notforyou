@@ -119,7 +119,7 @@ async def token_handler(client, message):
     if len(message.command) <= 1:
         image_url = "https://freeimage.host/i/F5dGOsj"
         join_button = InlineKeyboardButton("✈️ Main Channel", url=main_channel_url)
-        developer_button = InlineKeyboardButton("⚡ 𝘾𝙧𝙖𝙯𝙮 𝘿𝙚𝙫𝙚𝙡𝙤𝙥𝙚𝙧 </\\>", url="https://t.me/CrazyxDeveloper_Bot")
+        developer_button = InlineKeyboardButton("⚡ 𝘾𝙧𝙖𝙯𝙮 𝘿𝙚𝙫𝙚𝙡𝙤𝙥𝙚𝙧 </>", url="https://t.me/CrazyxDeveloper_Bot")
         keyboard = InlineKeyboardMarkup([
             [join_button],
             [developer_button]
