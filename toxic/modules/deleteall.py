@@ -1,10 +1,12 @@
 import asyncio
-from pyrogram import filters, enums
+from pyrogram import filters, enums, raw
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from pyrogram.errors import FloodWait, RPCError
 from toxic import app
 from config import OWNER_ID
+from toxic.core.mongo.db import is_admin_or_owner
 
-@app.on_message(filters.command("deleteall"))
+@app.on_message(filters.command(["deleteall", "delall", "purgeall", "clearchat", "wipe"]))
 async def delete_all_cmd(_, message):
     chat_id = message.chat.id
     
@@ -16,9 +18,7 @@ async def delete_all_cmd(_, message):
     # 2. Check authorization of the sender (if sent by a user)
     if message.from_user:
         user_id = message.from_user.id
-        owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-        is_owner = str(user_id) in [str(o) for o in owner_list]
-        if not is_owner:
+        if not is_admin_or_owner(user_id):
             # Check if they are admin in this chat
             try:
                 member = await app.get_chat_member(chat_id, user_id)
@@ -44,16 +44,92 @@ async def delete_all_cmd(_, message):
         reply_markup=buttons
     )
 
+async def _delete_batch_adaptive(clients, chat_id, message_ids):
+    """
+    Deletes a list of message IDs adaptively:
+    Tries bulk batch delete first.
+    If bulk fails, breaks down into small sub-batches (10), then 1-by-1.
+    Tries all available clients with FloodWait handling.
+    """
+    if not message_ids:
+        return 0
+
+    deleted = 0
+    # Try bulk delete with primary client
+    for client in clients:
+        try:
+            await client.delete_messages(chat_id, message_ids, revoke=True)
+            return len(message_ids)
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            try:
+                await client.delete_messages(chat_id, message_ids, revoke=True)
+                return len(message_ids)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # If bulk delete failed, try sub-batches of 10
+    if len(message_ids) > 10:
+        for i in range(0, len(message_ids), 10):
+            sub_batch = message_ids[i:i+10]
+            sub_del = await _delete_batch_adaptive(clients, chat_id, sub_batch)
+            deleted += sub_del
+        return deleted
+
+    # If small batch still failed, delete message 1-by-1 to skip non-deletables
+    for mid in message_ids:
+        msg_deleted = False
+        for client in clients:
+            try:
+                await client.delete_messages(chat_id, mid, revoke=True)
+                deleted += 1
+                msg_deleted = True
+                break
+            except FloodWait as fw:
+                await asyncio.sleep(fw.value + 1)
+                try:
+                    await client.delete_messages(chat_id, mid, revoke=True)
+                    deleted += 1
+                    msg_deleted = True
+                    break
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # Try Raw RPC for channel / supergroup if high-level failed
+        if not msg_deleted:
+            for client in clients:
+                try:
+                    peer = await client.resolve_peer(chat_id)
+                    if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
+                        chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
+                        await client.invoke(raw.functions.channels.DeleteMessages(
+                            channel=chan_input,
+                            id=[mid]
+                        ))
+                        deleted += 1
+                        msg_deleted = True
+                        break
+                except Exception:
+                    pass
+
+        await asyncio.sleep(0.02)
+
+    return deleted
+
+
 @app.on_callback_query(filters.regex(r"^(confirm_delete_all|cancel_delete_all)$"))
 async def delete_all_callback(_, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     chat_id = callback_query.message.chat.id
+    prompt_msg_id = callback_query.message.id
     
-    # Verify clicker's rights (Must be chat owner, chat administrator, or global bot owner)
+    # Verify clicker's rights (Must be chat owner, chat administrator, or bot owner/admin)
     authorized = False
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    is_owner = str(user_id) in [str(o) for o in owner_list]
-    if is_owner:
+    if is_admin_or_owner(user_id):
         authorized = True
     else:
         try:
@@ -72,47 +148,78 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
         return
 
     # Confirm delete all
-    await callback_query.message.edit_text("⌛ **Initializing mass deletion...**")
+    await callback_query.message.edit_text("⌛ **Initializing mass deletion engine...**")
     
     userbot = None
     try:
-        # Inline import to avoid circular dependency issues
         from toxic.modules.main import initialize_userbot
         userbot = await initialize_userbot(user_id)
-        
-        client_to_use = userbot if userbot else app
-        client_name = "Userbot" if userbot else "Bot"
-        
-        await callback_query.message.edit_text(f"🔍 **Scanning messages using {client_name}...**")
-        
-        # Collect message IDs
-        message_ids = []
-        async for msg in client_to_use.get_chat_history(chat_id, limit=10000):
-            if msg.id != callback_query.message.id:
-                message_ids.append(msg.id)
-                
-        if not message_ids:
-            await callback_query.message.edit_text("📋 **No messages found to delete.**")
-            if userbot:
-                await userbot.stop()
-            return
+    except Exception:
+        pass
+
+    # Try shared userbot if user's own userbot is not logged in
+    shared_ub = None
+    try:
+        from toxic.core.get_func import get_client
+        shared_ub = get_client()
+    except Exception:
+        pass
+
+    clients = []
+    if userbot:
+        clients.append(userbot)
+    if shared_ub and shared_ub not in clients:
+        clients.append(shared_ub)
+    clients.append(app)
+
+    total_deleted = 0
+    max_passes = 15  # Multi-pass loop ensures zero messages are left behind
+
+    try:
+        for pass_num in range(1, max_passes + 1):
+            # Scan messages using primary available client
+            scanner_client = clients[0]
+            message_ids = []
             
-        await callback_query.message.edit_text(f"🗑️ **Deleting {len(message_ids)} messages using {client_name}...**")
-        
-        deleted_count = 0
-        batch_size = 100
-        for k in range(0, len(message_ids), batch_size):
-            batch = message_ids[k:k+batch_size]
             try:
-                await client_to_use.delete_messages(chat_id, batch)
-                deleted_count += len(batch)
-                await asyncio.sleep(0.5)  # Simple delay to avoid rate limits
-            except Exception:
-                pass
-                
+                async for msg in scanner_client.get_chat_history(chat_id, limit=3000):
+                    if msg.id != prompt_msg_id:
+                        message_ids.append(msg.id)
+            except Exception as scan_err:
+                print(f"[DELETEALL] Scan error on pass {pass_num}: {scan_err}")
+                # Fallback scan with app if userbot scan failed
+                if scanner_client != app:
+                    try:
+                        async for msg in app.get_chat_history(chat_id, limit=3000):
+                            if msg.id != prompt_msg_id:
+                                message_ids.append(msg.id)
+                    except Exception:
+                        pass
+
+            if not message_ids:
+                break
+
+            await callback_query.message.edit_text(
+                f"🗑️ **Deleting messages (Pass #{pass_num})...**\n\n"
+                f"• Found in this pass: `{len(message_ids)}`\n"
+                f"• Total Wiped So Far: `{total_deleted}` ✅"
+            )
+
+            batch_size = 100
+            for k in range(0, len(message_ids), batch_size):
+                batch = message_ids[k:k+batch_size]
+                d_count = await _delete_batch_adaptive(clients, chat_id, batch)
+                total_deleted += d_count
+                await asyncio.sleep(0.3)
+
+            # If very few messages were found, no need for more passes
+            if len(message_ids) < 5:
+                break
+
         await callback_query.message.edit_text(
-            f"✅ **Success!**\n\n"
-            f"Wiped `{deleted_count}` messages successfully using {client_name}."
+            f"🎉 **Clean Complete!**\n\n"
+            f"✅ Successfully wiped **`{total_deleted}`** messages.\n"
+            f"🧹 Chat is now clean!"
         )
         
     except Exception as e:

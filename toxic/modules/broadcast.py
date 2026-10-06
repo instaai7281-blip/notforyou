@@ -15,6 +15,7 @@ from toxic.core.mongo.db import (
     add_broadcast_deletion,
     add_joined_chat,
     get_all_joined_chats,
+    get_all_broadcast_chats,
     remove_joined_chat,
     get_pending_deletions,
     remove_broadcast_deletion,
@@ -507,34 +508,70 @@ async def reset_bio_cmd(client: Client, message: Message):
 
 # ────── Common Message Delivery Helper ──────
 
-async def send_single_broadcast(client: Client, chat_id: int, reply: Message = None, cmd_text: str = ""):
-    """Delivers message payload (media, document, photo, text, etc.) with flood-wait protection."""
+async def send_single_broadcast(client: Client, chat_id: int, reply: Message = None, cmd_text: str = "", userbot_client: Client = None):
+    """Delivers message payload (media, document, photo, text, etc.) with dual-client and flood-wait protection."""
+    clients_to_try = [client]
+    if userbot_client and userbot_client not in clients_to_try:
+        clients_to_try.append(userbot_client)
+
     try:
-        if reply:
-            if cmd_text:
-                orig_html = reply.text.html if reply.text else (reply.caption.html if reply.caption else "")
-                combined_text = f"{orig_html}\n\n{cmd_text}".strip()
-                if reply.photo:
-                    return await client.send_photo(chat_id, reply.photo.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
-                elif reply.video:
-                    return await client.send_video(chat_id, reply.video.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
-                elif reply.document:
-                    return await client.send_document(chat_id, reply.document.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
-                elif reply.animation:
-                    return await client.send_animation(chat_id, reply.animation.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
-                elif reply.audio:
-                    return await client.send_audio(chat_id, reply.audio.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
-                elif reply.voice:
-                    return await client.send_voice(chat_id, reply.voice.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+        from toxic.core.get_func import get_client
+        shared_ub = get_client()
+        if shared_ub and shared_ub not in clients_to_try and getattr(shared_ub, "is_connected", False):
+            clients_to_try.append(shared_ub)
+    except Exception:
+        pass
+
+    last_err = None
+    for current_client in clients_to_try:
+        if not getattr(current_client, "is_connected", True):
+            continue
+        try:
+            if reply:
+                if cmd_text:
+                    orig_html = reply.text.html if reply.text else (reply.caption.html if reply.caption else "")
+                    combined_text = f"{orig_html}\n\n{cmd_text}".strip()
+                    if reply.photo:
+                        return await current_client.send_photo(chat_id, reply.photo.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.video:
+                        return await current_client.send_video(chat_id, reply.video.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.document:
+                        return await current_client.send_document(chat_id, reply.document.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.animation:
+                        return await current_client.send_animation(chat_id, reply.animation.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.audio:
+                        return await current_client.send_audio(chat_id, reply.audio.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    elif reply.voice:
+                        return await current_client.send_voice(chat_id, reply.voice.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
+                    else:
+                        return await current_client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                 else:
-                    return await client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            else:
-                return await reply.copy(chat_id)
-        elif cmd_text:
-            return await client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
-        return await send_single_broadcast(client, chat_id, reply, cmd_text)
+                    try:
+                        return await reply.copy(chat_id)
+                    except Exception:
+                        return await reply.forward(chat_id)
+            elif cmd_text:
+                return await current_client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        except FloodWait as e:
+            await asyncio.sleep(e.value + 1)
+            try:
+                if reply and not cmd_text:
+                    return await reply.copy(chat_id)
+                elif reply and cmd_text:
+                    orig_html = reply.text.html if reply.text else (reply.caption.html if reply.caption else "")
+                    combined_text = f"{orig_html}\n\n{cmd_text}".strip()
+                    return await current_client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                elif cmd_text:
+                    return await current_client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            except Exception as retry_err:
+                last_err = retry_err
+        except Exception as e:
+            last_err = e
+            continue
+
+    if last_err:
+        raise last_err
+    return None
 
 
 # ────── 1. User DM Broadcast Command (/broadcast /bcast /sendall /dmcast) ──────
@@ -612,7 +649,7 @@ async def user_broadcast_cmd(client: Client, message: Message):
     )
 
 
-# ────── 2. Group Broadcast Command (/gcast /groupbroadcast) ──────
+# ────── 2. Group & Channel Broadcast Command (/gcast /groupbroadcast) ──────
 
 @app.on_message(filters.command(["gcast", "groupbroadcast", "bcast_groups", "broadcast_groups"]))
 async def group_broadcast_cmd(client: Client, message: Message):
@@ -626,64 +663,104 @@ async def group_broadcast_cmd(client: Client, message: Message):
 
     if not reply and not cmd_text:
         await message.reply_text(
-            "📢 <b>Group-Only Broadcast Usage (/gcast)</b>:\n\n"
+            "📢 <b>Group & Channel Broadcast Usage (/gcast)</b>:\n\n"
             "1️⃣ <b>Reply to a Message</b> (Photo, Video, Formatted Text, Doc, Audio, etc.):\n"
-            "   • <code>/gcast</code> — Broadcasts exact replied message to all supergroups & groups.\n"
+            "   • <code>/gcast</code> — Broadcasts exact replied message to all supergroups, groups & channels.\n"
             "   • <code>/gcast &lt;extra text&gt;</code> — Appends your custom text to the replied message!\n\n"
             "2️⃣ <b>Direct Text Broadcast</b>:\n"
             "   • <code>/gcast &lt;b&gt;Header Text&lt;/b&gt;\n\nBlockquote announcement...</code>\n\n"
-            "<i>(Sends exclusively to linked Telegram Supergroups & Groups)</i>",
+            "<i>(Sends to all linked Telegram Channels, Supergroups & Groups)</i>",
             parse_mode=ParseMode.HTML
         )
         return
 
-    db_chats = await get_all_joined_chats()
+    # Initialize userbot fallback if available
+    userbot_client = None
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    for oid in owner_list:
+        try:
+            from toxic.modules.main import initialize_userbot
+            userbot_client = await initialize_userbot(int(oid))
+            if userbot_client:
+                break
+        except Exception:
+            pass
+
+    # Aggregates chats from all collections
+    db_chats = await get_all_broadcast_chats()
+    
+    # Sync from userbot dialogs if connected
+    if userbot_client and getattr(userbot_client, "is_connected", False):
+        try:
+            existing_cids = {c["chat_id"] for c in db_chats}
+            async for dialog in userbot_client.get_dialogs(limit=300):
+                chat = dialog.chat
+                if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                    if chat.id not in existing_cids:
+                        db_chats.append({"chat_id": chat.id, "title": chat.title or "Unknown"})
+                        existing_cids.add(chat.id)
+                        await add_joined_chat(chat.id, chat.title or "Unknown")
+        except Exception as d_err:
+            print(f"[GCAST] Dialog sync notice: {d_err}")
+
     if not db_chats:
-        await message.reply_text("ℹ️ **No linked groups found in database to broadcast.**")
+        await message.reply_text("ℹ️ **No linked groups or channels found in database to broadcast.**")
+        if userbot_client:
+            try:
+                await userbot_client.stop()
+            except Exception:
+                pass
         return
 
-    status_msg = await message.reply_text(f"🚀 **Starting Group Broadcast to `{len(db_chats)}` groups...**")
+    status_msg = await message.reply_text(f"🚀 **Starting Broadcast to `{len(db_chats)}` groups & channels...**")
     sent_count = 0
     failed_count = 0
     total_groups = len(db_chats)
     start_time = asyncio.get_event_loop().time()
 
-    for i, chat_info in enumerate(db_chats, 1):
-        cid = chat_info.get("chat_id")
-        if not cid:
-            continue
-        try:
-            await send_single_broadcast(client, cid, reply=reply, cmd_text=cmd_text)
-            sent_count += 1
-            await asyncio.sleep(0.3)
-        except Exception as err:
-            failed_count += 1
-            print(f"[GCAST] Failed for group {cid}: {err}")
-            if any(k in str(err).lower() for k in ["kicked", "deactivated", "chat not found", "peer_id_invalid", "chat_write_forbidden"]):
-                await remove_joined_chat(cid)
-
-        if i % 10 == 0 or i == total_groups:
+    try:
+        for i, chat_info in enumerate(db_chats, 1):
+            cid = chat_info.get("chat_id")
+            if not cid:
+                continue
             try:
-                await status_msg.edit(
-                    f"📢 **Group Broadcast in Progress...**\n\n"
-                    f"• Progress: `{i}/{total_groups}` groups\n"
-                    f"• Delivered: `{sent_count}` ✅\n"
-                    f"• Failed: `{failed_count}` ❌"
-                )
+                await send_single_broadcast(client, cid, reply=reply, cmd_text=cmd_text, userbot_client=userbot_client)
+                sent_count += 1
+                await asyncio.sleep(0.3)
+            except Exception as err:
+                failed_count += 1
+                print(f"[GCAST] Failed for chat {cid}: {err}")
+                if any(k in str(err).lower() for k in ["kicked", "deactivated", "chat not found", "peer_id_invalid", "chat_write_forbidden"]):
+                    await remove_joined_chat(cid)
+
+            if i % 10 == 0 or i == total_groups:
+                try:
+                    await status_msg.edit(
+                        f"📢 **Group & Channel Broadcast in Progress...**\n\n"
+                        f"• Progress: `{i}/{total_groups}` chats\n"
+                        f"• Delivered: `{sent_count}` ✅\n"
+                        f"• Failed: `{failed_count}` ❌"
+                    )
+                except Exception:
+                    pass
+    finally:
+        if userbot_client:
+            try:
+                await userbot_client.stop()
             except Exception:
                 pass
 
     elapsed = round(asyncio.get_event_loop().time() - start_time, 1)
     await status_msg.edit(
-        f"🎉 **Group Broadcast Completed!**\n\n"
-        f"• **Total Groups Targeted:** `{total_groups}`\n"
+        f"🎉 **Group & Channel Broadcast Completed!**\n\n"
+        f"• **Total Chats Targeted:** `{total_groups}`\n"
         f"• **Successfully Delivered:** `{sent_count}` ✅\n"
         f"• **Failed / Unreachable:** `{failed_count}` ❌\n"
         f"• **Time Taken:** `{elapsed}s` ⏱️"
     )
 
 
-# ────── 3. Broadcast to All (DMs + Groups) (/broadcast_all /bcastall) ──────
+# ────── 3. Broadcast to All (DMs + Groups + Channels) (/broadcast_all /bcastall) ──────
 
 @app.on_message(filters.command(["broadcast_all", "bcastall", "sendtoall", "allcast", "broadcastall"]))
 async def all_broadcast_cmd(client: Client, message: Message):
@@ -697,47 +774,86 @@ async def all_broadcast_cmd(client: Client, message: Message):
 
     if not reply and not cmd_text:
         await message.reply_text(
-            "📢 <b>Universal Broadcast (Users + Groups) Usage</b>:\n\n"
+            "📢 <b>Universal Broadcast (Users + Groups + Channels) Usage</b>:\n\n"
             "• Reply to any message or send text with <code>/broadcast_all</code>.\n"
-            "<i>(Delivers to ALL registered bot users in DM and ALL joined groups/channels!)</i>",
+            "<i>(Delivers to ALL registered bot users in DM and ALL joined groups & channels!)</i>",
             parse_mode=ParseMode.HTML
         )
         return
 
+    # Initialize userbot fallback if available
+    userbot_client = None
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    for oid in owner_list:
+        try:
+            from toxic.modules.main import initialize_userbot
+            userbot_client = await initialize_userbot(int(oid))
+            if userbot_client:
+                break
+        except Exception:
+            pass
+
     from toxic.core.mongo.users_db import get_all_registered_users
     raw_users = await get_all_registered_users()
     all_users = [u for u in raw_users if isinstance(u, int) and u > 0]
-    db_chats = await get_all_joined_chats()
+    
+    db_chats = await get_all_broadcast_chats()
     group_ids = [c["chat_id"] for c in db_chats if c.get("chat_id")]
+
+    # Sync from userbot dialogs if connected
+    if userbot_client and getattr(userbot_client, "is_connected", False):
+        try:
+            existing_cids = set(group_ids)
+            async for dialog in userbot_client.get_dialogs(limit=300):
+                chat = dialog.chat
+                if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                    if chat.id not in existing_cids:
+                        group_ids.append(chat.id)
+                        existing_cids.add(chat.id)
+                        await add_joined_chat(chat.id, chat.title or "Unknown")
+        except Exception as d_err:
+            print(f"[ALL BROADCAST] Dialog sync notice: {d_err}")
 
     all_destinations = all_users + group_ids
     total_targets = len(all_destinations)
 
     if not all_destinations:
-        await message.reply_text("ℹ️ **No users or groups found in database to broadcast.**")
+        await message.reply_text("ℹ️ **No users, groups, or channels found in database to broadcast.**")
+        if userbot_client:
+            try:
+                await userbot_client.stop()
+            except Exception:
+                pass
         return
 
-    status_msg = await message.reply_text(f"🚀 **Starting Universal Broadcast to `{len(all_users)}` users and `{len(group_ids)}` groups...**")
+    status_msg = await message.reply_text(f"🚀 **Starting Universal Broadcast to `{len(all_users)}` users and `{len(group_ids)}` groups/channels...**")
     sent_count = 0
     failed_count = 0
     start_time = asyncio.get_event_loop().time()
 
-    for i, target_id in enumerate(all_destinations, 1):
-        try:
-            await send_single_broadcast(client, target_id, reply=reply, cmd_text=cmd_text)
-            sent_count += 1
-            await asyncio.sleep(0.1)
-        except Exception:
-            failed_count += 1
-
-        if i % 25 == 0 or i == total_targets:
+    try:
+        for i, target_id in enumerate(all_destinations, 1):
             try:
-                await status_msg.edit(
-                    f"📢 **Universal Broadcast in Progress...**\n\n"
-                    f"• Progress: `{i}/{total_targets}` chats\n"
-                    f"• Delivered: `{sent_count}` ✅\n"
-                    f"• Failed: `{failed_count}` ❌"
-                )
+                await send_single_broadcast(client, target_id, reply=reply, cmd_text=cmd_text, userbot_client=userbot_client)
+                sent_count += 1
+                await asyncio.sleep(0.1)
+            except Exception:
+                failed_count += 1
+
+            if i % 25 == 0 or i == total_targets:
+                try:
+                    await status_msg.edit(
+                        f"📢 **Universal Broadcast in Progress...**\n\n"
+                        f"• Progress: `{i}/{total_targets}` chats\n"
+                        f"• Delivered: `{sent_count}` ✅\n"
+                        f"• Failed: `{failed_count}` ❌"
+                    )
+                except Exception:
+                    pass
+    finally:
+        if userbot_client:
+            try:
+                await userbot_client.stop()
             except Exception:
                 pass
 
@@ -745,8 +861,9 @@ async def all_broadcast_cmd(client: Client, message: Message):
     await status_msg.edit(
         f"🎉 **Universal Broadcast Completed!**\n\n"
         f"• **Users Targeted:** `{len(all_users)}`\n"
-        f"• **Groups Targeted:** `{len(group_ids)}`\n"
+        f"• **Groups/Channels Targeted:** `{len(group_ids)}`\n"
         f"• **Successfully Delivered:** `{sent_count}` ✅\n"
         f"• **Failed:** `{failed_count}` ❌\n"
         f"• **Time Taken:** `{elapsed}s` ⏱️"
     )
+

@@ -14,6 +14,7 @@
 
 import asyncio
 import datetime
+import time
 import re
 import time
 from pyrogram import filters, Client, types, raw
@@ -97,20 +98,21 @@ async def remove_sb_destination(chat_id: int):
 async def sync_all_broadcast_destinations():
     """
     Auto-discovers and syncs all destinations from:
-    1. Joined chats in MongoDB (db.get_all_joined_chats)
+    1. All joined chats, channels, forward targets, mirror sessions from MongoDB (db.get_all_broadcast_chats)
     2. Registered users in MongoDB (users_db.get_all_registered_users)
     3. Active dialogs from Bot App and Userbot
     Ensures every group, channel, and DM is present in _dest_col.
     """
     try:
-        # 1. Sync from db.get_all_joined_chats()
-        from toxic.core.mongo.db import get_all_joined_chats
-        joined = await get_all_joined_chats()
-        for j in joined:
+        # 1. Sync from db.get_all_broadcast_chats()
+        from toxic.core.mongo.db import get_all_broadcast_chats
+        all_chats = await get_all_broadcast_chats()
+        for j in all_chats:
             cid = j.get("chat_id")
-            title = j.get("title", f"Group {cid}")
+            title = j.get("title", f"Chat {cid}")
             if cid:
-                await add_sb_destination(cid, title, "supergroup")
+                c_type = "channel" if str(cid).startswith("-100") else "supergroup"
+                await add_sb_destination(cid, title, c_type)
 
         # 2. Sync from users_db.get_all_registered_users()
         try:
@@ -119,16 +121,26 @@ async def sync_all_broadcast_destinations():
             for u in users:
                 if isinstance(u, int) or (isinstance(u, str) and u.isdigit()):
                     uid = int(u)
-                    await add_sb_destination(uid, f"User {uid}", "private")
+                    if uid > 0:
+                        await add_sb_destination(uid, f"User {uid}", "private")
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
 
-        # 3. Sync from Userbot Dialogs (up to 300 limit)
+        # 3. Sync from Userbot Dialogs (up to 500 limit)
+        ub_client = None
         try:
-            from toxic.modules.topic_mirror import get_client
+            from toxic.core.get_func import get_client
             ub_client = get_client()
+            if not ub_client or not getattr(ub_client, "is_connected", False):
+                owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+                for oid in owner_list:
+                    from toxic.modules.main import initialize_userbot
+                    ub_client = await initialize_userbot(int(oid))
+                    if ub_client:
+                        break
+
             if ub_client and getattr(ub_client, "is_connected", False):
-                async for dialog in ub_client.get_dialogs(limit=300):
+                async for dialog in ub_client.get_dialogs(limit=500):
                     chat = dialog.chat
                     c_type = "private" if chat.type == ChatType.PRIVATE else ("channel" if chat.type == ChatType.CHANNEL else "supergroup")
                     title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or getattr(chat, "username", None) or f"Chat {chat.id}"
@@ -138,6 +150,7 @@ async def sync_all_broadcast_destinations():
 
     except Exception as err:
         print(f"[SmartBroadcast Sync] Sync error: {err}")
+
 
 
 _last_dest_sync_time = 0
@@ -204,26 +217,45 @@ async def remove_sb_deletion(deletion_id):
 async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client=None):
     """
     Deletes a single broadcast message in Channels, Groups, or DMs.
-    Tries Bot App (High-level + Raw RPC) first, Userbot second.
+    Tries Bot App (High-level + Raw RPC) first, Userbot second, Shared Client third.
     """
     clients_to_try = [app]
     if userbot_client and userbot_client not in clients_to_try:
         clients_to_try.append(userbot_client)
 
+    try:
+        from toxic.core.get_func import get_client
+        shared_ub = get_client()
+        if shared_ub and shared_ub not in clients_to_try and getattr(shared_ub, "is_connected", False):
+            clients_to_try.append(shared_ub)
+    except Exception:
+        pass
+
     for client in clients_to_try:
+        if not getattr(client, "is_connected", True):
+            continue
+
         # Tier 1: High-level delete_messages with revoke=True
         try:
             await client.delete_messages(chat_id, message_id, revoke=True)
             return True, "High-Level Delete"
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            try:
+                await client.delete_messages(chat_id, message_id, revoke=True)
+                return True, "High-Level Delete (Post-Wait)"
+            except Exception:
+                pass
         except Exception:
             pass
 
         # Tier 2: Raw RPC channels.DeleteMessages (Direct MTProto call for Channels & Supergroups)
         try:
             peer = await client.resolve_peer(chat_id)
-            if hasattr(raw.functions, "channels") and hasattr(raw.functions.channels, "DeleteMessages"):
+            if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
+                chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
                 await client.invoke(raw.functions.channels.DeleteMessages(
-                    channel=peer,
+                    channel=chan_input,
                     id=[message_id]
                 ))
                 return True, "Raw RPC Channel Delete"
@@ -269,10 +301,15 @@ async def delete_all_active_sb_messages(filter_query: dict = None):
             success, _ = await delete_single_sb_message(cid, mid, userbot_client)
             if success:
                 deleted_ok += 1
+                await _del_col.delete_one({"_id": doc["_id"]})
             else:
-                failed_chats.append(f"• **{title}** (`{cid}`)")
+                retries = doc.get("retries", 0) + 1
+                if retries >= 3:
+                    failed_chats.append(f"• **{title}** (`{cid}`)")
+                    await _del_col.delete_one({"_id": doc["_id"]})
+                else:
+                    await _del_col.update_one({"_id": doc["_id"]}, {"$set": {"retries": retries}})
 
-            await _del_col.delete_one({"_id": doc["_id"]})
             await asyncio.sleep(0.05)
     except Exception as e:
         print(f"[SmartBroadcast] Deletion error: {e}")
@@ -1068,10 +1105,19 @@ async def smart_broadcast_background_scheduler():
                     del_success, del_method = await delete_single_sb_message(c_id, m_id, userbot_client)
                     if del_success:
                         del_success_count += 1
+                        await remove_sb_deletion(item["_id"])
                     else:
-                        del_fail_list.append(f"• **{c_title}** (`{c_id}`)")
+                        retries = item.get("retries", 0) + 1
+                        if retries >= 3:
+                            del_fail_list.append(f"• **{c_title}** (`{c_id}`)")
+                            await remove_sb_deletion(item["_id"])
+                        else:
+                            next_try = datetime.datetime.now() + datetime.timedelta(seconds=20)
+                            await _del_col.update_one(
+                                {"_id": item["_id"]},
+                                {"$set": {"retries": retries, "delete_at": next_try}}
+                            )
 
-                    await remove_sb_deletion(item["_id"])
                     await asyncio.sleep(0.05)
 
                 if userbot_client:

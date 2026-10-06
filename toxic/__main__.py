@@ -94,20 +94,26 @@ async def schedule_broadcast_task():
                 if delete_at and now >= delete_at:
                     chat_id = deletion["chat_id"]
                     message_id = deletion["message_id"]
-                    # Try to delete using userbot if available, fallback to bot app
-                    from toxic.core.get_func import get_client
-                    pro_client = get_client()
-                    client_to_use = pro_client if pro_client else app
                     try:
-                        await client_to_use.delete_messages(chat_id, message_id)
-                    except Exception:
-                        if client_to_use != app:
-                            try:
-                                await app.delete_messages(chat_id, message_id)
-                            except Exception as de:
-                                print(f"[AUTO BROADCAST DELETION] Fallback delete failed: {de}")
-                    await remove_broadcast_deletion(deletion["_id"])
-                    await asyncio.sleep(0.1)
+                        from toxic.modules.smart_broadcast import delete_single_sb_message
+                        del_ok, _ = await delete_single_sb_message(chat_id, message_id)
+                        if del_ok:
+                            await remove_broadcast_deletion(deletion["_id"])
+                        else:
+                            retries = deletion.get("retries", 0) + 1
+                            if retries >= 3:
+                                await remove_broadcast_deletion(deletion["_id"])
+                            else:
+                                from toxic.core.mongo.db import deletions_db
+                                next_retry = now + datetime.timedelta(seconds=20)
+                                await deletions_db.update_one(
+                                    {"_id": deletion["_id"]},
+                                    {"$set": {"retries": retries, "delete_at": next_retry}}
+                                )
+                    except Exception as de:
+                        print(f"[AUTO BROADCAST DELETION] Error: {de}")
+                        await remove_broadcast_deletion(deletion["_id"])
+                    await asyncio.sleep(0.05)
 
             # 2) Handle sending new broadcasts
             config = await get_broadcast_config()
