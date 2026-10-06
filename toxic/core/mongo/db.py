@@ -466,9 +466,9 @@ async def get_all_broadcast_chats():
 
 async def get_all_active_userbots():
     """
-    Returns a list of all active/usable userbot clients:
+    Returns a list of active/usable userbot clients:
     1. Pre-configured pro_clients (from STRINGS in config)
-    2. Dynamically initialized user sessions from MongoDB (owner + users)
+    2. Owner's userbot session from MongoDB (fast startup with timeout)
     """
     from config import API_ID, API_HASH, OWNER_ID
     from pyrogram import Client
@@ -493,42 +493,44 @@ async def get_all_active_userbots():
     except Exception:
         pass
 
-    # 3. Initialize userbot from sessions stored in MongoDB
+    # 3. Add owner userbot session from MongoDB (prioritized and timeout protected)
     try:
         owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-        # Check owners first, then other users with saved sessions
-        cursor = db.find({"session": {"$exists": True, "$ne": None}})
-        async for user_doc in cursor:
-            uid = user_doc.get("_id")
-            session_str = user_doc.get("session")
-            if not session_str:
+        for oid in owner_list:
+            if not oid:
+                continue
+            try:
+                oid_int = int(oid)
+            except ValueError:
                 continue
 
-            # Check if already in clients
-            already_have = False
+            # Check if already connected
+            already_connected = False
             for c in clients:
                 try:
-                    if getattr(c, "me", None) and c.me.id == uid:
-                        already_have = True
+                    if getattr(c, "me", None) and c.me.id == oid_int:
+                        already_connected = True
                         break
                 except Exception:
                     pass
 
-            if not already_have:
-                try:
-                    ub = Client(
-                        f"ub_pool_{uid}",
-                        api_id=API_ID,
-                        api_hash=API_HASH,
-                        session_string=session_str,
-                        in_memory=True,
-                        no_updates=True,
-                        max_concurrent_transmissions=16
-                    )
-                    await ub.start()
-                    clients.append(ub)
-                except Exception as ub_err:
-                    pass
+            if not already_connected:
+                user_doc = await db.find_one({"_id": oid_int, "session": {"$exists": True, "$ne": None}})
+                if user_doc and user_doc.get("session"):
+                    try:
+                        ub = Client(
+                            f"ub_owner_{oid_int}",
+                            api_id=API_ID,
+                            api_hash=API_HASH,
+                            session_string=user_doc.get("session"),
+                            in_memory=True,
+                            no_updates=True,
+                            max_concurrent_transmissions=16
+                        )
+                        await asyncio.wait_for(ub.start(), timeout=4.0)
+                        clients.append(ub)
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"[DB] Error loading userbot pool: {e}")
 

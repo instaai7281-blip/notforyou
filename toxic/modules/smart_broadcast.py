@@ -335,7 +335,7 @@ def format_time_duration(seconds: int) -> str:
     return f"{hours} Hours ⏳"
 
 # ─── Execution Engine: Send Broadcast Round ───
-async def execute_smart_broadcast_round(manual: bool = False):
+async def execute_smart_broadcast_round(manual: bool = False, status_msg: Message = None):
     cfg = await get_sb_config()
     delete_seconds = cfg.get("delete_after_seconds", 0)
     fast_forward = cfg.get("fast_forward_mode", True)
@@ -350,6 +350,13 @@ async def execute_smart_broadcast_round(manual: bool = False):
     if not destinations:
         return 0, 0, [], "No target destinations enabled or found in database."
 
+    total_dests = len(destinations)
+    if status_msg:
+        try:
+            await status_msg.edit_text(f"🚀 **Starting Broadcast to `{total_dests}` chats...**")
+        except Exception:
+            pass
+
     # Load all available userbots (from STRINGS and MongoDB sessions)
     active_userbots = []
     try:
@@ -363,8 +370,9 @@ async def execute_smart_broadcast_round(manual: bool = False):
     sent_count = 0
     failed_count = 0
     failed_details = []
+    last_ui_update = time.time()
 
-    for item in destinations:
+    for i, item in enumerate(destinations, 1):
         cid = item["chat_id"]
         title = item.get("title", f"Chat `{cid}`")
         sent_msg = None
@@ -437,7 +445,25 @@ async def execute_smart_broadcast_round(manual: bool = False):
             failed_count += 1
             failed_details.append(f"• **{title}** (`{cid}`): Could not send broadcast")
 
-        await asyncio.sleep(0.15)
+        # Live Progress updates to the user message
+        now_t = time.time()
+        if status_msg and (i % 5 == 0 or i == total_dests or now_t - last_ui_update > 2.5):
+            last_ui_update = now_t
+            percent = int((i / total_dests) * 100)
+            try:
+                await status_msg.edit_text(
+                    f"📢 **Smart Broadcast in Progress...**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"• **Progress:** `{i}/{total_dests}` chats ({percent}%)\n"
+                    f"• **Delivered:** `{sent_count}` ✅\n"
+                    f"• **Failed / Skipped:** `{failed_count}` ❌\n"
+                    f"• **Current Chat:** **{title}**\n\n"
+                    f"⚡ *Live broadcasting to all enabled groups & channels...*"
+                )
+            except Exception:
+                pass
+
+        await asyncio.sleep(0.12)
 
     await update_sb_config({"last_broadcast_round": run_count})
     return sent_count, failed_count, failed_details, None
@@ -651,7 +677,7 @@ async def smart_broadcast_now_cmd(client: Client, message: Message):
         return
 
     status_msg = await message.reply_text("🚀 **Launching Smart Broadcast to enabled destinations in background...**")
-    sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True)
+    sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True, status_msg=status_msg)
     if err:
         await status_msg.edit(f"❌ **Broadcast Failed:** {err}")
     else:
@@ -954,6 +980,7 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
                     "message_text": raw_text
                 })
                 await ask.reply("✅ **Broadcast message saved successfully!**")
+        await render_smart_broadcast_menu(client, ask)
 
     elif data == "sb_preview_msg":
         src_chat_id = cfg.get("source_chat_id")
@@ -1018,7 +1045,7 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
 
     elif data == "sb_launch_now":
         await callback_query.message.edit_text("🚀 **Launching Smart Broadcast to enabled destinations in background...**")
-        sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True)
+        sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True, status_msg=callback_query.message)
         if err:
             await callback_query.message.reply_text(f"❌ **Broadcast Failed:** {err}")
         else:
