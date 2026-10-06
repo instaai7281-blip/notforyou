@@ -229,11 +229,18 @@ async def send_auto_broadcast_to_all(manual=False):
     return sent_count, failed_count
 
 # Automatically track bot presence whenever a message is seen in a group/channel
-@app.on_message(filters.group | filters.channel, group=10)
+@app.on_message((filters.group | filters.channel), group=-1)
 async def log_bot_chat_presence(client: Client, message: Message):
     try:
         chat = message.chat
-        await add_joined_chat(chat.id, chat.title or chat.username or "Group/Channel")
+        title = chat.title or chat.username or "Group/Channel"
+        await add_joined_chat(chat.id, title)
+        c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+        try:
+            from toxic.modules.smart_broadcast import add_sb_destination
+            await add_sb_destination(chat.id, title, c_type)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -265,11 +272,18 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
         if new_member and new_member.user.id == my_id:
             chat = chat_member_updated.chat
             status = new_member.status
+            title = chat.title or chat.username or "Group/Channel"
+            c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
             
             # If bot was added as administrator or member
             if status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
-                await add_joined_chat(chat.id, chat.title or chat.username or "Group/Channel")
-                print(f"[AUTO DETECT] Bot added to chat: {chat.title or chat.id} (ID: {chat.id}). Added to broadcast list.")
+                await add_joined_chat(chat.id, title)
+                try:
+                    from toxic.modules.smart_broadcast import add_sb_destination
+                    await add_sb_destination(chat.id, title, c_type)
+                except Exception:
+                    pass
+                print(f"[AUTO DETECT] Bot added to chat: {title} (ID: {chat.id}). Added to broadcast list.")
                 
                 # Auto-update group description/bio with disclaimer & contact info
                 try:
@@ -282,7 +296,12 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
             # If bot was kicked, banned, or left the chat
             elif status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
                 await remove_joined_chat(chat.id)
-                print(f"[AUTO DETECT] Bot left/kicked from chat: {chat.title or chat.id} (ID: {chat.id}). Removed from broadcast list.")
+                try:
+                    from toxic.modules.smart_broadcast import remove_sb_destination
+                    await remove_sb_destination(chat.id)
+                except Exception:
+                    pass
+                print(f"[AUTO DETECT] Bot left/kicked from chat: {title} (ID: {chat.id}). Removed from broadcast list.")
     except Exception as e:
         print(f"Error in on_bot_chat_member_updated: {e}")
 
@@ -316,6 +335,12 @@ async def add_chat_cmd(client: Client, message: Message):
             return
 
     await add_joined_chat(chat_id, title)
+    try:
+        from toxic.modules.smart_broadcast import add_sb_destination
+        c_type = "channel" if str(chat_id).startswith("-100") else "supergroup"
+        await add_sb_destination(chat_id, title, c_type)
+    except Exception:
+        pass
     
     # Auto-update bio
     bio_status = "Skipped"
@@ -352,6 +377,11 @@ async def remove_chat_cmd(client: Client, message: Message):
         return
 
     await remove_joined_chat(chat_id)
+    try:
+        from toxic.modules.smart_broadcast import remove_sb_destination
+        await remove_sb_destination(chat_id)
+    except Exception:
+        pass
     await message.reply_text(f"✅ **Linked Chat Removed!**\n\n• **ID:** `{chat_id}`")
 
 @app.on_message(filters.command(["listchats"]) & filters.private)

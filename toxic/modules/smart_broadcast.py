@@ -104,7 +104,7 @@ async def sync_all_broadcast_destinations():
     """
     try:
         # 1. Sync all unique groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats
+        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat
         all_chats = await get_all_broadcast_chats()
         for j in all_chats:
             cid = j.get("chat_id")
@@ -133,19 +133,36 @@ async def sync_all_broadcast_destinations():
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
 
-        # 3. Sync groups & channels from Userbot Dialogs (ONLY groups & channels, NOT personal DMs)
+        # 3. Sync groups & channels from Userbot Dialogs (ONLY where userbot can actually post)
         try:
             from toxic.core.mongo.db import get_all_active_userbots
             userbots = await get_all_active_userbots()
             for ub in userbots:
                 if getattr(ub, "is_connected", False):
                     try:
-                        async for dialog in ub.get_dialogs(limit=300):
+                        async for dialog in ub.get_dialogs(limit=250):
                             chat = dialog.chat
-                            if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
-                                c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
-                                title = getattr(chat, "title", None) or f"Chat {chat.id}"
-                                await add_sb_destination(chat.id, title, c_type)
+                            if chat.type == ChatType.CHANNEL:
+                                # ONLY add channels where userbot is creator or admin with post privileges
+                                is_admin = False
+                                if getattr(dialog, "is_creator", False) or getattr(chat, "is_creator", False):
+                                    is_admin = True
+                                else:
+                                    try:
+                                        member = await ub.get_chat_member(chat.id, "me")
+                                        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                                            if getattr(member.privileges, "can_post_messages", True):
+                                                is_admin = True
+                                    except Exception:
+                                        pass
+                                if is_admin:
+                                    title = getattr(chat, "title", None) or f"Channel {chat.id}"
+                                    await add_sb_destination(chat.id, title, "channel")
+                                    await add_joined_chat(chat.id, title)
+                            elif chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                                title = getattr(chat, "title", None) or f"Group {chat.id}"
+                                await add_sb_destination(chat.id, title, "supergroup")
+                                await add_joined_chat(chat.id, title)
                     except Exception:
                         pass
         except Exception as d_err:
@@ -381,6 +398,7 @@ async def execute_smart_broadcast_round(manual: bool = False, status_msg: Messag
         # If it's a private user DM, only use bot app
         clients_to_try = [app] if cid > 0 else clients_pool
 
+        last_err_text = "Could not send broadcast"
         for client in clients_to_try:
             if not getattr(client, "is_connected", True):
                 continue
@@ -439,11 +457,26 @@ async def execute_smart_broadcast_round(manual: bool = False, status_msg: Messag
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
             except Exception as err:
+                last_err_text = str(err)
                 continue
 
         if not sent_success:
             failed_count += 1
-            failed_details.append(f"• **{title}** (`{cid}`): Could not send broadcast")
+            err_lower = last_err_text.lower()
+            is_perm = any(k in err_lower for k in [
+                "chat_write_forbidden", "channel_private", "chat_admin_required",
+                "user_not_participant", "peer_id_invalid", "channel_invalid",
+                "chat_invalid", "user_is_blocked", "user_deactivated", "input_user_deactivated",
+                "chat not found", "bot was kicked", "bot was blocked"
+            ])
+            if is_perm:
+                try:
+                    await remove_sb_destination(cid)
+                    from toxic.core.mongo.db import remove_joined_chat
+                    await remove_joined_chat(cid)
+                except Exception:
+                    pass
+            failed_details.append(f"• **{title}** (`{cid}`): {last_err_text}")
 
         # Live Progress updates to the user message
         now_t = time.time()
@@ -520,7 +553,10 @@ def get_sb_main_keyboard(cfg: dict):
             InlineKeyboardButton("🧹 Force Delete All Broadcasts", callback_data="sb_force_delete_all")
         ],
         [
-            InlineKeyboardButton("📊 View Destination Stats", callback_data="sb_view_stats"),
+            InlineKeyboardButton("📊 Destination Stats", callback_data="sb_view_stats"),
+            InlineKeyboardButton("🔄 Sync Chats", callback_data="sb_sync_chats")
+        ],
+        [
             InlineKeyboardButton("❌ Close", callback_data="sb_close")
         ]
     ]
@@ -750,6 +786,16 @@ async def set_max_rounds_cmd(client: Client, message: Message):
         await message.reply_text(f"✅ **Max round limit set to {rnds if rnds > 0 else 'Infinite'}!**")
     except ValueError:
         await message.reply_text("❌ Invalid number!")
+
+@app.on_message(filters.command(["syncchats", "sb_sync", "syncbcast"], prefixes=["/", "!", ".", ""]), group=-1)
+async def sync_chats_cmd(client: Client, message: Message):
+    user_id = get_sender_id(message)
+    if not is_owner(user_id):
+        return
+    st = await message.reply_text("🔄 **Scanning & syncing all active bot groups, channels & users...**")
+    await sync_all_broadcast_destinations()
+    count = await _dest_col.count_documents({})
+    await st.edit_text(f"✅ **Sync Completed!**\n\n• Found `{count}` valid reachable destinations (groups, channels, registered DMs).")
 
 
 # ─── Interactive Callback Handler ───
@@ -1082,7 +1128,14 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
             text += f"{i}. **{dest['title']}** (`{dest['chat_type'].upper()}`)\n   • ID: `{dest['chat_id']}`\n"
         if len(all_stored) > 30:
             text += f"\n... and {len(all_stored) - 30} more destinations."
-        await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("sb_back", callback_data="sb_back")]]))
+        await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="sb_back")]]))
+
+    elif data == "sb_sync_chats":
+        await callback_query.answer("🔄 Scanning & syncing all active bot groups, channels & users...")
+        await sync_all_broadcast_destinations()
+        count = await _dest_col.count_documents({})
+        await callback_query.answer(f"✅ Synced! Found {count} valid reachable destinations.", show_alert=True)
+        await render_smart_broadcast_menu(client, callback_query)
 
 # ─── Autonomous Presence Tracking Handlers ───
 @app.on_message(filters.group | filters.channel | filters.private, group=99)
