@@ -1,5 +1,4 @@
 import asyncio
-import time
 import datetime
 from pyrogram import filters, Client
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, ChatMemberUpdated
@@ -509,16 +508,17 @@ async def reset_bio_cmd(client: Client, message: Message):
 # ────── Common Message Delivery Helper ──────
 
 async def send_single_broadcast(client: Client, chat_id: int, reply: Message = None, cmd_text: str = "", userbot_client: Client = None):
-    """Delivers message payload (media, document, photo, text, etc.) with dual-client and flood-wait protection."""
+    """Delivers message payload (media, document, photo, text, etc.) with dual-client, forum general topic, and flood-wait protection."""
     clients_to_try = [client]
     if userbot_client and userbot_client not in clients_to_try:
         clients_to_try.append(userbot_client)
 
     try:
-        from toxic.core.get_func import get_client
-        shared_ub = get_client()
-        if shared_ub and shared_ub not in clients_to_try and getattr(shared_ub, "is_connected", False):
-            clients_to_try.append(shared_ub)
+        from toxic.core.mongo.db import get_all_active_userbots
+        ubs = await get_all_active_userbots()
+        for ub in ubs:
+            if ub and ub not in clients_to_try and getattr(ub, "is_connected", False):
+                clients_to_try.append(ub)
     except Exception:
         pass
 
@@ -544,14 +544,25 @@ async def send_single_broadcast(client: Client, chat_id: int, reply: Message = N
                     elif reply.voice:
                         return await current_client.send_voice(chat_id, reply.voice.file_id, caption=combined_text, parse_mode=ParseMode.HTML)
                     else:
-                        return await current_client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                        try:
+                            return await current_client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                        except Exception:
+                            return await current_client.send_message(chat_id, combined_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, message_thread_id=1)
                 else:
                     try:
                         return await reply.copy(chat_id)
                     except Exception:
-                        return await reply.forward(chat_id)
+                        try:
+                            return await reply.forward(chat_id)
+                        except Exception:
+                            # General topic fallback for forum supergroups
+                            return await reply.copy(chat_id, message_thread_id=1)
             elif cmd_text:
-                return await current_client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                try:
+                    return await current_client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                except Exception:
+                    # General topic fallback for forum supergroups
+                    return await current_client.send_message(chat_id, cmd_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, message_thread_id=1)
         except FloodWait as e:
             await asyncio.sleep(e.value + 1)
             try:
@@ -572,6 +583,7 @@ async def send_single_broadcast(client: Client, chat_id: int, reply: Message = N
     if last_err:
         raise last_err
     return None
+
 
 
 # ────── 1. User DM Broadcast Command (/broadcast /bcast /sendall /dmcast) ──────

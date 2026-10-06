@@ -16,7 +16,6 @@ import asyncio
 import datetime
 import time
 import re
-import time
 from pyrogram import filters, Client, types, raw
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, ChatMemberUpdated
 from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
@@ -100,57 +99,60 @@ async def sync_all_broadcast_destinations():
     Auto-discovers and syncs all destinations from:
     1. All joined chats, channels, forward targets, mirror sessions from MongoDB (db.get_all_broadcast_chats)
     2. Registered users in MongoDB (users_db.get_all_registered_users)
-    3. Active dialogs from Bot App and Userbot
-    Ensures every group, channel, and DM is present in _dest_col.
+    3. Active dialogs (groups & channels only) from Userbot & Bot App
+    Guarantees that personal userbot contacts are NOT added as private targets.
     """
     try:
-        # 1. Sync from db.get_all_broadcast_chats()
+        # 1. Sync all unique groups and channels from db.get_all_broadcast_chats()
         from toxic.core.mongo.db import get_all_broadcast_chats
         all_chats = await get_all_broadcast_chats()
         for j in all_chats:
             cid = j.get("chat_id")
             title = j.get("title", f"Chat {cid}")
-            if cid:
+            if cid and cid < 0:
                 c_type = "channel" if str(cid).startswith("-100") else "supergroup"
                 await add_sb_destination(cid, title, c_type)
 
-        # 2. Sync from users_db.get_all_registered_users()
+        # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
         try:
             from toxic.core.mongo.users_db import get_all_registered_users
             users = await get_all_registered_users()
+            registered_uids = set()
             for u in users:
                 if isinstance(u, int) or (isinstance(u, str) and u.isdigit()):
                     uid = int(u)
                     if uid > 0:
+                        registered_uids.add(uid)
                         await add_sb_destination(uid, f"User {uid}", "private")
+
+            # Clean up any non-registered private contacts from destinations collection
+            await _dest_col.delete_many({
+                "chat_type": "private",
+                "chat_id": {"$nin": list(registered_uids)}
+            })
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
 
-        # 3. Sync from Userbot Dialogs (up to 500 limit)
-        ub_client = None
+        # 3. Sync groups & channels from Userbot Dialogs (ONLY groups & channels, NOT personal DMs)
         try:
-            from toxic.core.get_func import get_client
-            ub_client = get_client()
-            if not ub_client or not getattr(ub_client, "is_connected", False):
-                owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-                for oid in owner_list:
-                    from toxic.modules.main import initialize_userbot
-                    ub_client = await initialize_userbot(int(oid))
-                    if ub_client:
-                        break
-
-            if ub_client and getattr(ub_client, "is_connected", False):
-                async for dialog in ub_client.get_dialogs(limit=500):
-                    chat = dialog.chat
-                    c_type = "private" if chat.type == ChatType.PRIVATE else ("channel" if chat.type == ChatType.CHANNEL else "supergroup")
-                    title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or getattr(chat, "username", None) or f"Chat {chat.id}"
-                    await add_sb_destination(chat.id, title, c_type)
+            from toxic.core.mongo.db import get_all_active_userbots
+            userbots = await get_all_active_userbots()
+            for ub in userbots:
+                if getattr(ub, "is_connected", False):
+                    try:
+                        async for dialog in ub.get_dialogs(limit=300):
+                            chat = dialog.chat
+                            if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                                c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+                                title = getattr(chat, "title", None) or f"Chat {chat.id}"
+                                await add_sb_destination(chat.id, title, c_type)
+                    except Exception:
+                        pass
         except Exception as d_err:
             pass
 
     except Exception as err:
         print(f"[SmartBroadcast Sync] Sync error: {err}")
-
 
 
 _last_dest_sync_time = 0
@@ -178,12 +180,17 @@ async def get_sb_destinations(cfg: dict = None):
         return []
 
     dest_list = []
+    seen_cids = set()
     try:
         async for doc in _dest_col.find({"chat_type": {"$in": allowed_types}}):
-            dest_list.append(doc)
+            cid = doc.get("chat_id")
+            if cid and cid not in seen_cids:
+                seen_cids.add(cid)
+                dest_list.append(doc)
     except Exception as e:
         print(f"[SmartBroadcast DB] Error fetching destinations: {e}")
     return dest_list
+
 
 async def add_sb_deletion(chat_id: int, message_id: int, delete_at: datetime.datetime, title: str = "Chat", round_num: int = 1):
     try:
@@ -217,17 +224,18 @@ async def remove_sb_deletion(deletion_id):
 async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client=None):
     """
     Deletes a single broadcast message in Channels, Groups, or DMs.
-    Tries Bot App (High-level + Raw RPC) first, Userbot second, Shared Client third.
+    Tries Bot App (High-level + Raw RPC) and all active userbot sessions.
     """
     clients_to_try = [app]
     if userbot_client and userbot_client not in clients_to_try:
         clients_to_try.append(userbot_client)
 
     try:
-        from toxic.core.get_func import get_client
-        shared_ub = get_client()
-        if shared_ub and shared_ub not in clients_to_try and getattr(shared_ub, "is_connected", False):
-            clients_to_try.append(shared_ub)
+        from toxic.core.mongo.db import get_all_active_userbots
+        active_ubs = await get_all_active_userbots()
+        for ub in active_ubs:
+            if ub and ub not in clients_to_try and getattr(ub, "is_connected", False):
+                clients_to_try.append(ub)
     except Exception:
         pass
 
@@ -281,15 +289,13 @@ async def delete_all_active_sb_messages(filter_query: dict = None):
     failed_chats = []
 
     userbot_client = None
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    for oid in owner_list:
-        try:
-            from toxic.modules.main import initialize_userbot
-            userbot_client = await initialize_userbot(int(oid))
-            if userbot_client:
-                break
-        except Exception:
-            pass
+    try:
+        from toxic.core.mongo.db import get_all_active_userbots
+        ubs = await get_all_active_userbots()
+        if ubs:
+            userbot_client = ubs[0]
+    except Exception:
+        pass
 
     query = filter_query if filter_query else {}
     try:
@@ -313,12 +319,6 @@ async def delete_all_active_sb_messages(filter_query: dict = None):
             await asyncio.sleep(0.05)
     except Exception as e:
         print(f"[SmartBroadcast] Deletion error: {e}")
-    finally:
-        if userbot_client:
-            try:
-                await userbot_client.stop()
-            except Exception:
-                pass
 
     return deleted_ok, failed_chats
 
@@ -350,13 +350,15 @@ async def execute_smart_broadcast_round(manual: bool = False):
     if not destinations:
         return 0, 0, [], "No target destinations enabled or found in database."
 
-    # Try getting working userbot for fallback if app fails or lacks access
-    userbot_client = None
+    # Load all available userbots (from STRINGS and MongoDB sessions)
+    active_userbots = []
     try:
-        from toxic.core.get_func import get_client
-        userbot_client = get_client()
-    except Exception:
-        pass
+        from toxic.core.mongo.db import get_all_active_userbots
+        active_userbots = await get_all_active_userbots()
+    except Exception as e:
+        print(f"[SmartBroadcast] Failed to load userbots: {e}")
+
+    clients_pool = [app] + [ub for ub in active_userbots if getattr(ub, "is_connected", False)]
 
     sent_count = 0
     failed_count = 0
@@ -368,23 +370,31 @@ async def execute_smart_broadcast_round(manual: bool = False):
         sent_msg = None
         sent_success = False
 
-        clients_to_try = [app]
-        if userbot_client and userbot_client not in clients_to_try and getattr(userbot_client, "is_connected", False):
-            clients_to_try.append(userbot_client)
+        # If it's a private user DM, only use bot app
+        clients_to_try = [app] if cid > 0 else clients_pool
 
         for client in clients_to_try:
+            if not getattr(client, "is_connected", True):
+                continue
             try:
                 if src_chat_id and src_msg_id:
                     if fast_forward:
                         try:
                             sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
                         except Exception:
-                            sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
+                            try:
+                                sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
+                            except Exception:
+                                # Fallback for forum supergroups (General topic)
+                                sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id, message_thread_id=1)
                     else:
                         try:
                             sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
                         except Exception:
-                            sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
+                            try:
+                                sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
+                            except Exception:
+                                sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
                 elif msg_text:
                     html_text = format_caption_to_html(msg_text) if 'format_caption_to_html' in globals() else msg_text
                     try:
@@ -393,14 +403,22 @@ async def execute_smart_broadcast_round(manual: bool = False):
                             html_text or msg_text, 
                             disable_web_page_preview=disable_preview
                         )
-                    except Exception as topic_err:
-                        # Fallback for forum supergroups needing thread id
-                        sent_msg = await client.send_message(
-                            cid,
-                            html_text or msg_text,
-                            disable_web_page_preview=disable_preview,
-                            reply_to_message_id=1
-                        )
+                    except Exception as send_err:
+                        # Fallback for forum supergroups (send to General topic)
+                        try:
+                            sent_msg = await client.send_message(
+                                cid,
+                                html_text or msg_text,
+                                disable_web_page_preview=disable_preview,
+                                message_thread_id=1
+                            )
+                        except Exception:
+                            sent_msg = await client.send_message(
+                                cid,
+                                html_text or msg_text,
+                                disable_web_page_preview=disable_preview,
+                                reply_to_message_id=1
+                            )
 
                 msg_id = extract_message_id(sent_msg)
                 if msg_id:
@@ -418,14 +436,8 @@ async def execute_smart_broadcast_round(manual: bool = False):
         if not sent_success:
             failed_count += 1
             failed_details.append(f"• **{title}** (`{cid}`): Could not send broadcast")
-            try:
-                from toxic.core.mongo.db import remove_joined_chat
-                await remove_sb_destination(cid)
-                await remove_joined_chat(cid)
-            except Exception:
-                pass
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.15)
 
     await update_sb_config({"last_broadcast_round": run_count})
     return sent_count, failed_count, failed_details, None

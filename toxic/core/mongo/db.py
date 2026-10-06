@@ -374,8 +374,9 @@ async def remove_joined_chat(chat_id):
 
 async def get_all_broadcast_chats():
     """
-    Aggregates all known groups, supergroups, and channels across all DB collections
+    Aggregates all unique known groups, supergroups, and channels across all DB collections
     (joined_chats, smart_broadcast destinations, forward mappings, topic mirror sessions, auth channels).
+    Only includes actual groups/channels (cid < 0) and guarantees no duplicates.
     """
     chat_map = {}
     
@@ -386,9 +387,10 @@ async def get_all_broadcast_chats():
             try:
                 cid = int(cid)
             except Exception:
-                pass
-            title = doc.get("title", "Group/Channel")
-            chat_map[cid] = {"chat_id": cid, "title": title}
+                continue
+            if cid < 0:
+                title = doc.get("title", "Group/Channel")
+                chat_map[cid] = {"chat_id": cid, "title": title}
     except Exception as e:
         print(f"[DB] Error loading joined_chats: {e}")
 
@@ -401,9 +403,9 @@ async def get_all_broadcast_chats():
                 try:
                     cid = int(cid)
                 except Exception:
-                    pass
-                title = doc.get("title", f"Chat {cid}")
-                if cid not in chat_map:
+                    continue
+                if cid < 0 and cid not in chat_map:
+                    title = doc.get("title", f"Chat {cid}")
                     chat_map[cid] = {"chat_id": cid, "title": title}
     except Exception as e:
         pass
@@ -416,13 +418,13 @@ async def get_all_broadcast_chats():
                 try:
                     tgt = int(tgt)
                 except Exception:
-                    pass
-                if tgt not in chat_map:
+                    continue
+                if tgt < 0 and tgt not in chat_map:
                     chat_map[tgt] = {"chat_id": tgt, "title": f"Forward Target {tgt}"}
     except Exception as e:
         pass
 
-    # 4. From topic mirror sessions
+    # 4. From topic mirror sessions (deduplicated source & target supergroups)
     try:
         async for doc in mirror_db.find({}):
             for k in ["src_chat_id", "tgt_chat_id"]:
@@ -431,9 +433,9 @@ async def get_all_broadcast_chats():
                     try:
                         cid = int(cid)
                     except Exception:
-                        pass
-                    if cid not in chat_map:
-                        chat_map[cid] = {"chat_id": cid, "title": f"Mirror Chat {cid}"}
+                        continue
+                    if cid < 0 and cid not in chat_map:
+                        chat_map[cid] = {"chat_id": cid, "title": f"Mirror Group {cid}"}
     except Exception as e:
         pass
 
@@ -444,8 +446,8 @@ async def get_all_broadcast_chats():
             try:
                 ac = int(ac)
             except Exception:
-                pass
-            if ac not in chat_map:
+                continue
+            if ac < 0 and ac not in chat_map:
                 chat_map[ac] = {"chat_id": ac, "title": f"Auth Channel {ac}"}
         
         log_ch = await get_log_channel()
@@ -454,12 +456,84 @@ async def get_all_broadcast_chats():
                 log_ch = int(log_ch)
             except Exception:
                 pass
-            if log_ch not in chat_map:
+            if isinstance(log_ch, int) and log_ch < 0 and log_ch not in chat_map:
                 chat_map[log_ch] = {"chat_id": log_ch, "title": f"Log Channel {log_ch}"}
     except Exception as e:
         pass
 
     return list(chat_map.values())
+
+
+async def get_all_active_userbots():
+    """
+    Returns a list of all active/usable userbot clients:
+    1. Pre-configured pro_clients (from STRINGS in config)
+    2. Dynamically initialized user sessions from MongoDB (owner + users)
+    """
+    from config import API_ID, API_HASH, OWNER_ID
+    from pyrogram import Client
+
+    clients = []
+    
+    # 1. Add started pro_clients
+    try:
+        from toxic import pro_clients
+        for pc in pro_clients:
+            if getattr(pc, "is_connected", False):
+                clients.append(pc)
+    except Exception:
+        pass
+
+    # 2. Add shared client
+    try:
+        from toxic.core.get_func import get_client
+        sc = get_client()
+        if sc and sc not in clients and getattr(sc, "is_connected", False):
+            clients.append(sc)
+    except Exception:
+        pass
+
+    # 3. Initialize userbot from sessions stored in MongoDB
+    try:
+        owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+        # Check owners first, then other users with saved sessions
+        cursor = db.find({"session": {"$exists": True, "$ne": None}})
+        async for user_doc in cursor:
+            uid = user_doc.get("_id")
+            session_str = user_doc.get("session")
+            if not session_str:
+                continue
+
+            # Check if already in clients
+            already_have = False
+            for c in clients:
+                try:
+                    if getattr(c, "me", None) and c.me.id == uid:
+                        already_have = True
+                        break
+                except Exception:
+                    pass
+
+            if not already_have:
+                try:
+                    ub = Client(
+                        f"ub_pool_{uid}",
+                        api_id=API_ID,
+                        api_hash=API_HASH,
+                        session_string=session_str,
+                        in_memory=True,
+                        no_updates=True,
+                        max_concurrent_transmissions=16
+                    )
+                    await ub.start()
+                    clients.append(ub)
+                except Exception as ub_err:
+                    pass
+    except Exception as e:
+        print(f"[DB] Error loading userbot pool: {e}")
+
+    return clients
+
 
 
 # Collection for persistent topic mirror mappings & checkpoints
