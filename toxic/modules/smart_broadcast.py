@@ -34,8 +34,8 @@ _del_col = _sb_db.deletions
 def is_owner(user_id: int) -> bool:
     if not user_id:
         return False
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    return any(str(user_id) == str(o) for o in owner_list)
+    from toxic.core.mongo.db import is_admin_or_owner
+    return is_admin_or_owner(user_id)
 
 def extract_message_id(sent_msg):
     """Safely extracts integer message ID from any Pyrogram response format."""
@@ -572,8 +572,8 @@ async def render_smart_broadcast_menu(client: Client, message_or_query):
             pass
 
 # ─── Commands & Handlers ───
-SB_COMMANDS = ["smartbroadcast", "sbcast", "autobcast", "smartbcast", "sb", "autobroadcast", "abc", "broadcast", "bcast"]
-SB_REGEX_PATTERN = r"^(?:/|!|\.|)(?:smartbroadcast|sbcast|autobcast|smartbcast|sb|autobroadcast|abc|broadcast|bcast)(?:@\w+)?$"
+SB_COMMANDS = ["smartbroadcast", "sbcast", "autobcast", "smartbcast", "sb", "autobroadcast", "abc"]
+SB_REGEX_PATTERN = r"^(?:/|!|\.|)(?:smartbroadcast|sbcast|autobcast|smartbcast|sb|autobroadcast|abc)(?:@\w+)?$"
 
 
 def get_sender_id(message: Message) -> int:

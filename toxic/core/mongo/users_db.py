@@ -59,11 +59,11 @@ async def get_all_registered_users():
     async for doc in settings_db.find({}):
       if "_id" in doc:
         val = str(doc["_id"])
-        if val.isdigit() or (val.startswith('-') and val[1:].isdigit()):
+        if val.isdigit():
           users.append(int(val))
   except Exception as e:
     print(f"Error getting users from settings db: {e}")
-  return list(set(users))
+  return list(set(u for u in users if isinstance(u, int) and u > 0))
     
 
 

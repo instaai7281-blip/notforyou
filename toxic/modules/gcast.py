@@ -1,104 +1,86 @@
 # ---------------------------------------------------
 # File Name: gcast.py
-# Description: A Pyrogram bot for downloading files from Telegram channels or groups 
-#              and uploading them back to Telegram.
-# Author: Gagan
-
-
-
-# Created: 2025-01-11
-# Last Modified: 2025-01-11
-# Version: 2.0.5
-# License: MIT License
+# Description: Forward/Announce broadcast module for Pyrogram bot.
 # ---------------------------------------------------
 
 import asyncio
-import traceback
-from pyrogram import filters
+from pyrogram import filters, Client
+from pyrogram.types import Message
+from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, InputUserDeactivated, UserIsBlocked, PeerIdInvalid
-from config import OWNER_ID
 from toxic import app
 from toxic.core.mongo.db import admin_filter
 from toxic.core.mongo.users_db import get_all_registered_users
 
-async def send_msg(user_id, message):
-    try:
-        x = await message.copy(chat_id=user_id)
-        try:
-            await x.pin()
-        except Exception:
-            try:
-                await x.pin(both_sides=True)
-            except Exception:
-                pass
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
-        return await send_msg(user_id, message)
-    except InputUserDeactivated:
-        return 400, f"{user_id} : deactivated\n"
-    except UserIsBlocked:
-        return 400, f"{user_id} : blocked the bot\n"
-    except PeerIdInvalid:
-        return 400, f"{user_id} : user id invalid\n"
-    except Exception:
-        return 500, f"{user_id} : {traceback.format_exc()}\n"
+# ────── Forward/Announce Broadcast Command (/acast /announce) ──────
 
-
-@app.on_message(filters.command("gcast") & admin_filter)
-async def broadcast(_, message):
+@app.on_message(filters.command(["acast", "announce", "fwdcast"]) & admin_filter)
+async def announced_broadcast_cmd(client: Client, message: Message):
+    """Forwards the replied message directly to all registered bot users."""
     if not message.reply_to_message:
-        await message.reply_text("ʀᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ ɪᴛ.")
-        return    
-    exmsg = await message.reply_text("sᴛᴀʀᴛᴇᴅ ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ!")
-    all_users = await get_all_registered_users()
+        await message.reply_text(
+            "📢 <b>Announced / Forward Broadcast Usage</b>:\n\n"
+            "• Reply to any message/post with <code>/acast</code> to forward it directly to all bot users in PM.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    to_send_id = message.reply_to_message.id
+    source_chat_id = message.chat.id
+
+    raw_users = await get_all_registered_users()
+    users = [u for u in raw_users if isinstance(u, int) and u > 0]
+
+    if not users:
+        await message.reply_text("ℹ️ **No registered users found in database to forward.**")
+        return
+
+    status_msg = await message.reply_text(f"🚀 **Starting Forward Broadcast to `{len(users)}` users...**")
     done_users = 0
     failed_users = 0
-    
-    for user in all_users:
+    total_users = len(users)
+    start_time = asyncio.get_event_loop().time()
+
+    for i, target_user in enumerate(users, 1):
         try:
-            await send_msg(user, message.reply_to_message)
+            await client.forward_messages(
+                chat_id=int(target_user),
+                from_chat_id=source_chat_id,
+                message_ids=to_send_id
+            )
             done_users += 1
             await asyncio.sleep(0.1)
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+            try:
+                await client.forward_messages(
+                    chat_id=int(target_user),
+                    from_chat_id=source_chat_id,
+                    message_ids=to_send_id
+                )
+                done_users += 1
+            except Exception:
+                failed_users += 1
         except Exception:
             failed_users += 1
-            
-    if failed_users == 0:
-        await exmsg.edit_text(
-            f"**sᴜᴄᴄᴇssғᴜʟʟʏ ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ ✅**\n\n**sᴇɴᴛ ᴍᴇssᴀɢᴇ ᴛᴏ** `{done_users}` **ᴜsᴇʀs**",
-        )
-    else:
-        await exmsg.edit_text(
-            f"**sᴜᴄᴄᴇssғᴜʟʟʏ ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ ✅**\n\n**sᴇɴᴛ ᴍᴇssᴀɢᴇ ᴛᴏ** `{done_users}` **ᴜsᴇʀs**\n\n**ɴᴏᴛᴇ:-** `ᴅᴜᴇ ᴛᴏ sᴏᴍᴇ ɪssᴜᴇ ᴄᴀɴ'ᴛ ᴀʙʟᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ` `{failed_users}` **ᴜsᴇʀs**",
-        )
 
+        if i % 25 == 0 or i == total_users:
+            percent = int((i / total_users) * 100)
+            try:
+                await status_msg.edit(
+                    f"📢 **Forward Broadcast in Progress...**\n\n"
+                    f"• Progress: `{i}/{total_users}` ({percent}%)\n"
+                    f"• Delivered: `{done_users}` ✅\n"
+                    f"• Failed: `{failed_users}` ❌"
+                )
+            except Exception:
+                pass
 
-@app.on_message(filters.command("acast") & admin_filter)
-async def announced(_, message):
-    if not message.reply_to_message:
-        return await message.reply_text("Reply To Some Post To Broadcast")
-    to_send = message.reply_to_message.id
-    exmsg = await message.reply_text("Started forwarding announced broadcast...")
-    users = await get_all_registered_users()
-    done_users = 0
-    failed_users = 0
-  
-    for user in users:
-        try:
-            await _.forward_messages(chat_id=int(user), from_chat_id=message.chat.id, message_ids=to_send)
-            done_users += 1
-            await asyncio.sleep(0.2)
-        except Exception as e:
-            failed_users += 1
-          
-    if failed_users == 0:
-        await exmsg.edit_text(
-            f"**sᴜᴄᴄᴇssғᴜʟʟʏ ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ ✅**\n\n**sᴇɴᴛ ᴍᴇssᴀɢᴇ ᴛᴏ** `{done_users}` **ᴜsᴇʀs**",
-        )
-    else:
-        await exmsg.edit_text(
-            f"**sᴜᴄᴄᴇssғᴜʟʟʏ ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ ✅**\n\n**sᴇɴᴛ ᴍᴇssᴀɢᴇ ᴛᴏ** `{done_users}` **ᴜsᴇʀs**\n\n**ɴᴏᴛᴇ:-** `ᴅᴜᴇ ᴛᴏ sᴏᴍᴇ ɪssᴜᴇ ᴄᴀɴ'ᴛ ᴀʙʟᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ` `{failed_users}` **ᴜsᴇʀs**",
-        )
-
-
-
-
+    elapsed = round(asyncio.get_event_loop().time() - start_time, 1)
+    await status_msg.edit(
+        f"🎉 **Forward Broadcast Completed!**\n\n"
+        f"• **Targeted Users:** `{total_users}`\n"
+        f"• **Successfully Delivered:** `{done_users}` ✅\n"
+        f"• **Failed:** `{failed_users}` ❌\n"
+        f"• **Time Taken:** `{elapsed}s` ⏱️"
+    )
