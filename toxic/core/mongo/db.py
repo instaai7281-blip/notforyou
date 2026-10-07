@@ -374,16 +374,16 @@ async def remove_joined_chat(chat_id):
 
 async def get_all_broadcast_chats():
     """
-    Aggregates all unique known groups, supergroups, and channels across all DB collections
-    (joined_chats, smart_broadcast destinations, forward mappings, topic mirror sessions, auth channels).
+    Aggregates all unique known groups, supergroups, and channels where the bot is joined
+    (from joined_chats_db, auth_channels, and log channel).
     Only includes actual groups/channels (cid < 0) and guarantees no duplicates.
     """
     chat_map = {}
     
-    # 1. From joined_chats_db
+    # 1. From joined_chats_db (strictly where bot was added/presence recorded)
     try:
         async for doc in joined_chats_db.find({}):
-            cid = doc["_id"]
+            cid = doc.get("_id") or doc.get("chat_id")
             try:
                 cid = int(cid)
             except Exception:
@@ -394,52 +394,7 @@ async def get_all_broadcast_chats():
     except Exception as e:
         print(f"[DB] Error loading joined_chats: {e}")
 
-    # 2. From smart_broadcast destinations
-    try:
-        sb_dest_col = mongo.smart_broadcast_system.destinations
-        async for doc in sb_dest_col.find({"chat_type": {"$in": ["group", "supergroup", "channel"]}}):
-            cid = doc.get("chat_id")
-            if cid:
-                try:
-                    cid = int(cid)
-                except Exception:
-                    continue
-                if cid < 0 and cid not in chat_map:
-                    title = doc.get("title", f"Chat {cid}")
-                    chat_map[cid] = {"chat_id": cid, "title": title}
-    except Exception as e:
-        pass
-
-    # 3. From forward mappings
-    try:
-        async for doc in mappings_db.find({}):
-            tgt = doc.get("target_chat_id")
-            if tgt:
-                try:
-                    tgt = int(tgt)
-                except Exception:
-                    continue
-                if tgt < 0 and tgt not in chat_map:
-                    chat_map[tgt] = {"chat_id": tgt, "title": f"Forward Target {tgt}"}
-    except Exception as e:
-        pass
-
-    # 4. From topic mirror sessions (deduplicated source & target supergroups)
-    try:
-        async for doc in mirror_db.find({}):
-            for k in ["src_chat_id", "tgt_chat_id"]:
-                cid = doc.get(k)
-                if cid:
-                    try:
-                        cid = int(cid)
-                    except Exception:
-                        continue
-                    if cid < 0 and cid not in chat_map:
-                        chat_map[cid] = {"chat_id": cid, "title": f"Mirror Group {cid}"}
-    except Exception as e:
-        pass
-
-    # 5. From auth channels & log channel
+    # 2. From auth channels & log channel
     try:
         auth_list = await get_auth_channels()
         for ac in auth_list:

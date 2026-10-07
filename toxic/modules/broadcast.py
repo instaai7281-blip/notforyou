@@ -728,22 +728,8 @@ async def group_broadcast_cmd(client: Client, message: Message):
         except Exception:
             pass
 
-    # Aggregates chats from all collections
+    # Aggregates chats from all collections (where bot presence is verified)
     db_chats = await get_all_broadcast_chats()
-    
-    # Sync from userbot dialogs if connected
-    if userbot_client and getattr(userbot_client, "is_connected", False):
-        try:
-            existing_cids = {c["chat_id"] for c in db_chats}
-            async for dialog in userbot_client.get_dialogs(limit=300):
-                chat = dialog.chat
-                if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
-                    if chat.id not in existing_cids:
-                        db_chats.append({"chat_id": chat.id, "title": chat.title or "Unknown"})
-                        existing_cids.add(chat.id)
-                        await add_joined_chat(chat.id, chat.title or "Unknown")
-        except Exception as d_err:
-            print(f"[GCAST] Dialog sync notice: {d_err}")
 
     if not db_chats:
         await message.reply_text("ℹ️ **No linked groups or channels found in database to broadcast.**")
@@ -839,22 +825,9 @@ async def all_broadcast_cmd(client: Client, message: Message):
     raw_users = await get_all_registered_users()
     all_users = [u for u in raw_users if isinstance(u, int) and u > 0]
     
+    # Aggregates chats from all collections (where bot presence is verified)
     db_chats = await get_all_broadcast_chats()
     group_ids = [c["chat_id"] for c in db_chats if c.get("chat_id")]
-
-    # Sync from userbot dialogs if connected
-    if userbot_client and getattr(userbot_client, "is_connected", False):
-        try:
-            existing_cids = set(group_ids)
-            async for dialog in userbot_client.get_dialogs(limit=300):
-                chat = dialog.chat
-                if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
-                    if chat.id not in existing_cids:
-                        group_ids.append(chat.id)
-                        existing_cids.add(chat.id)
-                        await add_joined_chat(chat.id, chat.title or "Unknown")
-        except Exception as d_err:
-            print(f"[ALL BROADCAST] Dialog sync notice: {d_err}")
 
     all_destinations = all_users + group_ids
     total_targets = len(all_destinations)

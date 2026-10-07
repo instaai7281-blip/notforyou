@@ -125,15 +125,51 @@ async def sync_all_broadcast_destinations():
         except Exception:
             pass
 
-        # 1. Sync all unique groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat
+        # 1. Sync and strictly verify groups and channels from db.get_all_broadcast_chats()
+        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, remove_joined_chat
         all_chats = await get_all_broadcast_chats()
+        valid_bot_cids = set()
+
         for j in all_chats:
             cid = j.get("chat_id")
-            title = j.get("title", f"Chat {cid}")
-            if cid and cid < 0:
-                c_type = "channel" if str(cid).startswith("-100") else "supergroup"
+            if not cid or cid >= 0:
+                continue
+
+            try:
+                chat = await app.get_chat(cid)
+                member = await app.get_chat_member(cid, "me")
+                
+                # In Channels: Bot MUST be Administrator or Owner
+                if chat.type == ChatType.CHANNEL:
+                    if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+                        await remove_sb_destination(cid)
+                        await remove_joined_chat(cid)
+                        continue
+                    c_type = "channel"
+                else:
+                    # In Groups / Supergroups: Bot must be active member or admin
+                    if member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED):
+                        await remove_sb_destination(cid)
+                        await remove_joined_chat(cid)
+                        continue
+                    c_type = "supergroup" if chat.type == ChatType.SUPERGROUP else "group"
+
+                title = chat.title or j.get("title", f"Chat {cid}")
+                valid_bot_cids.add(cid)
                 await add_sb_destination(cid, title, c_type)
+                await add_joined_chat(cid, title)
+            except Exception:
+                # Bot is not added in this chat or channel is private/kicked -> Purge it
+                await remove_sb_destination(cid)
+                await remove_joined_chat(cid)
+
+        # Delete any unverified groups/channels from destinations collection
+        if valid_bot_cids:
+            await _dest_col.delete_many({
+                "chat_id": {"$lt": 0, "$nin": list(valid_bot_cids)}
+            })
+        else:
+            await _dest_col.delete_many({"chat_id": {"$lt": 0}})
 
         # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
         try:
@@ -154,41 +190,6 @@ async def sync_all_broadcast_destinations():
             })
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
-
-        # 3. Sync groups & channels from Userbot Dialogs (ONLY where userbot can actually post)
-        try:
-            from toxic.core.mongo.db import get_all_active_userbots
-            userbots = await get_all_active_userbots()
-            for ub in userbots:
-                if getattr(ub, "is_connected", False):
-                    try:
-                        async for dialog in ub.get_dialogs(limit=250):
-                            chat = dialog.chat
-                            if chat.type == ChatType.CHANNEL:
-                                # ONLY add channels where userbot is creator or admin with post privileges
-                                is_admin = False
-                                if getattr(dialog, "is_creator", False) or getattr(chat, "is_creator", False):
-                                    is_admin = True
-                                else:
-                                    try:
-                                        member = await ub.get_chat_member(chat.id, "me")
-                                        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                                            if getattr(member.privileges, "can_post_messages", True):
-                                                is_admin = True
-                                    except Exception:
-                                        pass
-                                if is_admin:
-                                    title = getattr(chat, "title", None) or f"Channel {chat.id}"
-                                    await add_sb_destination(chat.id, title, "channel")
-                                    await add_joined_chat(chat.id, title)
-                            elif chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-                                title = getattr(chat, "title", None) or f"Group {chat.id}"
-                                await add_sb_destination(chat.id, title, "supergroup")
-                                await add_joined_chat(chat.id, title)
-                    except Exception:
-                        pass
-        except Exception as d_err:
-            pass
 
     except Exception as err:
         print(f"[SmartBroadcast Sync] Sync error: {err}")
@@ -289,8 +290,14 @@ async def remove_sb_deletion(deletion_id):
 async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client=None):
     """
     Deletes a single broadcast message in Channels, Groups, or DMs.
-    Tries Bot App (High-level + Raw RPC) and all active userbot sessions.
+    Tries Bot App (High-level + Raw RPC) and all active userbot sessions with robust fallbacks.
     """
+    try:
+        chat_id = int(chat_id)
+        message_id = int(message_id)
+    except Exception:
+        return False, "Invalid ID"
+
     clients_to_try = [app]
     if userbot_client and userbot_client not in clients_to_try:
         clients_to_try.append(userbot_client)
@@ -308,43 +315,59 @@ async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client
         if not getattr(client, "is_connected", True):
             continue
 
-        # Tier 1: High-level delete_messages with revoke=True
+        # Try 1: High-level delete_messages with list of message IDs (most reliable for channels & supergroups)
         try:
-            await client.delete_messages(chat_id, message_id, revoke=True)
-            return True, "High-Level Delete"
+            res = await client.delete_messages(chat_id, [message_id])
+            if res:
+                return True, "High-Level Delete (List)"
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
             try:
-                await client.delete_messages(chat_id, message_id, revoke=True)
-                return True, "High-Level Delete (Post-Wait)"
+                res = await client.delete_messages(chat_id, [message_id])
+                if res:
+                    return True, "High-Level Delete (Post-Wait)"
             except Exception:
                 pass
         except Exception:
             pass
 
-        # Tier 2: Raw RPC channels.DeleteMessages (Direct MTProto call for Channels & Supergroups)
+        # Try 2: High-level delete_messages with revoke=True (for DMs / private chats)
         try:
-            peer = await client.resolve_peer(chat_id)
-            if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
-                chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
-                await client.invoke(raw.functions.channels.DeleteMessages(
-                    channel=chan_input,
-                    id=[message_id]
-                ))
-                return True, "Raw RPC Channel Delete"
+            res = await client.delete_messages(chat_id, message_id, revoke=True)
+            if res:
+                return True, "High-Level Delete (Revoke)"
         except Exception:
             pass
 
-        # Tier 3: Raw RPC messages.DeleteMessages (Direct MTProto call for DMs / Basic Groups)
-        try:
-            if hasattr(raw.functions, "messages") and hasattr(raw.functions.messages, "DeleteMessages"):
+        # Try 3: Raw RPC channels.DeleteMessages (Direct MTProto call for Channels & Supergroups)
+        if chat_id < 0:
+            try:
+                peer = await client.resolve_peer(chat_id)
+                if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
+                    chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
+                    await client.invoke(raw.functions.channels.DeleteMessages(
+                        channel=chan_input,
+                        id=[message_id]
+                    ))
+                    return True, "Raw RPC Channel Delete"
+                elif isinstance(peer, (raw.types.InputPeerChat, raw.types.InputChat)):
+                    await client.invoke(raw.functions.messages.DeleteMessages(
+                        id=[message_id],
+                        revoke=True
+                    ))
+                    return True, "Raw RPC Chat Delete"
+            except Exception:
+                pass
+        else:
+            # Try 4: Raw RPC messages.DeleteMessages for Private User DMs
+            try:
                 await client.invoke(raw.functions.messages.DeleteMessages(
                     id=[message_id],
                     revoke=True
                 ))
-                return True, "Raw RPC Message Delete"
-        except Exception:
-            pass
+                return True, "Raw RPC DM Delete"
+            except Exception:
+                pass
 
     return False, "Failed"
 

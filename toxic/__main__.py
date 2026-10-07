@@ -234,6 +234,11 @@ Status: Running Successfully...
     asyncio.create_task(schedule_expiry_check())
     asyncio.create_task(schedule_daily_plans_broadcast())
     asyncio.create_task(schedule_broadcast_task())
+    try:
+        from toxic.modules.smart_broadcast import smart_broadcast_background_scheduler
+        asyncio.create_task(smart_broadcast_background_scheduler())
+    except Exception as e:
+        print(f"Failed to start smart broadcast scheduler: {e}")
     print("Auto removal, daily plans, and scheduled broadcasts started ...")
     await idle()
     print("Bot stopped...")
