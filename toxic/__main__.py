@@ -235,12 +235,15 @@ Status: Running Successfully...
     asyncio.create_task(schedule_daily_plans_broadcast())
     asyncio.create_task(schedule_broadcast_task())
     try:
-        from toxic.modules.smart_broadcast import smart_broadcast_background_scheduler
+        from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler
+        asyncio.create_task(sync_all_broadcast_destinations())
         asyncio.create_task(smart_broadcast_background_scheduler())
+        print("[STARTUP AUTO-DETECT] Auto-discovery & sync for bot groups/channels started in background.")
     except Exception as e:
-        print(f"Failed to start smart broadcast scheduler: {e}")
+        print(f"Failed to start smart broadcast scanner/scheduler: {e}")
     print("Auto removal, daily plans, and scheduled broadcasts started ...")
     await idle()
+
     print("Bot stopped...")
 
 

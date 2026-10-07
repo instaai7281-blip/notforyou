@@ -125,8 +125,21 @@ async def sync_all_broadcast_destinations():
         except Exception:
             pass
 
-        # 1. Sync all groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, get_auth_channels, get_log_channel
+        # 1. Try discovering dialogs directly from app if possible
+        try:
+            async for dialog in app.get_dialogs():
+                chat = dialog.chat
+                if chat and chat.id < 0 and chat.type in (ChatType.CHANNEL, ChatType.SUPERGROUP, ChatType.GROUP):
+                    c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+                    title = chat.title or chat.username or f"Chat {chat.id}"
+                    await add_sb_destination(chat.id, title, c_type)
+                    from toxic.core.mongo.db import add_joined_chat
+                    await add_joined_chat(chat.id, title, chat_type=c_type)
+        except Exception:
+            pass
+
+        # 2. Sync and accurately re-verify all groups and channels from db.get_all_broadcast_chats()
+        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, get_auth_channels, get_log_channel, remove_joined_chat
         all_chats = await get_all_broadcast_chats()
         auth_channels_list = set()
         try:
@@ -155,12 +168,11 @@ async def sync_all_broadcast_destinations():
                 continue
 
             title = j.get("title", f"Chat {cid}")
-            c_type = j.get("chat_type")
+            c_type = None
 
             if cid in auth_channels_list:
                 c_type = "channel"
-
-            if not c_type or c_type not in ("channel", "group", "supergroup"):
+            else:
                 try:
                     chat_obj = await app.get_chat(cid)
                     if chat_obj.type == ChatType.CHANNEL:
@@ -169,14 +181,24 @@ async def sync_all_broadcast_destinations():
                         c_type = "supergroup"
                     if chat_obj.title:
                         title = chat_obj.title
-                except Exception:
-                    pass
+                except Exception as e:
+                    err_s = str(e).lower()
+                    if any(k in err_s for k in ["chat_admin_required", "channel_private", "chat_write_forbidden", "bot was kicked", "chat not found", "peer_id_invalid", "channel_invalid"]):
+                        try:
+                            await remove_sb_destination(cid)
+                            await remove_joined_chat(cid)
+                        except Exception:
+                            pass
+                        continue
+                    # Fallback to existing chat_type or supergroup
+                    c_type = j.get("chat_type") or ("supergroup" if str(cid).startswith("-100") else "group")
 
             if not c_type:
                 c_type = "supergroup" if str(cid).startswith("-100") else "group"
 
             await add_sb_destination(cid, title, c_type)
             await add_joined_chat(cid, title, chat_type=c_type)
+
 
 
         # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
