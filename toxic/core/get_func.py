@@ -323,7 +323,9 @@ async def resolve_peer_safely(client, chat_id):
         elif hasattr(client, "get_entity"):
             await client.get_entity(chat_id)
     except Exception as e:
-        print(f"Failed to resolve peer {chat_id} on client {client.__class__.__name__}: {e}")
+        err_msg = str(e).lower()
+        if not any(k in err_msg for k in ["channel_invalid", "peer_id_invalid", "channel_private", "chat_write_forbidden"]):
+            print(f"Failed to resolve peer {chat_id} on client {client.__class__.__name__}: {e}")
     return chat_id
 
 async def is_enabled(user_id, media_type):

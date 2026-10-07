@@ -22,7 +22,7 @@ from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBu
 from pyrogram.raw.functions.bots import SetBotInfo
 from pyrogram.raw.types import InputUserSelf
 
-from pyrogram.enums import ChatType
+from pyrogram.enums import ChatType, ParseMode
 
 @app.on_message(filters.private, group=-1)
 async def restrict_unauthorized_users(client, message: Message):
