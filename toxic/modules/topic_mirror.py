@@ -1437,13 +1437,22 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
     return InlineKeyboardMarkup(buttons)
 
 
-def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_count: int = 0) -> InlineKeyboardMarkup:
+def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_count: int = 0, auto_schedule: dict = None) -> InlineKeyboardMarkup:
     """Builds action options for a selected saved mirror session."""
     topic_btn_text = f"📂 View & Manage Topics ({topic_count})" if topic_count > 0 else "📂 View & Manage Topics"
+    sched = auto_schedule or {}
+    if sched.get("enabled"):
+        tz_label = sched.get("tz_label", "UTC")
+        h = sched.get("hour", 0)
+        m = sched.get("minute", 0)
+        sched_btn = f"⏰ Auto-Update: ON ✅ ({h:02d}:{m:02d} {tz_label})"
+    else:
+        sched_btn = "⏰ Set Daily Auto-Update ⚙️"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(topic_btn_text, callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_0")],
         [InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔎 𝗟𝗶𝘃𝗲 𝗦𝗰𝗮𝗻 & 𝗖𝗼𝗺𝗽𝗮𝗿𝗲", callback_data=f"tm_scan_{src_chat_id}_{tgt_chat_id}")],
+        [InlineKeyboardButton(sched_btn, callback_data=f"tm_autosched_{src_chat_id}_{tgt_chat_id}")],
         [
             InlineKeyboardButton("🎯 Mirror 1 Topic", callback_data=f"tm_picktopic_{src_chat_id}_{tgt_chat_id}"),
             InlineKeyboardButton("🔄 Re-Upload Topic", callback_data=f"tm_reuploadtopic_{src_chat_id}_{tgt_chat_id}")
@@ -1454,6 +1463,7 @@ def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_coun
         [InlineKeyboardButton("🗑️ Delete This Session", callback_data=f"tm_delsess_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")]
     ])
+
 
 
 
@@ -1782,20 +1792,31 @@ async def session_options_callback(_, query: CallbackQuery):
     src_title = session.get("src_title") or str(src_chat_id)
     tgt_title = session.get("tgt_title") or str(tgt_chat_id)
     topic_count = len(session.get("topics", {}))
+    auto_schedule = session.get("auto_schedule", {})
     
+    sched_info = ""
+    if auto_schedule and auto_schedule.get("enabled"):
+        h = auto_schedule.get("hour", 0)
+        m = auto_schedule.get("minute", 0)
+        tz = auto_schedule.get("tz_label", "UTC")
+        last = auto_schedule.get("last_run_date") or "Never"
+        sched_info = f"\n> ⏰ **Auto-Update:** `{h:02d}:{m:02d} {tz}` | Last Run: `{last}`"
+
     text = (
         f"🎛️ **Mirror Session Options**\n\n"
         f"> 📤 **Source Group:** `{src_title}` (`{src_chat_id}`)\n"
         f"> 📥 **Target Group:** `{tgt_title}` (`{tgt_chat_id}`)\n"
-        f"> 📂 **Saved Topic Checkpoints:** `{topic_count}` topic(s) mapped\n\n"
+        f"> 📂 **Saved Topic Checkpoints:** `{topic_count}` topic(s) mapped"
+        f"{sched_info}\n\n"
         f"Choose an option below to view/manage individual topics, sync, rename, or continue mirroring:"
     )
     html_text = format_caption_to_html(text)
     await query.message.edit_text(
         html_text if html_text else text,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count)
+        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count, auto_schedule=auto_schedule)
     )
+
 
 
 def make_topic_link(chat_id: int, topic_id: int) -> str:
@@ -2163,6 +2184,176 @@ async def edit_target_callback(_, query: CallbackQuery):
         html_text if html_text else success_text,
         parse_mode=ParseMode.HTML,
         reply_markup=build_session_action_keyboard(src_chat_id, new_tgt_chat_id)
+    )
+
+
+# ─── TIMEZONE OPTIONS for Auto-Schedule ───
+TIMEZONES = [
+    ("🇮🇳 IST (India)", 5.5, "IST"),
+    ("🇵🇰 PKT (Pakistan)", 5.0, "PKT"),
+    ("🇧🇩 BST (Bangladesh)", 6.0, "BST"),
+    ("🇦🇪 GST (Dubai/UAE)", 4.0, "GST"),
+    ("🇸🇦 AST (Saudi Arabia)", 3.0, "AST"),
+    ("🇬🇧 GMT (UK/London)", 0.0, "GMT"),
+    ("🇺🇸 EST (New York)", -5.0, "EST"),
+    ("🇺🇸 PST (Los Angeles)", -8.0, "PST"),
+    ("🇸🇬 SGT (Singapore)", 8.0, "SGT"),
+    ("🇨🇳 CST (China)", 8.0, "CST"),
+    ("🇯🇵 JST (Japan)", 9.0, "JST"),
+    ("🇦🇺 AEST (Australia)", 10.0, "AEST"),
+    ("🇷🇺 MSK (Moscow)", 3.0, "MSK"),
+    ("🇩🇪 CET (Germany/EU)", 1.0, "CET"),
+]
+
+def build_timezone_keyboard(src_chat_id: int, tgt_chat_id: int) -> InlineKeyboardMarkup:
+    """Builds timezone selection keyboard."""
+    rows = []
+    for i in range(0, len(TIMEZONES), 2):
+        row = []
+        for tz_label_full, tz_offset, tz_code in TIMEZONES[i:i+2]:
+            offset_str = f"{tz_offset:+.1f}".replace(".0", "").replace("+", "%2B")
+            cb = f"tm_schedtz_{src_chat_id}_{tgt_chat_id}_{tz_offset}_{tz_code}"
+            row.append(InlineKeyboardButton(tz_label_full, callback_data=cb))
+        rows.append(row)
+    rows.append([InlineKeyboardButton("🔙 Cancel", callback_data=f"tm_opt_{src_chat_id}_{tgt_chat_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+@app.on_callback_query(filters.regex(r"^tm_autosched_(-?\d+)_(-?\d+)$"))
+async def auto_schedule_menu_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    match = re.search(r"^tm_autosched_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    auto_schedule = session.get("auto_schedule", {})
+
+    sched_status = "❌ Not Set"
+    extra = ""
+    disable_btn_row = []
+    if auto_schedule and auto_schedule.get("enabled"):
+        h = auto_schedule.get("hour", 0)
+        m = auto_schedule.get("minute", 0)
+        tz = auto_schedule.get("tz_label", "UTC")
+        last = auto_schedule.get("last_run_date") or "Never"
+        sched_status = f"✅ ACTIVE — `{h:02d}:{m:02d} {tz}` daily"
+        extra = f"\n⏳ **Last Auto-Run:** `{last}`"
+        disable_btn_row = [InlineKeyboardButton("🚫 Disable Auto-Update", callback_data=f"tm_disablesched_{src_chat_id}_{tgt_chat_id}")]
+
+    text = (
+        f"⏰ **Daily Auto-Update Scheduler**\n\n"
+        f"**Current Status:** {sched_status}{extra}\n\n"
+        f"📌 **How it works:**\n"
+        f"• Bot will run 1-Click Sync automatically every day at your chosen time\n"
+        f"• All new content from Source will be copied to Target automatically\n"
+        f"• Uses your timezone so time is always exact 🎯\n\n"
+        f"👇 **Step 1:** Select your timezone:"
+    )
+    html_text = format_caption_to_html(text)
+    kb_rows = []
+    if disable_btn_row:
+        kb_rows.append(disable_btn_row)
+    kb = build_timezone_keyboard(src_chat_id, tgt_chat_id)
+    # Prepend disable button before timezone options if enabled
+    if disable_btn_row:
+        kb.inline_keyboard.insert(0, disable_btn_row)
+    await query.message.edit_text(html_text if html_text else text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+@app.on_callback_query(filters.regex(r"^tm_schedtz_(-?\d+)_(-?\d+)_([-\d.]+)_(\w+)$"))
+async def timezone_selected_callback(client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    match = re.search(r"^tm_schedtz_(-?\d+)_(-?\d+)_([-\d.]+)_(\w+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    tz_offset = float(match.group(3))
+    tz_code = match.group(4)
+
+    await query.answer(f"🕐 Timezone set to {tz_code}. Now enter time...")
+
+    await query.message.delete()
+    ask = await client.ask(
+        user_id,
+        f"⏰ **Step 2 — Enter the daily auto-update time**\n\n"
+        f"**Timezone:** `{tz_code}` (UTC{tz_offset:+.1f})\n\n"
+        f"📝 **Format:** `HH:MM` (24-hour)\n"
+        f"**Examples:**\n"
+        f"• `06:00` → 6 AM\n"
+        f"• `14:30` → 2:30 PM\n"
+        f"• `21:00` → 9 PM\n\n"
+        f"> Send `/cancel` to abort.",
+        timeout=120
+    )
+
+    if not ask or (ask.text and ask.text.strip().lower() == "/cancel"):
+        await (ask or query.message).reply("❌ Cancelled. Auto-schedule not changed.")
+        return
+
+    raw_time = (ask.text or "").strip()
+    try:
+        parts = raw_time.split(":")
+        if len(parts) != 2:
+            raise ValueError("Invalid format")
+        hour = int(parts[0])
+        minute = int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("Out of range")
+    except Exception:
+        await ask.reply("❌ **Invalid time format!** Please use `HH:MM` (e.g. `06:30`). Try again with `/mirror`.")
+        return
+
+    await db.set_mirror_auto_schedule(src_chat_id, tgt_chat_id, hour, minute, tz_offset, tz_code)
+
+    import datetime
+    utc_hour = int((hour * 60 + minute - int(tz_offset * 60)) / 60 % 24)
+    utc_min = int((hour * 60 + minute - int(tz_offset * 60)) % 60)
+
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    src_title = session.get("src_title") or str(src_chat_id)
+    tgt_title = session.get("tgt_title") or str(tgt_chat_id)
+    topic_count = len(session.get("topics", {}))
+    auto_schedule = session.get("auto_schedule", {})
+
+    success_text = (
+        f"✅ **Daily Auto-Update Scheduled!**\n\n"
+        f"⏰ **Time:** `{hour:02d}:{minute:02d} {tz_code}` every day\n"
+        f"🌐 **UTC Equivalent:** `{utc_hour:02d}:{utc_min:02d} UTC`\n"
+        f"📤 **Source:** `{src_title}`\n"
+        f"📥 **Target:** `{tgt_title}`\n\n"
+        f"🤖 Bot will automatically sync all new content from source to target at this time daily. No manual action needed!"
+    )
+    html_text = format_caption_to_html(success_text)
+    await ask.reply(
+        html_text if html_text else success_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count, auto_schedule=auto_schedule)
+    )
+
+
+@app.on_callback_query(filters.regex(r"^tm_disablesched_(-?\d+)_(-?\d+)$"))
+async def disable_schedule_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    match = re.search(r"^tm_disablesched_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    await db.disable_mirror_auto_schedule(src_chat_id, tgt_chat_id)
+    await query.answer("🚫 Auto-Update schedule disabled!", show_alert=True)
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topic_count = len(session.get("topics", {}))
+    auto_schedule = session.get("auto_schedule", {})
+    await query.message.edit_text(
+        "✅ **Auto-Update Disabled.**\n\nYou can re-enable it anytime from the session menu.",
+        reply_markup=build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count, auto_schedule=auto_schedule)
     )
 
 

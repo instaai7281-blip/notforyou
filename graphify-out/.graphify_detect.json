@@ -1,0 +1,79 @@
+{
+  "files": {
+    "code": [
+      "D:\\Downloads\\src pro\\Youtube\\command.py",
+      "D:\\Downloads\\src pro\\Youtube\\config.py",
+      "D:\\Downloads\\src pro\\Youtube\\date.py",
+      "D:\\Downloads\\src pro\\Youtube\\download_song.py",
+      "D:\\Downloads\\src pro\\Youtube\\fix_thumb.py",
+      "D:\\Downloads\\src pro\\Youtube\\forcesub.py",
+      "D:\\Downloads\\src pro\\Youtube\\genthumb.py",
+      "D:\\Downloads\\src pro\\Youtube\\playlist_downloader.py",
+      "D:\\Downloads\\src pro\\Youtube\\script.py",
+      "D:\\Downloads\\src pro\\Youtube\\song_search.py",
+      "D:\\Downloads\\src pro\\Youtube\\youtube.py",
+      "D:\\Downloads\\src pro\\app.json",
+      "D:\\Downloads\\src pro\\app.py",
+      "D:\\Downloads\\src pro\\config.py",
+      "D:\\Downloads\\src pro\\main.py",
+      "D:\\Downloads\\src pro\\toxic\\__init__.py",
+      "D:\\Downloads\\src pro\\toxic\\__main__.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\__init__.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\fast_pyro.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\func.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\get_func.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\mongo\\__init__.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\mongo\\db.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\mongo\\plans_db.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\mongo\\users_db.py",
+      "D:\\Downloads\\src pro\\toxic\\core\\toxictools.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\__init__.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\broadcast.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\deleteall.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\eval.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\forwarder.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\forwarder_admin.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\gcast.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\login.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\main.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\maths.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\plans.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\settings.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\shrink.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\smart_broadcast.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\speedtest.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\start.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\stats.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\topic_mirror.py",
+      "D:\\Downloads\\src pro\\toxic\\modules\\ytdl.py"
+    ],
+    "document": [
+      "D:\\Downloads\\src pro\\README.md",
+      "D:\\Downloads\\src pro\\cookies.txt",
+      "D:\\Downloads\\src pro\\heroku.yml",
+      "D:\\Downloads\\src pro\\requirements.txt"
+    ],
+    "paper": [],
+    "image": [
+      "D:\\Downloads\\src pro\\settings.jpg"
+    ],
+    "video": []
+  },
+  "total_files": 50,
+  "total_words": 59052,
+  "needs_graph": true,
+  "warning": null,
+  "skipped_sensitive": [
+    "D:\\Downloads\\src pro\\.env.example"
+  ],
+  "unclassified": [
+    "D:\\Downloads\\src pro\\.gitignore",
+    "D:\\Downloads\\src pro\\Dockerfile",
+    "D:\\Downloads\\src pro\\LICENSE",
+    "D:\\Downloads\\src pro\\Procfile",
+    "D:\\Downloads\\src pro\\Youtube\\.gitkeep"
+  ],
+  "walk_errors": [],
+  "graphifyignore_patterns": 19,
+  "scan_root": "D:\\Downloads\\src pro"
+}

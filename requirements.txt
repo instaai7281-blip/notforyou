@@ -27,4 +27,3 @@ PyMuPDF
 PyPDF2
 reportlab
 dnspython
-hachoir

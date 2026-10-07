@@ -671,6 +671,7 @@ async def get_mirror_sessions_by_chat(chat_id):
 
 
 
+
 async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_chat_id, new_tgt_title=""):
     """Updates the target chat ID and title for a saved mirror session."""
     old_doc = await mirror_db.find_one({"_id": f"{src_chat_id}_{old_tgt_chat_id}"})
@@ -684,6 +685,63 @@ async def update_mirror_session_target(src_chat_id, old_tgt_chat_id, new_tgt_cha
         await mirror_db.insert_one(old_doc)
         return True
     return False
+
+
+# ─── Auto-Schedule Helpers for Mirror Sessions ───
+
+async def set_mirror_auto_schedule(src_chat_id: int, tgt_chat_id: int, hour: int, minute: int, timezone_offset: float, timezone_label: str):
+    """Saves a daily auto-sync schedule for a mirror session."""
+    try:
+        await mirror_db.update_one(
+            {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+            {"$set": {
+                "auto_schedule": {
+                    "enabled": True,
+                    "hour": hour,
+                    "minute": minute,
+                    "tz_offset": timezone_offset,
+                    "tz_label": timezone_label,
+                    "last_run_date": None
+                },
+                "updated_at": datetime.datetime.now()
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[MongoDB] set_mirror_auto_schedule error: {e}")
+
+async def disable_mirror_auto_schedule(src_chat_id: int, tgt_chat_id: int):
+    """Disables the daily auto-sync schedule for a mirror session."""
+    try:
+        await mirror_db.update_one(
+            {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+            {"$set": {"auto_schedule.enabled": False, "updated_at": datetime.datetime.now()}}
+        )
+    except Exception as e:
+        print(f"[MongoDB] disable_mirror_auto_schedule error: {e}")
+
+async def get_all_scheduled_mirror_sessions():
+    """Returns all sessions that have an active auto-schedule enabled."""
+    try:
+        cursor = mirror_db.find({"auto_schedule.enabled": True})
+        sessions = []
+        async for doc in cursor:
+            sessions.append(doc)
+        return sessions
+    except Exception as e:
+        print(f"[MongoDB] get_all_scheduled_mirror_sessions error: {e}")
+        return []
+
+async def update_mirror_schedule_last_run(src_chat_id: int, tgt_chat_id: int, run_date: str):
+    """Updates last_run_date for a scheduled mirror session."""
+    try:
+        await mirror_db.update_one(
+            {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+            {"$set": {"auto_schedule.last_run_date": run_date}}
+        )
+    except Exception as e:
+        print(f"[MongoDB] update_mirror_schedule_last_run error: {e}")
+
 
 
 DEFAULT_GROUP_BIO = (
