@@ -80,9 +80,18 @@ async def update_sb_config(update_dict: dict):
 
 async def add_sb_destination(chat_id: int, title: str, chat_type: str):
     try:
+        cid = int(chat_id)
+        if cid > 0:
+            actual_type = "private"
+        else:
+            if chat_type in ("channel", "group", "supergroup"):
+                actual_type = chat_type
+            else:
+                actual_type = "channel" if str(cid).startswith("-100") else "supergroup"
+
         await _dest_col.update_one(
-            {"chat_id": chat_id},
-            {"$set": {"chat_id": chat_id, "title": title, "chat_type": chat_type, "updated_at": datetime.datetime.now()}},
+            {"chat_id": cid},
+            {"$set": {"chat_id": cid, "title": title, "chat_type": actual_type, "updated_at": datetime.datetime.now()}},
             upsert=True
         )
     except Exception as e:
@@ -90,7 +99,7 @@ async def add_sb_destination(chat_id: int, title: str, chat_type: str):
 
 async def remove_sb_destination(chat_id: int):
     try:
-        await _dest_col.delete_one({"chat_id": chat_id})
+        await _dest_col.delete_one({"chat_id": int(chat_id)})
     except Exception as e:
         print(f"[SmartBroadcast DB] Error removing chat {chat_id}: {e}")
 
@@ -103,6 +112,19 @@ async def sync_all_broadcast_destinations():
     Guarantees that personal userbot contacts are NOT added as private targets.
     """
     try:
+        # Fix any corrupted chat_type records in MongoDB
+        try:
+            await _dest_col.update_many(
+                {"chat_id": {"$gt": 0}, "chat_type": {"$ne": "private"}},
+                {"$set": {"chat_type": "private"}}
+            )
+            await _dest_col.update_many(
+                {"chat_id": {"$lt": 0}, "chat_type": "private"},
+                {"$set": {"chat_type": "supergroup"}}
+            )
+        except Exception:
+            pass
+
         # 1. Sync all unique groups and channels from db.get_all_broadcast_chats()
         from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat
         all_chats = await get_all_broadcast_chats()
@@ -185,25 +207,51 @@ async def get_sb_destinations(cfg: dict = None):
         _last_dest_sync_time = now
         asyncio.create_task(sync_all_broadcast_destinations())
 
-    allowed_types = []
-    if cfg.get("enable_groups", True):
-        allowed_types.extend(["group", "supergroup"])
-    if cfg.get("enable_channels", True):
-        allowed_types.append("channel")
-    if cfg.get("enable_dms", True):
-        allowed_types.append("private")
+    enable_groups = bool(cfg.get("enable_groups", True))
+    enable_channels = bool(cfg.get("enable_channels", True))
+    enable_dms = bool(cfg.get("enable_dms", True))
 
-    if not allowed_types:
+    if not enable_groups and not enable_channels and not enable_dms:
         return []
 
     dest_list = []
     seen_cids = set()
     try:
-        async for doc in _dest_col.find({"chat_type": {"$in": allowed_types}}):
+        async for doc in _dest_col.find({}):
             cid = doc.get("chat_id")
-            if cid and cid not in seen_cids:
-                seen_cids.add(cid)
-                dest_list.append(doc)
+            if not cid or cid in seen_cids:
+                continue
+
+            try:
+                cid = int(cid)
+            except Exception:
+                continue
+
+            ctype = doc.get("chat_type", "")
+            if cid > 0:
+                # Private User DM — STRICT check
+                if enable_dms:
+                    seen_cids.add(cid)
+                    doc["chat_type"] = "private"
+                    dest_list.append(doc)
+            else:
+                # Group or Channel (cid < 0) — CAN NEVER be delivered when only DMs is enabled
+                if ctype == "channel":
+                    if enable_channels:
+                        seen_cids.add(cid)
+                        dest_list.append(doc)
+                elif ctype in ("group", "supergroup"):
+                    if enable_groups:
+                        seen_cids.add(cid)
+                        dest_list.append(doc)
+                else:
+                    if str(cid).startswith("-100"):
+                        if enable_channels or enable_groups:
+                            seen_cids.add(cid)
+                            dest_list.append(doc)
+                    elif enable_groups:
+                        seen_cids.add(cid)
+                        dest_list.append(doc)
     except Exception as e:
         print(f"[SmartBroadcast DB] Error fetching destinations: {e}")
     return dest_list
@@ -614,9 +662,9 @@ async def render_smart_broadcast_menu(client: Client, message_or_query):
     except Exception:
         pass
 
-    groups_count = len([d for d in all_stored if d.get("chat_type") in ("group", "supergroup")])
-    channels_count = len([d for d in all_stored if d.get("chat_type") == "channel"])
-    dms_count = len([d for d in all_stored if d.get("chat_type") == "private"])
+    groups_count = len([d for d in all_stored if int(d.get("chat_id", 0)) < 0 and d.get("chat_type") in ("group", "supergroup")])
+    channels_count = len([d for d in all_stored if int(d.get("chat_id", 0)) < 0 and d.get("chat_type") == "channel"])
+    dms_count = len([d for d in all_stored if int(d.get("chat_id", 0)) > 0])
 
     is_active = cfg.get("is_active", False)
     interval_m = cfg.get("interval_mins", 30)
