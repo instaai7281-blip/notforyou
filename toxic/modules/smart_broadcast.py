@@ -125,10 +125,9 @@ async def sync_all_broadcast_destinations():
         except Exception:
             pass
 
-        # 1. Sync and strictly verify groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, remove_joined_chat
+        # 1. Sync all groups and channels from db.get_all_broadcast_chats()
+        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat
         all_chats = await get_all_broadcast_chats()
-        valid_bot_cids = set()
 
         for j in all_chats:
             cid = j.get("chat_id")
@@ -136,40 +135,17 @@ async def sync_all_broadcast_destinations():
                 continue
 
             try:
-                chat = await app.get_chat(cid)
-                member = await app.get_chat_member(cid, "me")
-                
-                # In Channels: Bot MUST be Administrator or Owner
-                if chat.type == ChatType.CHANNEL:
-                    if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-                        await remove_sb_destination(cid)
-                        await remove_joined_chat(cid)
-                        continue
-                    c_type = "channel"
-                else:
-                    # In Groups / Supergroups: Bot must be active member or admin
-                    if member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED):
-                        await remove_sb_destination(cid)
-                        await remove_joined_chat(cid)
-                        continue
-                    c_type = "supergroup" if chat.type == ChatType.SUPERGROUP else "group"
-
-                title = chat.title or j.get("title", f"Chat {cid}")
-                valid_bot_cids.add(cid)
-                await add_sb_destination(cid, title, c_type)
-                await add_joined_chat(cid, title)
+                cid = int(cid)
             except Exception:
-                # Bot is not added in this chat or channel is private/kicked -> Purge it
-                await remove_sb_destination(cid)
-                await remove_joined_chat(cid)
+                continue
 
-        # Delete any unverified groups/channels from destinations collection
-        if valid_bot_cids:
-            await _dest_col.delete_many({
-                "chat_id": {"$lt": 0, "$nin": list(valid_bot_cids)}
-            })
-        else:
-            await _dest_col.delete_many({"chat_id": {"$lt": 0}})
+            title = j.get("title", f"Chat {cid}")
+            c_type = j.get("chat_type")
+            if not c_type:
+                c_type = "channel" if str(cid).startswith("-100") and "channel" in title.lower() else "supergroup"
+
+            await add_sb_destination(cid, title, c_type)
+            await add_joined_chat(cid, title)
 
         # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
         try:
