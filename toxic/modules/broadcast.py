@@ -234,8 +234,8 @@ async def log_bot_chat_presence(client: Client, message: Message):
     try:
         chat = message.chat
         title = chat.title or chat.username or "Group/Channel"
-        await add_joined_chat(chat.id, title)
         c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+        await add_joined_chat(chat.id, title, chat_type=c_type)
         try:
             from toxic.modules.smart_broadcast import add_sb_destination
             await add_sb_destination(chat.id, title, c_type)
@@ -277,7 +277,7 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
             
             # If bot was added as administrator or member
             if status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
-                await add_joined_chat(chat.id, title)
+                await add_joined_chat(chat.id, title, chat_type=c_type)
                 try:
                     from toxic.modules.smart_broadcast import add_sb_destination
                     await add_sb_destination(chat.id, title, c_type)
@@ -307,7 +307,7 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
 
 # ────── Linked Chats Manual Management Commands ──────
 
-@app.on_message(filters.command(["addchat"]) & filters.private)
+@app.on_message(filters.command(["addchat", "addchannel", "addgroup"]) & filters.private)
 async def add_chat_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     if not is_owner(user_id):
@@ -315,29 +315,34 @@ async def add_chat_cmd(client: Client, message: Message):
         return
 
     if len(message.command) < 2:
-        await message.reply_text("❌ **Usage:** `/addchat <chat_id_or_username>`\n\nExample:\n• `/addchat -10012345678`\n• `/addchat @my_channel`")
+        await message.reply_text("❌ **Usage:** `/addchat <chat_id_or_username>`\n\nExample:\n• `/addchannel -10012345678`\n• `/addgroup @my_group`")
         return
 
+    cmd = message.command[0].lower()
     chat_input = message.command[1]
+    c_type = "channel" if cmd == "addchannel" else ("supergroup" if cmd == "addgroup" else None)
     
     # Try resolving to integer ID and title
     try:
         chat = await client.get_chat(chat_input)
         chat_id = chat.id
         title = chat.title or chat.username or "Group/Channel"
+        if not c_type:
+            c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
     except Exception:
         # If bot cannot resolve directly (e.g. not in chat yet), check if integer
         try:
             chat_id = int(chat_input)
             title = "Manual Link (ID)"
+            if not c_type:
+                c_type = "supergroup" if str(chat_id).startswith("-100") else "group"
         except ValueError:
             await message.reply_text("❌ **Error:** Invalid chat ID or username. Make sure the bot is added to that channel/group first!")
             return
 
-    await add_joined_chat(chat_id, title)
+    await add_joined_chat(chat_id, title, chat_type=c_type)
     try:
         from toxic.modules.smart_broadcast import add_sb_destination
-        c_type = "channel" if str(chat_id).startswith("-100") else "supergroup"
         await add_sb_destination(chat_id, title, c_type)
     except Exception:
         pass
@@ -355,8 +360,10 @@ async def add_chat_cmd(client: Client, message: Message):
         f"✅ **Linked Chat Added!**\n\n"
         f"• **Title:** `{title}`\n"
         f"• **ID:** `{chat_id}`\n"
+        f"• **Category:** `{c_type.capitalize()}`\n"
         f"• **Group Bio:** {bio_status}"
     )
+
 
 @app.on_message(filters.command(["removechat"]) & filters.private)
 async def remove_chat_cmd(client: Client, message: Message):

@@ -126,8 +126,23 @@ async def sync_all_broadcast_destinations():
             pass
 
         # 1. Sync all groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat
+        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, get_auth_channels, get_log_channel
         all_chats = await get_all_broadcast_chats()
+        auth_channels_list = set()
+        try:
+            for ac in (await get_auth_channels() or []):
+                try:
+                    auth_channels_list.add(int(ac))
+                except Exception:
+                    pass
+            log_ch = await get_log_channel()
+            if log_ch:
+                try:
+                    auth_channels_list.add(int(log_ch))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         for j in all_chats:
             cid = j.get("chat_id")
@@ -141,11 +156,28 @@ async def sync_all_broadcast_destinations():
 
             title = j.get("title", f"Chat {cid}")
             c_type = j.get("chat_type")
+
+            if cid in auth_channels_list:
+                c_type = "channel"
+
+            if not c_type or c_type not in ("channel", "group", "supergroup"):
+                try:
+                    chat_obj = await app.get_chat(cid)
+                    if chat_obj.type == ChatType.CHANNEL:
+                        c_type = "channel"
+                    elif chat_obj.type in (ChatType.SUPERGROUP, ChatType.GROUP):
+                        c_type = "supergroup"
+                    if chat_obj.title:
+                        title = chat_obj.title
+                except Exception:
+                    pass
+
             if not c_type:
-                c_type = "channel" if str(cid).startswith("-100") and "channel" in title.lower() else "supergroup"
+                c_type = "supergroup" if str(cid).startswith("-100") else "group"
 
             await add_sb_destination(cid, title, c_type)
-            await add_joined_chat(cid, title)
+            await add_joined_chat(cid, title, chat_type=c_type)
+
 
         # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
         try:
@@ -843,6 +875,80 @@ async def sync_chats_cmd(client: Client, message: Message):
     await sync_all_broadcast_destinations()
     count = await _dest_col.count_documents({})
     await st.edit_text(f"✅ **Sync Completed!**\n\n• Found `{count}` valid reachable destinations (groups, channels, registered DMs).")
+
+@app.on_message(filters.command(["addchannel", "addchan"], prefixes=["/", "!", ".", ""]), group=-1)
+async def add_channel_cmd(client: Client, message: Message):
+    user_id = get_sender_id(message)
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+    if len(message.command) < 2:
+        await message.reply_text("❌ **Usage:** `/addchannel <channel_id_or_username>`\n\nExample:\n• `/addchannel -1001234567890`\n• `/addchannel @mychannel`")
+        return
+    
+    target_input = message.command[1].strip()
+    try:
+        chat = await client.get_chat(target_input)
+        cid = chat.id
+        title = chat.title or chat.username or "Channel"
+    except Exception:
+        try:
+            cid = int(target_input)
+            title = f"Channel {cid}"
+        except ValueError:
+            await message.reply_text("❌ **Error:** Could not resolve channel ID/username. Make sure bot is added as admin first!")
+            return
+
+    await add_sb_destination(cid, title, "channel")
+    from toxic.core.mongo.db import add_joined_chat
+    await add_joined_chat(cid, title, chat_type="channel")
+    await message.reply_text(f"✅ **Channel successfully added!**\n\n• **Title:** {title}\n• **Chat ID:** `{cid}`\n• **Category:** `Channel 📢`")
+
+@app.on_message(filters.command(["addgroup", "addsupergroup"], prefixes=["/", "!", ".", ""]), group=-1)
+async def add_group_cmd(client: Client, message: Message):
+    user_id = get_sender_id(message)
+    if not is_owner(user_id):
+        await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
+        return
+    if len(message.command) < 2:
+        await message.reply_text("❌ **Usage:** `/addgroup <group_id_or_username>`\n\nExample:\n• `/addgroup -1001234567890`\n• `/addgroup @mygroup`")
+        return
+    
+    target_input = message.command[1].strip()
+    try:
+        chat = await client.get_chat(target_input)
+        cid = chat.id
+        title = chat.title or chat.username or "Group"
+    except Exception:
+        try:
+            cid = int(target_input)
+            title = f"Group {cid}"
+        except ValueError:
+            await message.reply_text("❌ **Error:** Could not resolve group ID/username. Make sure bot is added as admin first!")
+            return
+
+    await add_sb_destination(cid, title, "supergroup")
+    from toxic.core.mongo.db import add_joined_chat
+    await add_joined_chat(cid, title, chat_type="supergroup")
+    await message.reply_text(f"✅ **Group successfully added!**\n\n• **Title:** {title}\n• **Chat ID:** `{cid}`\n• **Category:** `Group 👥`")
+
+@app.on_message(filters.command(["delchannel", "delgroup", "delchat", "removesb"], prefixes=["/", "!", ".", ""]), group=-1)
+async def remove_sb_chat_cmd(client: Client, message: Message):
+    user_id = get_sender_id(message)
+    if not is_owner(user_id):
+        return
+    if len(message.command) < 2:
+        await message.reply_text("❌ **Usage:** `/delchannel <chat_id>` (e.g. `/delchannel -1001234567890`)")
+        return
+    try:
+        cid = int(message.command[1].strip())
+        await remove_sb_destination(cid)
+        from toxic.core.mongo.db import remove_joined_chat
+        await remove_joined_chat(cid)
+        await message.reply_text(f"✅ **Chat `{cid}` removed from Smart Broadcast destinations!**")
+    except ValueError:
+        await message.reply_text("❌ Invalid chat ID! Must be a negative integer (e.g. `-100...`).")
+
 
 
 # ─── Interactive Callback Handler ───

@@ -355,10 +355,13 @@ async def remove_broadcast_deletion(doc_id):
 # Collection for tracking chats (groups/channels) where the bot is active
 joined_chats_db = mongo.user_data.joined_chats
 
-async def add_joined_chat(chat_id, title):
+async def add_joined_chat(chat_id, title, chat_type=None):
+    update_data = {"title": title, "updated_at": datetime.datetime.now()}
+    if chat_type:
+        update_data["chat_type"] = chat_type
     await joined_chats_db.update_one(
         {"_id": chat_id},
-        {"$set": {"title": title, "updated_at": datetime.datetime.now()}},
+        {"$set": update_data},
         upsert=True
     )
 
@@ -366,7 +369,11 @@ async def get_all_joined_chats():
     cursor = joined_chats_db.find({})
     chats = []
     async for doc in cursor:
-        chats.append({"chat_id": doc["_id"], "title": doc.get("title", "Unknown")})
+        chats.append({
+            "chat_id": doc["_id"],
+            "title": doc.get("title", "Unknown"),
+            "chat_type": doc.get("chat_type")
+        })
     return chats
 
 async def remove_joined_chat(chat_id):
@@ -390,7 +397,7 @@ async def get_all_broadcast_chats():
                 continue
             if cid < 0:
                 title = doc.get("title", "Group/Channel")
-                c_type = doc.get("chat_type", "supergroup" if str(cid).startswith("-100") else "group")
+                c_type = doc.get("chat_type")
                 chat_map[cid] = {"chat_id": cid, "title": title, "chat_type": c_type}
     except Exception as e:
         print(f"[DB] Error loading joined_chats: {e}")
@@ -424,7 +431,7 @@ async def get_all_broadcast_chats():
     except Exception as e:
         pass
 
-    # 4. From auth channels & log channel
+    # 4. From auth channels & log channel (always categorized as channel)
     try:
         auth_list = await get_auth_channels()
         for ac in auth_list:
@@ -432,8 +439,11 @@ async def get_all_broadcast_chats():
                 ac = int(ac)
             except Exception:
                 continue
-            if ac < 0 and ac not in chat_map:
-                chat_map[ac] = {"chat_id": ac, "title": f"Auth Channel {ac}", "chat_type": "channel"}
+            if ac < 0:
+                if ac in chat_map:
+                    chat_map[ac]["chat_type"] = "channel"
+                else:
+                    chat_map[ac] = {"chat_id": ac, "title": f"Auth Channel {ac}", "chat_type": "channel"}
         
         log_ch = await get_log_channel()
         if log_ch:
@@ -441,12 +451,16 @@ async def get_all_broadcast_chats():
                 log_ch = int(log_ch)
             except Exception:
                 pass
-            if isinstance(log_ch, int) and log_ch < 0 and log_ch not in chat_map:
-                chat_map[log_ch] = {"chat_id": log_ch, "title": f"Log Channel {log_ch}", "chat_type": "channel"}
+            if isinstance(log_ch, int) and log_ch < 0:
+                if log_ch in chat_map:
+                    chat_map[log_ch]["chat_type"] = "channel"
+                else:
+                    chat_map[log_ch] = {"chat_id": log_ch, "title": f"Log Channel {log_ch}", "chat_type": "channel"}
     except Exception as e:
         pass
 
     return list(chat_map.values())
+
 
 
 async def get_all_active_userbots():
