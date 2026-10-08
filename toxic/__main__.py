@@ -281,7 +281,8 @@ async def schedule_mirror_auto_updates():
                                 tgt_chat_id=tgt_chat_id,
                                 mirror_all_topics=True,
                                 detected_topic_id=None,
-                                status_msg=notify_msg
+                                status_msg=notify_msg,
+                                is_auto_update=True
                             ))
                         except Exception as me:
                             print(f"[MirrorAutoScheduler] Mirror run error: {me}")

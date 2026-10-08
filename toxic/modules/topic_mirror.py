@@ -3297,8 +3297,8 @@ async def topic_mirror_cmd(client, message):
         await start_new_mirror_flow(user_id, message)
 
 
-async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None):
-    """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, and range support."""
+async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None, is_auto_update: bool = False):
+    """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, range support, and auto-update detection."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg = (
@@ -3989,12 +3989,36 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         # Send Clean Completion Message to Target Forum Group (General Topic only)
         try:
             elapsed_total = time.time() - start_overall_time
-            target_group_msg = (
-                "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
-                f"📁 <b>New Files Downloaded:</b> <code>{overall_copied}</code> files\n"
-                f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
-                f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
-            )
+            time_str = TimeFormatter(int(elapsed_total) * 1000)
+
+            if overall_copied == 0:
+                # Jab koi naya content update hone ke liye na ho
+                if is_auto_update:
+                    target_group_msg = (
+                        "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘆𝗻𝗰 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
+                        "✨ <b>Status:</b> All Topics Are Already 100% Up-To-Date!\n"
+                        "📁 <b>New Content Added:</b> <code>0</code> files (Nothing new in source)\n"
+                        f"⏩ <b>Verified Synced:</b> <code>{overall_skipped}</code> files\n"
+                        f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
+                        "<i>Next auto-scan will run tomorrow at the scheduled time! 🚀</i></blockquote>"
+                    )
+                else:
+                    target_group_msg = (
+                        "<blockquote><b>✅ 𝗔𝗹𝗹 𝗧𝗼𝗽𝗶𝗰𝘀 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗨𝗽-𝗧𝗼-𝗗𝗮𝘁𝗲! 😎</b>\n\n"
+                        "✨ <b>Status:</b> No new content was found to copy.\n"
+                        "📁 <b>New Files:</b> <code>0</code> files\n"
+                        f"⏩ <b>Already Synced:</b> <code>{overall_skipped}</code> files\n"
+                        f"⏱ <b>Check Time:</b> <code>{time_str}</code></blockquote>"
+                    )
+            else:
+                # Jab naya content download / copy hua ho
+                header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎"
+                target_group_msg = (
+                    f"<blockquote><b>{header}</b>\n\n"
+                    f"📁 <b>New Files Downloaded & Synced:</b> <code>{overall_copied}</code> files\n"
+                    f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
+                    f"⏱ <b>Time Taken:</b> <code>{time_str}</code></blockquote>"
+                )
             
             # Send STRICTLY to General Topic (reply_to_message_id=1 or direct)
             sent_to_gen = False
@@ -4022,6 +4046,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             print(f"[TopicMirror] Sent completion message to General topic in target group {tgt_chat_id}")
         except Exception as tgt_msg_err:
             print(f"[TopicMirror] Failed to send target group completion msg: {tgt_msg_err}")
+
 
 
 
