@@ -782,9 +782,10 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         if chat in saved_channel_ids:
             await app.edit_message_text(
                 sender, edit_id,
-                "This channel is protected by **__CHOSEN ONE ⚝__💀**.\nKya Be... Hamara Hi Content Nikalega 🌝 Kahi Or Try Kar 😘"
+                "This channel is protected by **@CrazyxDeveloper_Bot 🛡️**.\nKya Be... Hamara Hi Content Nikalega 🌝 Kahi Or Try Kar 😘"
             )
             return
+
 
         # Check if Direct Forward is enabled for public links
         is_private = 't.me/c/' in msg_link or 't.me/b/' in msg_link or 'tg://openmessage' in msg_link
