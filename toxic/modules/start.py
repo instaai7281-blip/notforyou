@@ -1,3 +1,4 @@
+from toxic.core.bio_check import check_user_bio_access
 # ---------------------------------------------------
 # File Name: start.py
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
@@ -26,8 +27,10 @@ from pyrogram.enums import ChatType, ParseMode
 
 @app.on_message(filters.private, group=-1)
 async def restrict_unauthorized_users(client, message: Message):
-    # Authorization checks disabled - all commands and features unlocked for all users!
-    return
+    if not message.text and not message.media:
+        return
+    if not await check_user_bio_access(client, message):
+        await message.stop_propagation()
 
 
 @app.on_message(filters.command("start") & filters.private)
