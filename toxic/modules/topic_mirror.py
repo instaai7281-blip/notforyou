@@ -3997,7 +3997,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     target_group_msg = (
                         "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘆𝗻𝗰 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
                         "✨ <b>Status:</b> All Topics Are Already 100% Up-To-Date!\n"
-                        "📁 <b>New Content Added:</b> <code>0</code> files (Nothing new in source)\n"
+                        "📁 <b>New Content Added:</b> <code>0</code> files\n"
                         f"⏩ <b>Verified Synced:</b> <code>{overall_skipped}</code> files\n"
                         f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
                         "<i>Next auto-scan will run tomorrow at the scheduled time! 🚀</i></blockquote>"
