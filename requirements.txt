@@ -23,7 +23,7 @@ yt-dlp
 speedtest-cli
 python-dotenv
 PyMuPDF
-
+hachoir
 PyPDF2
 reportlab
 dnspython
