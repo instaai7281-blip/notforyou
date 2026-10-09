@@ -207,7 +207,8 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
 
         prompt_text = (
             "🔒 <b>Access Denied ❌</b>\n\n"
-            f"Hey {user_mention} 👋 Aapka Request for\n\n"
+            f"Hey {user_mention} 👋 Aapka\n"
+            "Request for 👇\n\n"
             f"{chat_display}\n\n"
             "Abhi Pending Me Hai...\n\n"
             "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
@@ -284,7 +285,10 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
         except Exception:
             pass
     else:
-        await callback_query.answer(
-            f"❌ Access Denied!\n\nBio me '{REQUIRED_TAG}' tag nahi mila bro.\nPlease bio update karke firse Verify Bio button par click kar.",
-            show_alert=True
+        denied_msg = (
+            f"❌ Access Denied!\n\n"
+            f"1️⃣ Bio me '{REQUIRED_TAG}' tag lagayein.\n"
+            f"2️⃣ Privacy Setting: Settings ⚙️ ➔ Privacy & Security ➔ Bio ➔ Set to 'Everybody'!\n\n"
+            f"Fir 🟢 Verify Bio 🔄 button par click karein."
         )
+        await callback_query.answer(denied_msg, show_alert=True)
