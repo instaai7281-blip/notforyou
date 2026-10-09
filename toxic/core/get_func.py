@@ -1042,13 +1042,13 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             original_thumb_downloaded = False
             if not thumb_path and msg.audio and msg.audio.thumbs:
                 try:
-                    thumb_path = await app.download_media(msg.audio.thumbs[0].file_id)
+                    thumb_path = await client.download_media(msg.audio.thumbs[0])
                     original_thumb_downloaded = True
                 except FileReferenceExpired:
                     try:
-                        fresh_m = await app.get_messages(msg.chat.id, msg.id)
+                        fresh_m = await client.get_messages(chat, msg_id)
                         if fresh_m and fresh_m.audio and fresh_m.audio.thumbs:
-                            thumb_path = await app.download_media(fresh_m.audio.thumbs[0].file_id)
+                            thumb_path = await client.download_media(fresh_m.audio.thumbs[0])
                             original_thumb_downloaded = True
                     except Exception as ex:
                         print(f"[AUDIO THUMB] Refetch thumb failed: {ex}")
