@@ -150,10 +150,16 @@ async def get_or_create_permanent_join_link(
                 return invite_info.invite_link
 
         except Exception as e:
+            if "BOT_METHOD_INVALID" in str(e):
+                if cached_link and cached_link.startswith("https://t.me/"):
+                    return cached_link
             logger.info(
-                "Saved invite link is invalid; creating a new one: %s",
+                "Saved invite link check skipped/invalid; reusing or creating: %s",
                 e
             )
+
+        if cached_link and cached_link.startswith("https://t.me/"):
+            return cached_link
 
         await invite_link_db.delete_one({"chat_id": chat_id})
 
