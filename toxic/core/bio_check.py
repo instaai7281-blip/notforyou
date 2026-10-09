@@ -288,8 +288,8 @@ async def check_user_bio_access(
         "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
         "─────────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-        "Apne Bio me ye Tag Lagao 👇\n\n"
-        f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
+        "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
+        f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
         "<i>(Tap to Copy 👆)</i>\n\n"
         " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
         "Bio update karne ke baad niche\n\n"
@@ -297,6 +297,7 @@ async def check_user_bio_access(
         "Button par tap kar do,\n"
         "instant Access mil jayega! 🚀\n"
         "─────────────────"
+
     )
 
     try:
@@ -403,8 +404,8 @@ async def handle_chat_join_request(
             "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
             "─────────────────\n"
             " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-            "Apne Bio me ye Tag Lagao 👇\n\n"
-            f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
+            "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
+            f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
             "<i>(Tap to Copy 👆)</i>\n\n"
             " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
             "Bio update karne ke baad niche\n\n"
@@ -412,6 +413,7 @@ async def handle_chat_join_request(
             "Button par tap kar do,\n"
             "instant Access mil jayega! 🚀\n"
             "─────────────────"
+
         )
 
     try:

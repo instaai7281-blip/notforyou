@@ -54,11 +54,14 @@ async def start_cmd(client, message: Message):
         f"<i>Just send any post link or tap a button below to get started! ☕🚀</i>"
     )
 
+    clean_bot_username = bot_username.lstrip("@")
     buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Bot to Group 🚀", url=f"https://t.me/{clean_bot_username}?startgroup=true&admin=post_messages+manage_topics+delete_messages")],
         [InlineKeyboardButton("📁 Topic Mirror Hub", callback_data="tm_hub"), InlineKeyboardButton("🔗 Link Mirror", callback_data="tm_topiclink")],
         [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("⚙️ Settings", callback_data="back_to_main")],
         [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
+
 
     image_url = "https://freeimage.host/i/n04TxVa"
     try:
@@ -248,66 +251,130 @@ def get_bot_username():
 
 @app.on_message(filters.command(["plan", "plans"]))
 async def plan(client, message):
-    bot_username = get_bot_username()
-    plan_text = (
-        "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
-        "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
-        "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
-        "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
-        "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
-        "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
-        "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
-        "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
-        "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
-        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> Active via Admin\n"
-        "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
-        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires dedicated mirror access. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
-        "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
-        "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
-        "• Crypto (USDT BEP20 / TRC20 / TON)\n"
-        "• Amazon Gift Cards</blockquote>\n\n"
-        "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
-    )
-   
-    buttons = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
-            [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
-        ]
-    )
-    await message.reply_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    chat_id = message.chat.id
+
+    rich_plans_text = """# 💎 𝗫𝗧𝗥𝗔𝗖𝗧𝗢𝗥 𝗕𝗢𝗧 𝗣𝗥𝗢 — 𝗦𝗨𝗕𝗦𝗖𝗥𝗜𝗣𝗧𝗜𝗢𝗡 𝗣𝗟𝗔𝗡𝗦 🚀
+
+> ⚡ **Select your preferred tier to unlock ultimate server-speed extraction & cloning!**
+
+---
+
+## 👑 𝟭. 𝗧𝗢𝗣𝗜𝗖 𝗖𝗟𝗢𝗡𝗘 / 𝗠𝗜𝗥𝗥𝗢𝗥 𝗣𝗟𝗔𝗡 (𝗩𝗜𝗣 ⭐)
+
+> 🏆 **Full Group & Forum Topic Cloning Engine**
+
+- [x] 🚀 **1-Click Clone Supergroup** with all Forum Topics
+- [x] 🎯 **Topic-to-Topic** exact direct sync & forwarding
+- [x] ⚡ **1-Click Live Scan & Update** (Instant Sync)
+- [x] ⏰ **Daily Auto-Update** (Timezone-Aware Scheduled Run)
+- [x] 📌 **Auto-Pinning** & Smart Checkpoint Resume
+- [x] 🔑 **Includes FULL Save Restricted Content (SRC) Access**
+- [x] ⚡ **Priority Processing Slots** & Maximum Turbo Speed
+
+### 💰 Topic Mirror Pricing:
+
+| 🗓 **Duration** | 🇮🇳 **INR** | 🌐 **USDT / USD** | 🏷 **Access** |
+|:---:|:---:|:---:|:---:|
+| **1 Month** | `₹299` | `$4.00` | 🟢 Pro Tier |
+| **Lifetime VIP** | `₹599` | `$8.00` | 👑 Best Value |
+
+---
+
+## 📥 𝟮. 𝗦𝗔𝗩𝗘 𝗥𝗘𝗦𝗧𝗥𝗜𝗖𝗧𝗘𝗗 𝗖𝗢𝗡𝗧𝗘𝗡𝗧 (𝗦𝗥𝗖) 𝗣𝗟𝗔𝗡
+
+> 🔓 **Standard Plan — Private Channels & Bulk Media Downloader**
+
+- [x] 🔓 Download & forward **restricted / forward-protected** content
+- [x] ⚡ **Zero-Bandwidth Server Copy** Mode (Ultra Fast)
+- [x] 🖼 **Custom Thumbnail** set/delete system
+- [x] 📝 **Custom Captions** & Watermark Tags
+- [x] 📁 **Media Filtering** & Clean Surrogates/Text
+- [x] 🚀 High-speed direct downloads & uploads
+
+### 💰 SRC Plan Pricing:
+
+| 🗓 **Duration** | 🇮🇳 **INR** | 🌐 **USDT / USD** | 🏷 **Access** |
+|:---:|:---:|:---:|:---:|
+| **1 Month** | `₹149` | `$2.00` | ⚡ Standard |
+| **3 Months** | `₹299` | `$4.00` | 💎 Popular |
+
+---
+
+### 💳 𝗛𝗢𝗪 𝗧𝗢 𝗕𝗨𝗬 & 𝗔𝗖𝗧𝗜𝗩𝗔𝗧𝗘 𝗜𝗡𝗦𝗧𝗔𝗡𝗧𝗟𝗬:
+
+> 1️⃣ Contact Owner with your chosen **Plan Name**
+> 2️⃣ Send payment screenshot (UPI / Crypto USDT / Amazon Gift Card)
+> 3️⃣ ⚡ **Access activated within 2 minutes!**
+
+👉 **Owner / 24x7 Support:** [𝗖𝗿𝗮𝘇𝘆𝘅𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿_𝗕𝗼𝘁](https://t.me/CrazyxDeveloper_Bot) 🛡️"""
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
+        [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
+    ])
+
+    sent_rich = False
+    try:
+        from toxic import sex
+        from telethon import functions
+        from telethon.tl.types import InputRichMessageMarkdown
+        if sex and sex.is_connected():
+            await sex(functions.messages.SendMessageRequest(
+                peer=chat_id,
+                message="Subscription Plans",
+                rich_message=InputRichMessageMarkdown(markdown=rich_plans_text),
+            ))
+            sent_rich = True
+    except Exception as e:
+        print(f"[Plans] Telethon rich message error, falling back: {e}")
+
+    if sent_rich:
+        try:
+            await message.reply_text("👇 **Choose an option or purchase access:**", reply_markup=buttons)
+        except Exception:
+            pass
+    else:
+        # Fallback to HTML
+        html_plans = (
+            "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
+            "<b>👑 TOPIC CLONE / MIRROR PLAN (VIP ⭐):</b>\n"
+            "• 1 Month: <b>₹299 / $4 USD</b>\n"
+            "• Lifetime VIP: <b>₹599 / $8 USD</b>\n"
+            "<i>(Includes 1-Click Supergroup & Forum Topic Cloning, Auto-Pinning, Daily Auto-Update + Full SRC Access!)</i>\n\n"
+            "<b>📥 SAVE RESTRICTED CONTENT (SRC) PLAN:</b>\n"
+            "• 1 Month: <b>₹149 / $2 USD</b>\n"
+            "• 3 Months: <b>₹299 / $4 USD</b>\n"
+            "<i>(Includes Fast Server Copy, Batch 5000 files, Custom Thumbs & Captions)</i>\n\n"
+            "💳 <b>Payment Methods:</b> UPI, Crypto (USDT BEP20/TRC20/TON), Amazon Gift Cards\n"
+            "📲 <b>Contact:</b> @CrazyxDeveloper_Bot"
+        )
+        await message.reply_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("see_plan"))
 async def see_plan(client, callback_query):
-    bot_username = get_bot_username()
-    plan_text = (
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
+        [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
+    ])
+    html_plans = (
         "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
-        "<b>🔥 Unlock Unlimited High-Speed Extraction & Topic Syncing:</b>\n\n"
-        "<blockquote><b>✨ STANDARD PREMIUM PLANS:</b>\n"
-        "• <b>🥉 7 Days Plan:</b> ₹49  |  $0.70 USDT\n"
-        "• <b>🥈 15 Days Plan:</b> ₹89  |  $1.20 USDT\n"
-        "• <b>🥇 30 Days Plan:</b> ₹149  |  $1.90 USDT 🚀 <i>(Best Value)</i>\n"
-        "• <b>💎 3 Months Plan:</b> ₹399  |  $5.00 USDT\n"
-        "<i>Includes: High-Speed Batch extraction (/batch up to 5000 files), 0s Cooldown, Custom Thumbs & Watermarks!</i></blockquote>\n\n"
-        "<blockquote><b>👑 SPECIAL TOPIC MIRROR PLAN (SEPARATE ACCESS):</b>\n"
-        "• <b>📁 Topic Mirroring & Auto-Folder Plan:</b> Active via Admin\n"
-        "<i>Includes: Forum Topic Cloning (/topicmirror), Auto Topic Creation & Mapping, Live Topic Scan & Compare (/scan_mirror), 1-Click Sync & Update Missing Content (/sync_mirror), Auto Group Bio & Disclaimer Tagging!</i>\n\n"
-        "⚠️ <b>Important Note:</b> Topic Mirroring feature requires dedicated mirror access. Standard premium access does NOT include Topic Mirroring. Admin adds mirror access separately via <code>/addmirror</code>.</blockquote>\n\n"
-        "<blockquote><b>💳 ACCEPTED PAYMENT METHODS:</b>\n"
-        "• UPI (GPay / PhonePe / Paytm / BHIM)\n"
-        "• Crypto (USDT BEP20 / TRC20 / TON)\n"
-        "• Amazon Gift Cards</blockquote>\n\n"
-        "📲 <b>To Buy Access:</b> Click <b>Contact Admin</b> below!"
+        "<b>👑 TOPIC CLONE / MIRROR PLAN (VIP ⭐):</b>\n"
+        "• 1 Month: <b>₹299 / $4 USD</b>\n"
+        "• Lifetime VIP: <b>₹599 / $8 USD</b>\n"
+        "<i>(Includes 1-Click Supergroup & Forum Topic Cloning, Auto-Pinning, Daily Auto-Update + Full SRC Access!)</i>\n\n"
+        "<b>📥 SAVE RESTRICTED CONTENT (SRC) PLAN:</b>\n"
+        "• 1 Month: <b>₹149 / $2 USD</b>\n"
+        "• 3 Months: <b>₹299 / $4 USD</b>\n"
+        "<i>(Includes Fast Server Copy, Batch 5000 files, Custom Thumbs & Captions)</i>\n\n"
+        "💳 <b>Payment Methods:</b> UPI, Crypto (USDT BEP20/TRC20/TON), Amazon Gift Cards\n"
+        "📲 <b>Contact:</b> @CrazyxDeveloper_Bot"
     )
-     
-    buttons = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
-            [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1"), InlineKeyboardButton("📜 Terms", callback_data="see_terms")],
-        ]
-    )
-    await callback_query.message.edit_text(plan_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    try:
+        await callback_query.message.edit_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback_query.message.reply_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
 
 
 @app.on_callback_query(filters.regex("see_terms"))
@@ -360,13 +427,23 @@ async def guide_command(_, message: Message):
     bot_username = get_bot_username()
     chat_id = message.chat.id
 
+    clean_bot_username = bot_username.lstrip("@")
     rich_guide_text = f"""# 📘 𝗫𝗧𝗥𝗔𝗖𝗧𝗢𝗥 𝗕𝗢𝗧 𝗣𝗥𝗢 — 𝗨𝗦𝗘𝗥 𝗚𝗨𝗜𝗗𝗘 🚀
 
 > ⚡ **Ultimate handbook for extracting restricted content, cloning forum topics, and batch downloading.**
 
 ---
 
-## 🔓 𝟭. 𝗦𝗔𝗩𝗘 𝗥𝗘𝗦𝗧𝗥𝗜𝗖𝗧𝗘𝗗 𝗖𝗢𝗡𝗧𝗘𝗡𝗧 (𝗦𝗥𝗖)
+## 👑 𝟭. 𝗧𝗢𝗣𝗜𝗖 𝗠𝗜𝗥𝗥𝗢𝗥 & 𝗙𝗢𝗥𝗨𝗠 𝗖𝗟𝗢𝗡𝗜𝗡𝗚
+- [x] **Enable Topics** in your target group settings.
+- [x] Add @{clean_bot_username} as **Admin** with full permissions.
+- [x] Send `/topicmirror` ➔ Pick your source & target group.
+- [x] Use `/scan_mirror` for live scan & `/sync_mirror` for **1-click auto-update**!
+- [x] Set **Daily Auto-Update** (Timezone-Aware) to auto-sync daily!
+
+---
+
+## 🔓 𝟮. 𝗦𝗔𝗩𝗘 𝗥𝗘𝗦𝗧𝗥𝗜𝗖𝗧𝗘𝗗 𝗖𝗢𝗡𝗧𝗘𝗡𝗧 (𝗦𝗥𝗖)
 - [x] **Step 1:** Send `/login` to link your Telegram account session.
 - [x] **Step 2:** Paste any restricted channel / group message link (`https://t.me/c/...`).
 - [x] **Step 3:** Use `/batch` to clone up to **5,000 files in one go**!
@@ -374,30 +451,20 @@ async def guide_command(_, message: Message):
 
 ---
 
-## 👑 𝟮. 𝗧𝗢𝗣𝗜𝗖 𝗠𝗜𝗥𝗥𝗢𝗥 & 𝗙𝗢𝗥𝗨𝗠 𝗖𝗟𝗢𝗡𝗜𝗡𝗚
-- [x] **Enable Topics** in your target group settings.
-- [x] Add @{bot_username} as **Admin** with full permissions.
-- [x] Send `/topicmirror` ➔ Pick your source & target group.
-- [x] Use `/scan_mirror` for live scan & `/sync_mirror` for **1-click auto-update**!
-- [x] Set **Daily Auto-Update** (Timezone-Aware) to auto-sync daily!
-
----
-
 ## 🛠️ 𝗞𝗘𝗬 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 𝗖𝗛𝗘𝗔𝗧𝗦𝗛𝗘𝗘𝗧
 
 | ⌨️ **Command** | ⚡ **What it does** |
 |:---|:---|
-| `/batch` | Range extraction (Start ➔ End post) |
 | `/topicmirror` | Supergroup + Forum Topic cloner engine |
-| `/sync_mirror` | 1-Click sync & copy missing topic files |
-| `/scan_mirror` | Live scan & compare topic content differences |
+| `/batch` | Range extraction (Start ➔ End post) |
 | `/settings` | Customize thumbnail, captions, & watermarks |
 | `/plans` | View premium subscription tiers |
-| `/speedtest` | Check server download / upload speed |
-| `/myplan` | Check your active plan & expiry |
+| `/login` | Access private channels with your session |
+| `/logout` | Securely disconnect session |
 
 ---
 👉 **Owner / 24x7 Support:** [𝗖𝗿𝗮𝘇𝘆𝘅𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿_𝗕𝗼𝘁](https://t.me/CrazyxDeveloper_Bot) 🛡️"""
+
 
     buttons = InlineKeyboardMarkup([
         [
