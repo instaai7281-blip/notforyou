@@ -21,6 +21,7 @@ telethon-tgcrypto
 mutagen
 yt-dlp
 speedtest-cli
+hachoir
 python-dotenv
 PyMuPDF
 hachoir
