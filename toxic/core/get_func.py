@@ -1,3 +1,4 @@
+from pyrogram.errors import FileReferenceExpired
 # ---------------------------------------------------
 # File Name: get_func.py
 # Description: A Pyrogram bot for downloading files from Telegram channels or groups 
@@ -964,6 +965,19 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                 progress_args=("╔══━⚡️ Downloading ⚡️━══╗\n", edit, time.time()),
                 progress=progress_bar
             )
+        except FileReferenceExpired:
+            print("[DOWNLOAD] FileReferenceExpired encountered! Refetching fresh message...")
+            try:
+                msg = await client.get_messages(msg.chat.id, msg.id)
+                file = await client.download_media(
+                    msg,
+                    file_name=target_file_path,            
+                    progress_args=("╔══━⚡️ Downloading ⚡️━══╗\n", edit, time.time()),
+                    progress=progress_bar
+                )
+            except Exception as ex:
+                print(f"[DOWNLOAD] Refetch download failed: {ex}")
+                file = None
         except Exception as e:
             print(f"Download error: {e}")
             file = None
@@ -1000,10 +1014,19 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             # 1. Poster / Thumbnail logic: Custom thumbnail if set, else Original Audio poster/thumbs
             thumb_path = thumbnail(sender)
             original_thumb_downloaded = False
-            if not thumb_path and msg.audio.thumbs:
+            if not thumb_path and msg.audio and msg.audio.thumbs:
                 try:
                     thumb_path = await app.download_media(msg.audio.thumbs[0].file_id)
                     original_thumb_downloaded = True
+                except FileReferenceExpired:
+                    try:
+                        fresh_m = await app.get_messages(msg.chat.id, msg.id)
+                        if fresh_m and fresh_m.audio and fresh_m.audio.thumbs:
+                            thumb_path = await app.download_media(fresh_m.audio.thumbs[0].file_id)
+                            original_thumb_downloaded = True
+                    except Exception as ex:
+                        print(f"[AUDIO THUMB] Refetch thumb failed: {ex}")
+                        thumb_path = None
                 except Exception as e:
                     print(f"[AUDIO THUMB] Error downloading original audio thumb: {e}")
                     thumb_path = None
@@ -1407,12 +1430,29 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
                     pass
 
             target_file_path = os.path.join(temp_dir, filename)
-            file = await userbot.download_media(
-                msg,
-                file_name=target_file_path,
-                progress=progress_bar,
-                progress_args=("╭─────────────────────╮\n│      **__Downloading__...**\n├─────────────────────", edit, time.time())
-            )
+            try:
+                file = await userbot.download_media(
+                    msg,
+                    file_name=target_file_path,
+                    progress=progress_bar,
+                    progress_args=("╭─────────────────────╮\n│      **__Downloading__...**\n├─────────────────────┤", edit, time.time())
+                )
+            except FileReferenceExpired:
+                print("[BULK DOWNLOAD] FileReferenceExpired encountered! Refetching fresh message...")
+                try:
+                    msg = await userbot.get_messages(resolved_chat_id, message_id)
+                    file = await userbot.download_media(
+                        msg,
+                        file_name=target_file_path,
+                        progress=progress_bar,
+                        progress_args=("╭─────────────────────╮\n│      **__Downloading__...**\n├─────────────────────┤", edit, time.time())
+                    )
+                except Exception as ex:
+                    print(f"[BULK DOWNLOAD] Refetch download failed: {ex}")
+                    file = None
+            except Exception as e:
+                print(f"[BULK DOWNLOAD] Download error: {e}")
+                file = None
             if not file:
                 return False
 
