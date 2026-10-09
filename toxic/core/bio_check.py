@@ -5,6 +5,7 @@
 # ---------------------------------------------------
 
 import logging
+import html
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
@@ -26,7 +27,8 @@ async def check_user_bio_access(client: Client, message: Message) -> bool:
         return True
 
     user_id = message.from_user.id
-    user_mention = message.from_user.mention
+    user_name = html.escape(message.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
     
     # Owners bypass bio check
     if user_id in OWNER_ID:
@@ -74,7 +76,8 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
     user_id = request.from_user.id
     chat_id = request.chat.id
     chat_title = request.chat.title or "Channel/Group"
-    user_mention = request.from_user.mention
+    user_name = html.escape(request.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
     try:
         user = await client.get_chat(user_id)
