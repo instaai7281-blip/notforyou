@@ -87,16 +87,19 @@ async def check_user_bio_access(client: Client, message: Message) -> bool:
     # Bio-main Style Reject & Guide Prompt
     prompt_text = (
         "🔒 <b>Access Denied ❌</b>\n\n"
-        f"Hey {user_mention} 👋 Aapka Request abhi pending me hai...\n\n"
+        f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
         "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
-        "──────────────\n"
+        "─────────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
         "Apne Bio me ye Tag Lagao 👇\n\n"
-        f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
-        "<i>(Tap karke copy kar lo 👆)</i>\n\n"
+        f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
+        "<i>(Tap to Copy 👆)</i>\n\n"
         " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-        "Bio update karne ke baad niche <b>🟢 Verify Bio 🔄</b> button par tap kar do, instant Access mil jayega! 🚀\n"
-        "──────────────"
+        "Bio update karne ke baad niche\n\n"
+        "<b>🟢 Verify Bio 🔄</b>\n\n"
+        "Button par tap kar do,\n"
+        "instant Access mil jayega! 🚀\n"
+        "─────────────────"
     )
 
     buttons = InlineKeyboardMarkup([
@@ -115,9 +118,27 @@ async def check_user_bio_access(client: Client, message: Message) -> bool:
 async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
     user_id = request.from_user.id
     chat_id = request.chat.id
-    chat_title = request.chat.title or "Channel/Group"
+    chat_title = html.escape(request.chat.title or "Channel/Group")
     user_name = html.escape(request.from_user.first_name or "User")
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+
+    # Get channel join link or public link
+    chat_link = ""
+    if request.invite_link and request.invite_link.invite_link:
+        chat_link = request.invite_link.invite_link
+    elif request.chat.username:
+        chat_link = f"https://t.me/{request.chat.username}"
+    else:
+        try:
+            inv = await client.create_chat_invite_link(chat_id, creates_join_request=True)
+            chat_link = inv.invite_link
+        except Exception:
+            chat_link = ""
+
+    if chat_link:
+        chat_display = f"<blockquote><b><a href='{chat_link}'>{chat_title}</a></b></blockquote>"
+    else:
+        chat_display = f"<blockquote><b>{chat_title}</b></blockquote>"
 
     bio = await get_fresh_user_bio(client, user_id)
 
@@ -130,7 +151,7 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
 
         approve_text = (
             "🔓 <b>Join Request Approved ✅</b>\n\n"
-            f"<b><blockquote> Welcome to <a href='tg://user?id={user_id}'>{chat_title}</a> ! 🎉</blockquote></b>\n"
+            f"<b><blockquote> Welcome to {chat_display} ! 🎉</blockquote></b>\n"
             "Aapka Bio verify ho gaya hai aur aapka join request approve kar diya gaya hai! 🥰\n\n"
             f"⚠️ <i>Note: Bio me <code>{REQUIRED_TAG}</code> tag hamesha rakhein. 📑</i>"
         )
@@ -142,22 +163,27 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
     else:
         await join_req_db.update_one(
             {"user_id": user_id, "chat_id": chat_id},
-            {"$set": {"user_id": user_id, "chat_id": chat_id, "chat_title": chat_title}},
+            {"$set": {"user_id": user_id, "chat_id": chat_id, "chat_title": chat_title, "chat_link": chat_link}},
             upsert=True
         )
 
         prompt_text = (
             "🔒 <b>Access Denied ❌</b>\n\n"
-            f"Hey {user_mention} 👋 Aapka Request for <b>{chat_title}</b> abhi pending me hai...\n\n"
+            f"Hey {user_mention} 👋 Aapka Request for\n\n"
+            f"{chat_display}\n\n"
+            "Abhi Pending Me Hai...\n\n"
             "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
-            "──────────────\n"
+            "─────────────────\n"
             " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
             "Apne Bio me ye Tag Lagao 👇\n\n"
-            f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
-            "<i>(Tap karke copy kar lo 👆)</i>\n\n"
+            f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
+            "<i>(Tap to Copy 👆)</i>\n\n"
             " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-            "Bio update karne ke baad niche <b>🟢 Verify Bio 🔄</b> button par tap kar do, instant Access mil jayega! 🚀\n"
-            "──────────────"
+            "Bio update karne ke baad niche\n\n"
+            "<b>🟢 Verify Bio 🔄</b>\n\n"
+            "Button par tap kar do,\n"
+            "instant Access mil jayega! 🚀\n"
+            "─────────────────"
         )
 
         buttons = InlineKeyboardMarkup([
@@ -186,7 +212,12 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
         for req in pending_requests:
             try:
                 await client.approve_chat_join_request(req["chat_id"], user_id)
-                approved_chats.append(req.get("chat_title", "Channel"))
+                chat_title = req.get("chat_title", "Channel")
+                chat_link = req.get("chat_link", "")
+                if chat_link:
+                    approved_chats.append(f"<a href='{chat_link}'>{chat_title}</a>")
+                else:
+                    approved_chats.append(chat_title)
                 await join_req_db.delete_one({"_id": req["_id"]})
             except Exception as e:
                 print(f"[JOIN REQ VERIFY] Failed to approve chat {req['chat_id']}: {e}")
