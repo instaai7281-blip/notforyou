@@ -1,3 +1,9 @@
+# ---------------------------------------------------
+# File Name: deleteall.py
+# Description: Mass message deletion module for Groups, Supergroups & Channels
+# Author: Antigravity
+# ---------------------------------------------------
+
 import asyncio
 from pyrogram import filters, enums, raw
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -10,7 +16,7 @@ from toxic.core.mongo.db import is_admin_or_owner
 async def delete_all_cmd(_, message):
     chat_id = message.chat.id
     
-    # 1. Direct check: only works in channels or groups
+    # 1. Direct check: works in channels, supergroups, and basic groups
     if message.chat.type not in [enums.ChatType.CHANNEL, enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         await message.reply("❌ **Error:** This command can only be used in channels or groups.")
         return
@@ -40,16 +46,16 @@ async def delete_all_cmd(_, message):
     await message.reply(
         "⚠️ **WARNING:**\n\n"
         "Are you absolutely sure you want to delete **all messages** in this chat?\n"
-        "This action is permanent and cannot be undone!",
+        "This action is permanent and will wipe all group/channel messages for everyone!",
         reply_markup=buttons
     )
 
 async def _delete_batch_adaptive(clients, chat_id, message_ids):
     """
     Deletes a list of message IDs adaptively:
-    Tries bulk batch delete first.
+    Tries bulk batch delete with revoke=True first.
     If bulk fails, breaks down into small sub-batches (10), then 1-by-1.
-    Tries all available clients with FloodWait handling.
+    Tries all available clients and MTProto raw RPC for Channels & Groups.
     """
     if not message_ids:
         return 0
@@ -99,7 +105,7 @@ async def _delete_batch_adaptive(clients, chat_id, message_ids):
             except Exception:
                 pass
 
-        # Try Raw RPC for channel / supergroup if high-level failed
+        # Try Raw RPC for channel / supergroup / basic group if high-level failed
         if not msg_deleted:
             for client in clients:
                 try:
@@ -113,10 +119,18 @@ async def _delete_batch_adaptive(clients, chat_id, message_ids):
                         deleted += 1
                         msg_deleted = True
                         break
+                    elif isinstance(peer, (raw.types.InputPeerChat, raw.types.InputChat)):
+                        await client.invoke(raw.functions.messages.DeleteMessages(
+                            id=[mid],
+                            revoke=True
+                        ))
+                        deleted += 1
+                        msg_deleted = True
+                        break
                 except Exception:
                     pass
 
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.01)
 
     return deleted
 
@@ -177,31 +191,31 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
 
     try:
         for pass_num in range(1, max_passes + 1):
-            # Scan messages using primary available client
-            scanner_client = clients[0]
             message_ids = []
             
-            try:
-                async for msg in scanner_client.get_chat_history(chat_id, limit=3000):
-                    if msg.id != prompt_msg_id:
-                        message_ids.append(msg.id)
-            except Exception as scan_err:
-                print(f"[DELETEALL] Scan error on pass {pass_num}: {scan_err}")
-                # Fallback scan with app if userbot scan failed
-                if scanner_client != app:
-                    try:
-                        async for msg in app.get_chat_history(chat_id, limit=3000):
-                            if msg.id != prompt_msg_id:
-                                message_ids.append(msg.id)
-                    except Exception:
-                        pass
+            # Scan history using available clients
+            for scanner_client in clients:
+                try:
+                    async for msg in scanner_client.get_chat_history(chat_id, limit=5000):
+                        if msg.id != prompt_msg_id and msg.id not in message_ids:
+                            message_ids.append(msg.id)
+                    if message_ids:
+                        break
+                except Exception as scan_err:
+                    print(f"[DELETEALL] Scan error on client {scanner_client.__class__.__name__}: {scan_err}")
+
+            # Fallback range scan if get_chat_history returned nothing or for basic group cleanup
+            if not message_ids and pass_num == 1:
+                highest_id = prompt_msg_id - 1
+                if highest_id > 0:
+                    message_ids = list(range(highest_id, 0, -1))
 
             if not message_ids:
                 break
 
             await callback_query.message.edit_text(
-                f"🗑️ **Deleting messages (Pass #{pass_num})...**\n\n"
-                f"• Found in this pass: `{len(message_ids)}`\n"
+                f"🗑️ **Deleting messages for everyone (Pass #{pass_num})...**\n\n"
+                f"• Target in this pass: `{len(message_ids)}`\n"
                 f"• Total Wiped So Far: `{total_deleted}` ✅"
             )
 
@@ -210,7 +224,7 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
                 batch = message_ids[k:k+batch_size]
                 d_count = await _delete_batch_adaptive(clients, chat_id, batch)
                 total_deleted += d_count
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
 
             # If very few messages were found, no need for more passes
             if len(message_ids) < 5:
@@ -218,8 +232,8 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
 
         await callback_query.message.edit_text(
             f"🎉 **Clean Complete!**\n\n"
-            f"✅ Successfully wiped **`{total_deleted}`** messages.\n"
-            f"🧹 Chat is now clean!"
+            f"✅ Successfully wiped **`{total_deleted}`** messages for everyone.\n"
+            f"🧹 Group/Channel chat is now clean!"
         )
         
     except Exception as e:
