@@ -264,27 +264,15 @@ async def check_user_bio_access(
 
     bio = await get_fresh_user_bio(client, user_id)
 
+    # If bio has the required tag, grant access
     if bio is not None and has_bio_tag(bio):
         return True
 
-    if bio is None:
-        prompt_text = (
-            "⚠️ <b>Bio Verification Temporarily Unavailable</b>\n\n"
-            "Telegram se aapka bio verify nahi ho paaya. "
-            "Please thodi der baad dobara try karein."
-        )
-        try:
-            await message.reply_text(
-                prompt_text,
-                parse_mode=ParseMode.HTML
-            )
-        except Exception:
-            pass
-        return False
-
+    # Otherwise (whether bio is hidden by privacy, empty, or missing tag), show the official Access Denied card
     prompt_text = (
         "🔒 <b>Access Denied ❌</b>\n\n"
         f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
+
         "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
         "─────────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
@@ -387,34 +375,26 @@ async def handle_chat_join_request(
         upsert=True
     )
 
-    if bio is None:
-        prompt_text = (
-            "⚠️ <b>Bio Verification Temporarily Unavailable</b>\n\n"
-            f"Hey {user_mention} 👋\n\n"
-            "Telegram se aapka bio verify nahi ho paaya. "
-            "Please thodi der baad Verify Bio button dabayein."
-        )
-    else:
-        prompt_text = (
-            "🔒 <b>Access Denied ❌</b>\n\n"
-            f"Hey {user_mention} 👋 Aapka\n"
-            "Request for 👇\n\n"
-            f"{chat_display}\n\n"
-            "Abhi Pending Me Hai...\n\n"
-            "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
-            "─────────────────\n"
-            " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-            "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
-            f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
-            "<i>(Tap to Copy 👆)</i>\n\n"
-            " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-            "Bio update karne ke baad niche\n\n"
-            "<b>🟢 Verify Bio 🔄</b>\n\n"
-            "Button par tap kar do,\n"
-            "instant Access mil jayega! 🚀\n"
-            "─────────────────"
+    prompt_text = (
+        "🔒 <b>Access Denied ❌</b>\n\n"
+        f"Hey {user_mention} 👋 Aapka\n"
+        "Request for 👇\n\n"
+        f"{chat_display}\n\n"
+        "Abhi Pending Me Hai...\n\n"
+        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+        "─────────────────\n"
+        " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
+        "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
+        f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
+        "<i>(Tap to Copy 👆)</i>\n\n"
+        " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
+        "Bio update karne ke baad niche\n\n"
+        "<b>🟢 Verify Bio 🔄</b>\n\n"
+        "Button par tap kar do,\n"
+        "instant Access mil jayega! 🚀\n"
+        "─────────────────"
+    )
 
-        )
 
     try:
         await client.send_message(
@@ -442,85 +422,7 @@ async def verify_user_bio_callback(
 
     bio = await get_fresh_user_bio(client, user_id)
 
-    if bio is None:
-        await callback_query.answer(
-            "Telegram se bio verify nahi ho paaya. Thodi der baad try karein.",
-            show_alert=True
-        )
-        return
-
-    if has_bio_tag(bio):
-        await callback_query.answer(
-            "🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉",
-            show_alert=True
-        )
-
-        pending_requests = await join_req_db.find(
-            {"user_id": user_id}
-        ).to_list(100)
-
-        approved_chats_list = []
-
-        for req in pending_requests:
-            try:
-                await client.approve_chat_join_request(
-                    req["chat_id"],
-                    user_id
-                )
-
-                approved_chats_list.append({
-                    "title": req.get("chat_title", "Channel"),
-                    "link": req.get("chat_link", "")
-                })
-
-                await join_req_db.delete_one({"_id": req["_id"]})
-
-            except Exception as e:
-                logger.error(
-                    "Failed to approve chat %s: %s",
-                    req.get("chat_id"),
-                    e
-                )
-
-        approve_text = (
-            "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
-            f"<blockquote><b>Welcome, {user_mention} ! 🥂</b></blockquote>\n\n"
-            "Aapka profile Bio successfully verify ho gaya hai! 🎉\n\n"
-        )
-
-        if approved_chats_list:
-            approve_text += "✅ <b>Join Request Approved for:</b>\n"
-
-            for item in approved_chats_list:
-                approve_text += (
-                    format_channel_display(
-                        item["title"],
-                        item["link"],
-                        suffix=" !"
-                    )
-                    + "\n"
-                )
-
-            approve_text += "\n"
-
-        approve_text += (
-            "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
-            f"⚠️ <b>Note:</b> <i>Agar Bio se "
-            f"<code>{REQUIRED_TAG}</code> hataya to access "
-            "firse deny ho jayega. 📑</i>\n\n"
-            "👉 <b>Send /start to proceed!</b>"
-        )
-
-        try:
-            await callback_query.message.edit_text(
-                approve_text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logger.warning("Could not edit verification message: %s", e)
-
-    else:
+    if bio is None or not has_bio_tag(bio):
         denied_msg = (
             "❌ Access Denied!\n\n"
             f"1️⃣ Bio me '{REQUIRED_TAG}' tag lagayein.\n"
@@ -528,8 +430,81 @@ async def verify_user_bio_callback(
             "Privacy & Security ➔ Bio ➔ Set to 'Everybody'!\n\n"
             "Fir 🟢 Verify Bio 🔄 button par click karein."
         )
-
         await callback_query.answer(
             denied_msg,
             show_alert=True
         )
+        return
+
+    # If bio has the tag, grant access
+    await callback_query.answer(
+        "🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉",
+        show_alert=True
+    )
+
+
+    pending_requests = await join_req_db.find(
+        {"user_id": user_id}
+    ).to_list(100)
+
+    approved_chats_list = []
+
+    for req in pending_requests:
+        try:
+            await client.approve_chat_join_request(
+                req["chat_id"],
+                user_id
+            )
+
+            approved_chats_list.append({
+                "title": req.get("chat_title", "Channel"),
+                "link": req.get("chat_link", "")
+            })
+
+            await join_req_db.delete_one({"_id": req["_id"]})
+
+        except Exception as e:
+            logger.error(
+                "Failed to approve chat %s: %s",
+                req.get("chat_id"),
+                e
+            )
+
+    approve_text = (
+        "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
+        f"<blockquote><b>Welcome, {user_mention} ! 🥂</b></blockquote>\n\n"
+        "Aapka profile Bio successfully verify ho gaya hai! 🎉\n\n"
+    )
+
+    if approved_chats_list:
+        approve_text += "✅ <b>Join Request Approved for:</b>\n"
+
+        for item in approved_chats_list:
+            approve_text += (
+                format_channel_display(
+                    item["title"],
+                    item["link"],
+                    suffix=" !"
+                )
+                + "\n"
+            )
+
+        approve_text += "\n"
+
+    approve_text += (
+        "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
+        f"⚠️ <b>Note:</b> <i>Agar Bio se "
+        f"<code>{REQUIRED_TAG}</code> hataya to access "
+        "firse deny ho jayega. 📑</i>\n\n"
+        "👉 <b>Send /start to proceed!</b>"
+    )
+
+    try:
+        await callback_query.message.edit_text(
+            approve_text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.warning("Could not edit verification message: %s", e)
+
