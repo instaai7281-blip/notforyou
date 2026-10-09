@@ -292,6 +292,45 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
                     print(f"[AUTO BIO] Successfully updated bio for chat: {chat.title or chat.id} (ID: {chat.id})")
                 except Exception as bio_err:
                     print(f"[AUTO BIO] Could not set bio for chat {chat.id}: {bio_err}")
+
+                # Send connection notification DM to the person who added the bot
+                try:
+                    adder = chat_member_updated.from_user
+                    if adder and not adder.is_self:
+                        adder_id = adder.id
+                        from pyrogram.enums import ParseMode
+                        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        dm_notify_text = (
+                            f"🎉 <b>Bot Successfully Added & Connected!</b> 😉\n\n"
+                            f"<blockquote>🏢 <b>Target Group:</b> <code>{title}</code>\n"
+                            f"🆔 <b>Group ID:</b> <code>{chat.id}</code>\n"
+                            f"⚡ <b>Status:</b> Ready to automate!</blockquote>\n\n"
+                            f"<b>🚀 Quick Start Commands for this group:</b>\n"
+                            f"• <code>/topicmirror</code> — Clone entire forum supergroups with topics auto-created\n"
+                            f"• <code>/batch</code> — Bulk extract and upload files directly into this group\n"
+                            f"• <code>/topiclink</code> — Mirror 1 specific topic to another topic\n\n"
+                            f"<i>Tip: Make sure Topics are enabled in your target group settings for Topic Mirroring!</i>"
+                        )
+                        dm_buttons = InlineKeyboardMarkup([
+                            [
+                                InlineKeyboardButton("📁 Start Topic Mirror", callback_data="tm_new"),
+                                InlineKeyboardButton("🪄 Start Bulk Batch", switch_inline_query_current_chat="/batch ")
+                            ],
+                            [
+                                InlineKeyboardButton("📘 Complete User Guide", callback_data="guide_page_1"),
+                                InlineKeyboardButton("⚙️ Bot Settings", callback_data="back_to_main")
+                            ]
+                        ])
+                        await client.send_message(
+                            chat_id=adder_id,
+                            text=dm_notify_text,
+                            reply_markup=dm_buttons,
+                            parse_mode=ParseMode.HTML
+                        )
+                        print(f"[AUTO DETECT] 📩 Sent connection guide DM to user {adder_id} for group '{title}'")
+                except Exception as dm_err:
+                    print(f"[AUTO DETECT] Notice sending connection DM to adder: {dm_err}")
+
             
             # If bot was kicked, banned, or left the chat
             elif status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:

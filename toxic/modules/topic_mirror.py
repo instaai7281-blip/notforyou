@@ -2469,22 +2469,41 @@ async def clear_sessions_callback(_, query: CallbackQuery):
     )
 
 
+def get_mirror_access_denied_card():
+    """Generates an intuitive, cool Access Denied card for users without the Topic Mirror Plan."""
+    text = (
+        "<blockquote><b>🔒 𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗣𝗹𝗮𝗻 𝗥𝗲𝗾𝘂𝗶𝗿𝗲𝗱 ⭐</b></blockquote>\n\n"
+        "Hey! 👋 <b>Topic Mirror & Forum Cloning</b> feature is exclusively available in the <b>Topic Mirror Plan</b>.\n\n"
+        "<blockquote><b>✨ What Topic Mirror Does:</b>\n"
+        "• 🚀 1-Click Clone whole forum supergroup with topics\n"
+        "• 🎯 Topic-to-Topic direct thread syncing\n"
+        "• ⏰ Daily Scheduled Auto-Update & Live Diff Scan\n"
+        "• 🔑 Includes <b>FULL Save Restricted Content (SRC)</b> access</blockquote>\n\n"
+        "<i>Check the user guide or subscription plans below to unlock access instantly:</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💎 View Plans", callback_data="see_plan"),
+            InlineKeyboardButton("📘 User Guide", callback_data="guide_page_2")
+        ],
+        [
+            InlineKeyboardButton("💬 Buy Plan / Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")
+        ]
+    ])
+    return text, kb
+
+
 async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False):
     """Interactive flow to configure and launch a new topic mirror session."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
-            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
+        err_msg, kb = get_mirror_access_denied_card()
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
             await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
+
 
     # STEP 1: Ask for Source Message/Topic Link
     try:
@@ -2579,17 +2598,13 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
 async def start_topic_link_flow(user_id: int, message, is_callback: bool = False):
     """Interactive prompt flow for mirroring from ONE specific topic link to ANOTHER topic link."""
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
+        err_msg, kb = get_mirror_access_denied_card()
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
             await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
+
 
     if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
         err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
@@ -2615,18 +2630,16 @@ async def run_single_link_mirror(
     never interfere with each other or with full group mirroring sessions.
     """
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CrazyxDeveloper_Bot to purchase access.</blockquote>"
-        )
+        err_msg, kb = get_mirror_access_denied_card()
         if status_msg:
             try:
-                await status_msg.edit(err_msg, parse_mode=ParseMode.HTML)
+                await status_msg.edit(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
             except Exception:
                 pass
         else:
-            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML)
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
+
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
     if not userbot:
@@ -3269,15 +3282,10 @@ async def topic_mirror_cmd(client, message):
 
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring & Auto-Folder/Topic Creation</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "Standard Premium subscribers & Free users do not have access to topic cloning.\n\n"
-            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
+        err_msg, kb = get_mirror_access_denied_card()
         await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
+
 
     if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
         await message.reply("⚠️ **A mirroring operation is already running!** Send `/cancel_mirror` to abort it first.")
@@ -3301,11 +3309,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, range support, and auto-update detection."""
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "You need an active <b>Topic Mirror Plan</b> to run Topic Mirroring. Contact @CrazyxDeveloper_Bot to purchase access.</blockquote>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
+        err_msg, kb = get_mirror_access_denied_card()
         if status_msg:
             try:
                 await status_msg.edit(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -3314,6 +3318,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         else:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
+
 
     control_kb = get_mirror_keyboard(user_id)
 

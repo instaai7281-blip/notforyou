@@ -276,7 +276,7 @@ async def plan(client, message):
 | 🗓 **Duration** | 🇮🇳 **INR** | 🌐 **USDT / USD** | 🏷 **Access** |
 |:---:|:---:|:---:|:---:|
 | **1 Month** | `₹299` | `$4.00` | 🟢 Pro Tier |
-| **Lifetime VIP** | `₹599` | `$8.00` | 👑 Best Value |
+| **3 Months** | `₹599` | `$8.00` | 👑 Best Value |
 
 ---
 
@@ -339,7 +339,7 @@ async def plan(client, message):
             "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
             "<b>👑 TOPIC CLONE / MIRROR PLAN (VIP ⭐):</b>\n"
             "• 1 Month: <b>₹299 / $4 USD</b>\n"
-            "• Lifetime VIP: <b>₹599 / $8 USD</b>\n"
+            "• 3 Months: <b>₹599 / $8 USD</b>\n"
             "<i>(Includes 1-Click Supergroup & Forum Topic Cloning, Auto-Pinning, Daily Auto-Update + Full SRC Access!)</i>\n\n"
             "<b>📥 SAVE RESTRICTED CONTENT (SRC) PLAN:</b>\n"
             "• 1 Month: <b>₹149 / $2 USD</b>\n"
@@ -361,7 +361,7 @@ async def see_plan(client, callback_query):
         "<blockquote><b>💎 XTRACTOR BOT PRO — SUBSCRIPTION PLANS 💎</b></blockquote>\n\n"
         "<b>👑 TOPIC CLONE / MIRROR PLAN (VIP ⭐):</b>\n"
         "• 1 Month: <b>₹299 / $4 USD</b>\n"
-        "• Lifetime VIP: <b>₹599 / $8 USD</b>\n"
+        "• 3 Months: <b>₹599 / $8 USD</b>\n"
         "<i>(Includes 1-Click Supergroup & Forum Topic Cloning, Auto-Pinning, Daily Auto-Update + Full SRC Access!)</i>\n\n"
         "<b>📥 SAVE RESTRICTED CONTENT (SRC) PLAN:</b>\n"
         "• 1 Month: <b>₹149 / $2 USD</b>\n"
@@ -374,6 +374,7 @@ async def see_plan(client, callback_query):
         await callback_query.message.edit_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
     except Exception:
         await callback_query.message.reply_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
 
 
 
