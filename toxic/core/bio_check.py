@@ -1,7 +1,8 @@
 
+
 # ---------------------------------------------------
 # File Name: bio_check.py
-# Description: Bio verification middleware & Chat Join Request handler for @Crazy_for_Goals
+# Description: Bio verification & Chat Join Request handler
 # Author: Antigravity
 # ---------------------------------------------------
 
@@ -25,9 +26,11 @@ from toxic import app, tdb
 
 REQUIRED_TAG = "@Crazy_for_Goals"
 
-# Store pending join requests & channel invite links in MongoDB
 join_req_db = tdb["pending_join_requests"]
 invite_link_db = tdb["channel_invite_links"]
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def has_bio_tag(user_bio: str) -> bool:
@@ -41,64 +44,79 @@ def has_bio_tag(user_bio: str) -> bool:
         for c in normalized
     )
 
-    target = "crazy_for_goals"
-    target_no_spaces = "crazyforgoals"
-
     return (
-        target in clean_text
-        or target_no_spaces in clean_text.replace(" ", "")
+        "crazy_for_goals" in clean_text
+        or "crazyforgoals" in clean_text.replace(" ", "")
     )
 
 
-async def get_fresh_user_bio(client: Client, user_id: int) -> str:
-    """Fetch user bio using Telegram raw API, with fallbacks."""
+def get_owner_ids():
+    if not OWNER_ID:
+        return set()
+
+    if isinstance(OWNER_ID, int):
+        return {OWNER_ID}
+
+    if isinstance(OWNER_ID, str):
+        result = set()
+        for item in OWNER_ID.split(","):
+            item = item.strip()
+            if item.lstrip("-").isdigit():
+                result.add(int(item))
+        return result
+
+    try:
+        return {int(item) for item in OWNER_ID}
+    except (TypeError, ValueError):
+        return set()
+
+
+async def get_fresh_user_bio(client: Client, user_id: int):
+    """Fetch a user's bio. None means the bio could not be verified."""
 
     try:
         peer = await client.resolve_peer(user_id)
-        full_user_res = await client.invoke(
+        result = await client.invoke(
             functions.users.GetFullUser(id=peer)
         )
 
-        if hasattr(full_user_res, "full_user"):
-            bio = getattr(full_user_res.full_user, "about", None)
-            if bio:
-                return bio
+        if hasattr(result, "full_user"):
+            about = getattr(result.full_user, "about", None)
+            if about is not None:
+                return about or ""
 
     except Exception as e:
-        logging.warning(
-            "[BIO CHECK] Raw RPC failed for %s: %s",
-            user_id,
-            e
-        )
+        logger.warning("Raw bio lookup failed for %s: %s", user_id, e)
 
     try:
         from toxic import pro
 
         if pro and pro.is_connected:
             peer = await pro.resolve_peer(user_id)
-            full_user_res = await pro.invoke(
+            result = await pro.invoke(
                 functions.users.GetFullUser(id=peer)
             )
 
-            if hasattr(full_user_res, "full_user"):
-                bio = getattr(full_user_res.full_user, "about", None)
-                if bio:
-                    return bio
+            if hasattr(result, "full_user"):
+                about = getattr(result.full_user, "about", None)
+                if about is not None:
+                    return about or ""
 
     except Exception:
         pass
 
     try:
         user = await client.get_chat(user_id)
-        return user.bio or ""
+        about = getattr(user, "bio", None)
+
+        if about is not None:
+            return about or ""
 
     except Exception as e:
-        logging.warning(
-            "[BIO CHECK] get_chat failed for %s: %s",
-            user_id,
-            e
-        )
-        return ""
+        logger.warning("get_chat bio lookup failed for %s: %s", user_id, e)
+
+    # Do not treat an API failure as proof that the user has no tag.
+    return None
 
 
 async def get_or_create_permanent_join_link(
@@ -107,55 +125,74 @@ async def get_or_create_permanent_join_link(
     request_link=None,
     chat_obj=None
 ) -> str:
-    """Get or create a non-expiring join-request link."""
+    """
+    Reuse a saved link only after validating it.
+    Otherwise create a fresh, non-expiring join-request invite link.
+    """
 
     cached = await invite_link_db.find_one({"chat_id": chat_id})
 
     if cached and cached.get("link"):
-        return cached["link"]
+        cached_link = cached["link"]
 
-    link = ""
-
-    try:
-        chat = chat_obj or await client.get_chat(chat_id)
-
-        # Public channel/group link
-        if getattr(chat, "username", None):
-            link = f"https://t.me/{chat.username}"
-
-        else:
-            # Create a non-expiring join-request invite link
-            invite = await client.create_chat_invite_link(
+        try:
+            invite_info = await client.get_chat_invite_link(
                 chat_id=chat_id,
-                name="Permanent Join Request",
-                creates_join_request=True
+                invite_link=cached_link
             )
-            link = invite.invite_link
 
-    except Exception as e:
-        logging.error(
-            "[INVITE LINK] Failed for %s: %s",
-            chat_id,
-            e
+            if (
+                invite_info
+                and not getattr(invite_info, "is_revoked", False)
+                and getattr(invite_info, "creates_join_request", False)
+                and not getattr(invite_info, "expire_date", None)
+            ):
+                return invite_info.invite_link
+
+        except Exception as e:
+            logger.info(
+                "Saved invite link is invalid; creating a new one: %s",
+                e
+            )
+
+        await invite_link_db.delete_one({"chat_id": chat_id})
+
+    # Create a fresh request-to-join link. Do not use a public URL or
+    # an old request.invite_link as a substitute for this dedicated link.
+    try:
+        invite = await client.create_chat_invite_link(
+            chat_id=chat_id,
+            name="Permanent Join Request",
+            creates_join_request=True
         )
 
-        # Do not reuse an unverified request link as a guaranteed
-        # permanent invite link.
-        link = ""
+        full_link = invite.invite_link
 
-    if link:
+        if not full_link or "..." in full_link:
+            logger.error("Telegram returned an invalid/incomplete invite URL.")
+            return ""
+
         await invite_link_db.update_one(
             {"chat_id": chat_id},
             {
                 "$set": {
                     "chat_id": chat_id,
-                    "link": link
+                    "link": full_link
                 }
             },
             upsert=True
         )
 
-    return link
+        logger.info("Created a new join-request invite link for %s", chat_id)
+        return full_link
+
+    except Exception as e:
+        logger.error(
+            "Could not create a join-request link for %s: %s",
+            chat_id,
+            e
+        )
+        return ""
 
 
 def format_channel_display(
@@ -163,7 +200,7 @@ def format_channel_display(
     channel_link: str,
     suffix: str = ""
 ) -> str:
-    """Display channel name and link on separate blockquote lines."""
+    """Put channel name and the complete link on separate blockquote lines."""
 
     safe_title = html.escape(channel_title or "Channel/Group")
     safe_link = html.escape(channel_link or "", quote=True)
@@ -171,59 +208,17 @@ def format_channel_display(
     if channel_link:
         return (
             f"<blockquote><b>{safe_title}{suffix}</b>\n"
-            f"<a href='{safe_link}'>{safe_link}</a></blockquote>"
+            f"{safe_link}</blockquote>"
         )
 
     return (
         f"<blockquote><b>{safe_title}{suffix}</b>\n"
-        f"Link unavailable</blockquote>"
+        "Invite link could not be created. Please contact admin.</blockquote>"
     )
 
 
-async def check_user_bio_access(
-    client: Client,
-    message: Message
-) -> bool:
-    if not message.from_user:
-        return True
-
-    user_id = message.from_user.id
-    user_name = html.escape(message.from_user.first_name or "User")
-    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
-
-    # Owners bypass bio check
-    owner_ids = (
-        {OWNER_ID}
-        if isinstance(OWNER_ID, int)
-        else set(OWNER_ID or [])
-    )
-
-    if user_id in owner_ids:
-        return True
-
-    bio = await get_fresh_user_bio(client, user_id)
-
-    if has_bio_tag(bio):
-        return True
-
-    prompt_text = (
-        "🔒 <b>Access Denied ❌</b>\n\n"
-        f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
-        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
-        "─────────────────\n"
-        " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-        "Apne Bio me ye Tag Lagao 👇\n\n"
-        f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
-        "<i>(Tap to Copy 👆)</i>\n\n"
-        " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-        "Bio update karne ke baad niche\n\n"
-        "<b>🟢 Verify Bio 🔄</b>\n\n"
-        "Button par tap kar do,\n"
-        "instant Access mil jayega! 🚀\n"
-        "─────────────────"
-    )
-
-    buttons = InlineKeyboardMarkup([
+def get_verification_buttons():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "⚙️ Open Settings",
@@ -246,15 +241,67 @@ async def check_user_bio_access(
         ]
     ])
 
+
+async def check_user_bio_access(
+    client: Client,
+    message: Message
+) -> bool:
+    if not message.from_user:
+        return True
+
+    user_id = message.from_user.id
+    user_name = html.escape(message.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+
+    if user_id in get_owner_ids():
+        return True
+
+    bio = await get_fresh_user_bio(client, user_id)
+
+    if bio is not None and has_bio_tag(bio):
+        return True
+
+    if bio is None:
+        prompt_text = (
+            "⚠️ <b>Bio Verification Temporarily Unavailable</b>\n\n"
+            "Telegram se aapka bio verify nahi ho paaya. "
+            "Please thodi der baad dobara try karein."
+        )
+        try:
+            await message.reply_text(
+                prompt_text,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
+        return False
+
+    prompt_text = (
+        "🔒 <b>Access Denied ❌</b>\n\n"
+        f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
+        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+        "─────────────────\n"
+        " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
+        "Apne Bio me ye Tag Lagao 👇\n\n"
+        f"<blockquote>● <code>{REQUIRED_TAG}</code></blockquote>\n"
+        "<i>(Tap to Copy 👆)</i>\n\n"
+        " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
+        "Bio update karne ke baad niche\n\n"
+        "<b>🟢 Verify Bio 🔄</b>\n\n"
+        "Button par tap kar do,\n"
+        "instant Access mil jayega! 🚀\n"
+        "─────────────────"
+    )
+
     try:
         await message.reply_text(
             prompt_text,
-            reply_markup=buttons,
+            reply_markup=get_verification_buttons(),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Could not send bio verification prompt: %s", e)
 
     return False
 
@@ -268,12 +315,8 @@ async def handle_chat_join_request(
     chat_id = request.chat.id
     chat_title = request.chat.title or "Channel/Group"
 
-    safe_user_name = html.escape(
-        request.from_user.first_name or "User"
-    )
-    user_mention = (
-        f"<a href='tg://user?id={user_id}'>{safe_user_name}</a>"
-    )
+    safe_user_name = html.escape(request.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{safe_user_name}</a>"
 
     chat_link = await get_or_create_permanent_join_link(
         client,
@@ -282,11 +325,7 @@ async def handle_chat_join_request(
         request.chat
     )
 
-    # Channel name on the first quoted line; link on the second.
-    chat_display = format_channel_display(
-        chat_title,
-        chat_link
-    )
+    chat_display = format_channel_display(chat_title, chat_link)
     chat_display_excl = format_channel_display(
         chat_title,
         chat_link,
@@ -295,17 +334,12 @@ async def handle_chat_join_request(
 
     bio = await get_fresh_user_bio(client, user_id)
 
-    if has_bio_tag(bio):
+    if bio is not None and has_bio_tag(bio):
         try:
             await client.approve_chat_join_request(chat_id, user_id)
-            print(
-                f"[JOIN REQ] Approved user {user_id} "
-                f"in chat {chat_title}"
-            )
+            logger.info("Approved user %s in chat %s", user_id, chat_id)
         except Exception as e:
-            print(
-                f"[JOIN REQ] Failed to approve user {user_id}: {e}"
-            )
+            logger.error("Failed to approve user %s: %s", user_id, e)
 
         approve_text = (
             "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
@@ -328,25 +362,32 @@ async def handle_chat_join_request(
                 disable_web_page_preview=True
             )
         except Exception as e:
-            print(
-                f"[JOIN REQ] Could not send DM to "
-                f"approved user {user_id}: {e}"
-            )
+            logger.warning("Could not DM approved user %s: %s", user_id, e)
 
-    else:
-        await join_req_db.update_one(
-            {"user_id": user_id, "chat_id": chat_id},
-            {
-                "$set": {
-                    "user_id": user_id,
-                    "chat_id": chat_id,
-                    "chat_title": chat_title,
-                    "chat_link": chat_link
-                }
-            },
-            upsert=True
+        return
+
+    # Keep the request pending until verification succeeds.
+    await join_req_db.update_one(
+        {"user_id": user_id, "chat_id": chat_id},
+        {
+            "$set": {
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "chat_title": chat_title,
+                "chat_link": chat_link
+            }
+        },
+        upsert=True
+    )
+
+    if bio is None:
+        prompt_text = (
+            "⚠️ <b>Bio Verification Temporarily Unavailable</b>\n\n"
+            f"Hey {user_mention} 👋\n\n"
+            "Telegram se aapka bio verify nahi ho paaya. "
+            "Please thodi der baad Verify Bio button dabayein."
         )
-
+    else:
         prompt_text = (
             "🔒 <b>Access Denied ❌</b>\n\n"
             f"Hey {user_mention} 👋 Aapka\n"
@@ -367,42 +408,16 @@ async def handle_chat_join_request(
             "─────────────────"
         )
 
-        buttons = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "⚙️ Open Settings",
-                    url="tg://settings"
-                ),
-                InlineKeyboardButton(
-                    "🟢 Verify Bio 🔄",
-                    callback_data="verify_user_bio"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📢 Main Channel",
-                    url="https://t.me/Crazy_for_Goals"
-                ),
-                InlineKeyboardButton(
-                    "💬 Contact Admin",
-                    url="https://t.me/CrazyxDeveloper_Bot"
-                )
-            ]
-        ])
-
-        try:
-            await client.send_message(
-                user_id,
-                prompt_text,
-                reply_markup=buttons,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            print(
-                f"[JOIN REQ] Could not send prompt DM "
-                f"to user {user_id}: {e}"
-            )
+    try:
+        await client.send_message(
+            user_id,
+            prompt_text,
+            reply_markup=get_verification_buttons(),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.warning("Could not send prompt to user %s: %s", user_id, e)
 
 
 @app.on_callback_query(filters.regex("^verify_user_bio$"))
@@ -413,13 +428,18 @@ async def verify_user_bio_callback(
     user_id = callback_query.from_user.id
 
     user_name = html.escape(
-        callback_query.from_user.first_name
-        if callback_query.from_user
-        else "User"
+        callback_query.from_user.first_name or "User"
     )
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
     bio = await get_fresh_user_bio(client, user_id)
+
+    if bio is None:
+        await callback_query.answer(
+            "Telegram se bio verify nahi ho paaya. Thodi der baad try karein.",
+            show_alert=True
+        )
+        return
 
     if has_bio_tag(bio):
         await callback_query.answer(
@@ -445,14 +465,13 @@ async def verify_user_bio_callback(
                     "link": req.get("chat_link", "")
                 })
 
-                await join_req_db.delete_one(
-                    {"_id": req["_id"]}
-                )
+                await join_req_db.delete_one({"_id": req["_id"]})
 
             except Exception as e:
-                print(
-                    f"[JOIN REQ VERIFY] Failed to approve "
-                    f"chat {req['chat_id']}: {e}"
+                logger.error(
+                    "Failed to approve chat %s: %s",
+                    req.get("chat_id"),
+                    e
                 )
 
         approve_text = (
@@ -490,8 +509,8 @@ async def verify_user_bio_callback(
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not edit verification message: %s", e)
 
     else:
         denied_msg = (
