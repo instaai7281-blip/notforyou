@@ -6,9 +6,11 @@
 
 import logging
 import html
+import unicodedata
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, ChatJoinRequest, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
+from pyrogram.raw import functions
 from config import OWNER_ID
 from toxic import app, tdb
 
@@ -20,7 +22,50 @@ join_req_db = tdb["pending_join_requests"]
 def has_bio_tag(user_bio: str) -> bool:
     if not user_bio:
         return False
-    return REQUIRED_TAG.lower() in user_bio.lower()
+    # Normalize fancy unicode fonts (e.g. 𝒞𝓇𝒶𝓏𝓎_𝒻ℴ𝓇_𝒢ℴ𝒶𝓁𝓈, 𝗖𝗿𝗮𝘇𝘆_𝗳𝗼𝗿_𝗚𝗼𝗮𝗹𝘀) to standard ASCII
+    normalized = unicodedata.normalize('NFKC', user_bio).lower()
+    
+    # Clean non-alphanumeric punctuation except underscores for tag matching
+    clean_text = "".join(c if c.isalnum() or c == '_' else ' ' for c in normalized)
+    
+    target = "crazy_for_goals"
+    target_no_spaces = "crazyforgoals"
+    
+    return target in clean_text or target_no_spaces in clean_text.replace(" ", "")
+
+async def get_fresh_user_bio(client: Client, user_id: int) -> str:
+    """Fetches the 100% fresh uncached bio directly from Telegram servers via MTProto raw RPC."""
+    # 1. Try Pyrogram raw RPC GetFullUser (bypasses internal cache)
+    try:
+        peer = await client.resolve_peer(user_id)
+        full_user_res = await client.invoke(functions.users.GetFullUser(id=peer))
+        if hasattr(full_user_res, "full_user") and getattr(full_user_res.full_user, "about", None):
+            bio = full_user_res.full_user.about or ""
+            if bio:
+                return bio
+    except Exception as e:
+        print(f"[BIO CHECK] Raw RPC GetFullUser failed for {user_id}: {e}")
+
+    # 2. Try userbot `pro` if available
+    try:
+        from toxic import pro
+        if pro and pro.is_connected:
+            peer = await pro.resolve_peer(user_id)
+            full_user_res = await pro.invoke(functions.users.GetFullUser(id=peer))
+            if hasattr(full_user_res, "full_user") and getattr(full_user_res.full_user, "about", None):
+                bio = full_user_res.full_user.about or ""
+                if bio:
+                    return bio
+    except Exception as e:
+        pass
+
+    # 3. Fallback to get_chat
+    try:
+        user = await client.get_chat(user_id)
+        return user.bio or ""
+    except Exception as e:
+        print(f"[BIO CHECK] get_chat failed for {user_id}: {e}")
+        return ""
 
 async def check_user_bio_access(client: Client, message: Message) -> bool:
     if not message.from_user:
@@ -34,12 +79,7 @@ async def check_user_bio_access(client: Client, message: Message) -> bool:
     if user_id in OWNER_ID:
         return True
 
-    try:
-        user = await client.get_chat(user_id)
-        bio = user.bio or ""
-    except Exception as e:
-        print(f"[BIO CHECK] Error fetching user profile for {user_id}: {e}")
-        bio = ""
+    bio = await get_fresh_user_bio(client, user_id)
 
     if has_bio_tag(bio):
         return True
@@ -79,12 +119,7 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
     user_name = html.escape(request.from_user.first_name or "User")
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
-    try:
-        user = await client.get_chat(user_id)
-        bio = user.bio or ""
-    except Exception as e:
-        print(f"[JOIN REQ] Could not fetch chat info for user {user_id}: {e}")
-        bio = ""
+    bio = await get_fresh_user_bio(client, user_id)
 
     if has_bio_tag(bio):
         try:
@@ -141,15 +176,10 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
     user_id = callback_query.from_user.id
     user_name = callback_query.from_user.first_name if callback_query.from_user else "User"
 
-    try:
-        user = await client.get_chat(user_id)
-        bio = user.bio or ""
-    except Exception as e:
-        print(f"[BIO CHECK] Error in callback for {user_id}: {e}")
-        bio = ""
+    bio = await get_fresh_user_bio(client, user_id)
 
     if has_bio_tag(bio):
-        await callback_query.answer("🔓 Access Granted! Tera Bio Verify ho gaya. 🎉", show_alert=True)
+        await callback_query.answer("🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉", show_alert=True)
         
         pending_requests = await join_req_db.find({"user_id": user_id}).to_list(100)
         approved_chats = []
@@ -164,12 +194,12 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
         approve_text = (
             "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
             f"<b><blockquote> Welcome, <a href='tg://user?id={user_id}'>{user_name}</a> ! 🥂</blockquote></b>\n"
-            "Tera profile Bio successfully verify ho gaya hai bro! 🎉\n\n"
+            "Aapka profile Bio successfully verify ho gaya hai! 🎉\n\n"
         )
         if approved_chats:
             approve_text += f"✅ Join Request Approved for: <b>{', '.join(approved_chats)}</b>!\n\n"
         approve_text += (
-            "Ab tu bot and channel access kar sakta hai. 🥰\n\n"
+            "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
             f"⚠️ <i>Note: Agar Bio se <code>{REQUIRED_TAG}</code> hataya to access firse deny ho jayega. 📑</i>\n\n"
             "👉 <b>Send /start to proceed!</b>"
         )
