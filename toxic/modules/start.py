@@ -358,25 +358,101 @@ async def check_subscription_callback(client, callback_query: CallbackQuery):
 @app.on_message(filters.command("guide"))
 async def guide_command(_, message: Message):
     bot_username = get_bot_username()
-    guide_p1_text = (
-        f"<b>📘 USER GUIDE — XTRACTOR BOT PRO (1/3)</b>\n\n"
-        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
-        "<b>✨ 1. PUBLIC CHANNEL / GROUP POSTS:</b>\n"
-        f"Send any public Telegram post link directly to <code>{bot_username}</code>.\n"
-        "<i>Example:</i> <code>https://t.me/public_channel/1234</code>\n\n"
-        "<b>🔒 2. PRIVATE CHANNEL / GROUP POSTS (XTRACTOR PRO):</b>\n"
-        f"1️⃣ Send <code>/login</code> to <code>{bot_username}</code>.\n"
-        "2️⃣ Enter your phone number with country code: <code>+91XXXXXXXXXX</code>\n"
-        "3️⃣ Check Telegram official chat for your OTP code.\n"
-        "4️⃣ Enter OTP with <b>spaces between digits</b> (e.g., for OTP <code>54321</code> ➔ enter <code>5 4 3 2 1</code>).\n"
-        "5️⃣ Once logged in, send private links or use <code>/batch</code> for bulk extraction!"
-    )
+    chat_id = message.chat.id
+
+    rich_guide_text = f"""# 📘 𝗫𝗧𝗥𝗔𝗖𝗧𝗢𝗥 𝗕𝗢𝗧 𝗣𝗥𝗢 — 𝗨𝗦𝗘𝗥 𝗚𝗨𝗜𝗗𝗘 🚀
+
+> ⚡ **Ultimate handbook for extracting restricted content, cloning forum topics, and batch downloading.**
+
+---
+
+## 🔓 𝟭. 𝗦𝗔𝗩𝗘 𝗥𝗘𝗦𝗧𝗥𝗜𝗖𝗧𝗘𝗗 𝗖𝗢𝗡𝗧𝗘𝗡𝗧 (𝗦𝗥𝗖)
+- [x] **Step 1:** Send `/login` to link your Telegram account session.
+- [x] **Step 2:** Paste any restricted channel / group message link (`https://t.me/c/...`).
+- [x] **Step 3:** Use `/batch` to clone up to **5,000 files in one go**!
+- [x] **Step 4:** Automatic thumbnail, watermark, and PDF tags applied seamlessly!
+
+---
+
+## 👑 𝟮. 𝗧𝗢𝗣𝗜𝗖 𝗠𝗜𝗥𝗥𝗢𝗥 & 𝗙𝗢𝗥𝗨𝗠 𝗖𝗟𝗢𝗡𝗜𝗡𝗚
+- [x] **Enable Topics** in your target group settings.
+- [x] Add @{bot_username} as **Admin** with full permissions.
+- [x] Send `/topicmirror` ➔ Pick your source & target group.
+- [x] Use `/scan_mirror` for live scan & `/sync_mirror` for **1-click auto-update**!
+- [x] Set **Daily Auto-Update** (Timezone-Aware) to auto-sync daily!
+
+---
+
+## 🛠️ 𝗞𝗘𝗬 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 𝗖𝗛𝗘𝗔𝗧𝗦𝗛𝗘𝗘𝗧
+
+| ⌨️ **Command** | ⚡ **What it does** |
+|:---|:---|
+| `/batch` | Range extraction (Start ➔ End post) |
+| `/topicmirror` | Supergroup + Forum Topic cloner engine |
+| `/sync_mirror` | 1-Click sync & copy missing topic files |
+| `/scan_mirror` | Live scan & compare topic content differences |
+| `/settings` | Customize thumbnail, captions, & watermarks |
+| `/plans` | View premium subscription tiers |
+| `/speedtest` | Check server download / upload speed |
+| `/myplan` | Check your active plan & expiry |
+
+---
+👉 **Owner / 24x7 Support:** [𝗖𝗿𝗮𝘇𝘆𝘅𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿_𝗕𝗼𝘁](https://t.me/CrazyxDeveloper_Bot) 🛡️"""
+
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📂 Topic Mirror Guide ➔", callback_data="guide_page_2")],
-        [InlineKeyboardButton("⚡ Extra Features", callback_data="guide_page_3"), InlineKeyboardButton("💎 View Plans", callback_data="see_plan")],
-        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
+        [
+            InlineKeyboardButton("💎 View Plans", callback_data="see_plan"),
+            InlineKeyboardButton("📂 Forum Mirror Details", callback_data="guide_page_2")
+        ],
+        [
+            InlineKeyboardButton("📜 Terms of Service", callback_data="see_terms"),
+            InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")
+        ]
     ])
-    await message.reply_text(guide_p1_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+    # Try sending via Telethon's Native Rich Message Engine first
+    sent_rich = False
+    try:
+        from toxic import sex
+        from telethon import functions
+        from telethon.tl.types import InputRichMessageMarkdown
+        if sex and sex.is_connected():
+            await sex(functions.messages.SendMessageRequest(
+                peer=chat_id,
+                message="User Guide",
+                rich_message=InputRichMessageMarkdown(markdown=rich_guide_text),
+            ))
+            sent_rich = True
+    except Exception as e:
+        print(f"[Guide] Telethon rich message error, falling back: {e}")
+
+    # Send or follow up with interactive navigation buttons
+    if sent_rich:
+        try:
+            await message.reply_text("👇 **Quick Actions & Navigation:**", reply_markup=buttons)
+        except Exception:
+            pass
+    else:
+        # Fallback to HTML formatted guide
+        html_guide = (
+            f"<b>📘 USER GUIDE — XTRACTOR BOT PRO</b>\n\n"
+            f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+            "<blockquote><b>🔓 1. SAVE RESTRICTED CONTENT (SRC):</b>\n"
+            "• Send <code>/login</code> to link your Telegram account.\n"
+            "• Send restricted private links (<code>https://t.me/c/...</code>) directly.\n"
+            "• Use <code>/batch</code> to clone up to 5,000 files in one go!</blockquote>\n\n"
+            "<blockquote><b>👑 2. TOPIC MIRROR & FORUM CLONING:</b>\n"
+            "• Enable Topics in your target group and add bot as Admin.\n"
+            "• Send <code>/topicmirror</code> to clone forum supergroups topic-by-topic.\n"
+            "• Use <code>/scan_mirror</code> & <code>/sync_mirror</code> for 1-click updates!</blockquote>\n\n"
+            "<blockquote><b>🛠️ KEY COMMANDS:</b>\n"
+            "• <code>/batch</code> — Range post extraction\n"
+            "• <code>/topicmirror</code> — Supergroup topic mirror\n"
+            "• <code>/sync_mirror</code> — 1-Click update missing files\n"
+            "• <code>/settings</code> — Thumbnails, captions & watermarks\n"
+            "• <code>/plans</code> — View VIP subscription plans</blockquote>"
+        )
+        await message.reply_text(html_guide, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("^guide_page_1$"))

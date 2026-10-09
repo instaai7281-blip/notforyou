@@ -24,7 +24,7 @@ speedtest-cli
 hachoir
 python-dotenv
 PyMuPDF
-hachoir
+
 PyPDF2
 reportlab
 dnspython
