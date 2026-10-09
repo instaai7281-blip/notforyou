@@ -45,21 +45,21 @@ async def check_user_bio_access(client: Client, message: Message) -> bool:
     # Bio-main Style Reject & Guide Prompt
     prompt_text = (
         "🔒 <b>Access Denied ❌</b>\n\n"
-        f"Dear <b>{user_mention}</b> 🌞 Your Access is Pending...\n\n"
-        "If you want to unlock & access the bot, follow these <b>2 Simple Steps 😊</b>:\n"
-        "───────────────────────────────────\n"
+        f"Hey {user_mention} 👋 Aapka Request abhi pending me hai...\n\n"
+        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+        "──────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-        "Add This 👇 Tag in <b><a href='tg://settings'>Your Bio 👁️</a></b>\n"
+        "Apne Bio me ye Tag Lagao 👇\n\n"
         f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
-        "<i>(Tap code to Copy 👆)</i>\n\n"
+        "<i>(Tap karke copy kar lo 👆)</i>\n\n"
         " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-        "After updating your bio, tap the <b>Verify Bio 🔄</b> button below to unlock access! 🔗 👇\n"
-        "───────────────────────────────────"
+        "Bio update karne ke baad niche <b>🟢 Verify Bio 🔄</b> button par tap kar do, instant Access mil jayega! 🚀\n"
+        "──────────────"
     )
 
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚙️ Open Settings", url="tg://settings"), InlineKeyboardButton("Verify Bio 🔄", callback_data="verify_user_bio")],
-        [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
+        [InlineKeyboardButton("⚙️ Open Settings", url="tg://settings"), InlineKeyboardButton("🟢 Verify Bio 🔄", callback_data="verify_user_bio")],
+        [InlineKeyboardButton("📢 Main Channel", url="https://t.me/Crazy_for_Goals"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
     ])
 
     try:
@@ -92,9 +92,9 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
 
         approve_text = (
             "🔓 <b>Join Request Approved ✅</b>\n\n"
-            f"塑造<b><blockquote> Welcome to <a href='tg://user?id={user_id}'>{chat_title}</a> ! 🎉</blockquote></b>\n"
-            "Your profile Bio has been verified and your join request is approved! 🥰\n\n"
-            f"⚠️ <i>Note: Keep <code>{REQUIRED_TAG}</code> in your Bio to maintain verified status. 📑</i>"
+            f"<b><blockquote> Welcome to <a href='tg://user?id={user_id}'>{chat_title}</a> ! 🎉</blockquote></b>\n"
+            "Aapka Bio verify ho gaya hai aur aapka join request approve kar diya gaya hai! 🥰\n\n"
+            f"⚠️ <i>Note: Bio me <code>{REQUIRED_TAG}</code> tag hamesha rakhein. 📑</i>"
         )
         try:
             await client.send_message(user_id, approve_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
@@ -109,22 +109,22 @@ async def handle_chat_join_request(client: Client, request: ChatJoinRequest):
         )
 
         prompt_text = (
-            "🔒 <b>Join Request Pending ❌</b>\n\n"
-            f"Dear <b>{user_mention}</b> 🌞 Your request to join <b>{chat_title}</b> is Pending...\n\n"
-            "To get your Join Request approved, follow these <b>2 Simple Steps 😊</b>:\n"
-            "───────────────────────────────────\n"
+            "🔒 <b>Access Denied ❌</b>\n\n"
+            f"Hey {user_mention} 👋 Aapka Request for <b>{chat_title}</b> abhi pending me hai...\n\n"
+            "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+            "──────────────\n"
             " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
-            "Add This 👇 Tag in <b><a href='tg://settings'>Your Bio 👁️</a></b>\n"
+            "Apne Bio me ye Tag Lagao 👇\n\n"
             f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
-            "<i>(Tap code to Copy 👆)</i>\n\n"
+            "<i>(Tap karke copy kar lo 👆)</i>\n\n"
             " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
-            "After updating your bio, tap the <b>Verify Bio 🔄</b> button below to approve your request instantly! 🔗 👇\n"
-            "───────────────────────────────────"
+            "Bio update karne ke baad niche <b>🟢 Verify Bio 🔄</b> button par tap kar do, instant Access mil jayega! 🚀\n"
+            "──────────────"
         )
 
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚙️ Open Settings", url="tg://settings"), InlineKeyboardButton("Verify Bio 🔄", callback_data="verify_user_bio")],
-            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
+            [InlineKeyboardButton("⚙️ Open Settings", url="tg://settings"), InlineKeyboardButton("🟢 Verify Bio 🔄", callback_data="verify_user_bio")],
+            [InlineKeyboardButton("📢 Main Channel", url="https://t.me/Crazy_for_Goals"), InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")]
         ])
 
         try:
@@ -146,7 +146,7 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
         bio = ""
 
     if has_bio_tag(bio):
-        await callback_query.answer("🔓 Access Granted! Your Bio is Verified. 🎉", show_alert=True)
+        await callback_query.answer("🔓 Access Granted! Tera Bio Verify ho gaya. 🎉", show_alert=True)
         
         pending_requests = await join_req_db.find({"user_id": user_id}).to_list(100)
         approved_chats = []
@@ -160,14 +160,14 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
 
         approve_text = (
             "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
-            f"<b><blockquote> Cheers, <a href='tg://user?id={user_id}'>{user_name}</a> ! 🥂</blockquote></b>\n"
-            "Your profile Bio has been verified successfully! 🎉\n"
+            f"<b><blockquote> Welcome, <a href='tg://user?id={user_id}'>{user_name}</a> ! 🥂</blockquote></b>\n"
+            "Tera profile Bio successfully verify ho gaya hai bro! 🎉\n\n"
         )
         if approved_chats:
-            approve_text += f"✅ Approved Join Request for: <b>{', '.join(approved_chats)}</b>!\n\n"
+            approve_text += f"✅ Join Request Approved for: <b>{', '.join(approved_chats)}</b>!\n\n"
         approve_text += (
-            "<b>We’re happy to have you with us. 🥰</b>\n\n"
-            f"⚠️ <i>Note: If you remove <code>{REQUIRED_TAG}</code> from your bio, access will be restricted again. Make sure to keep it in your Bio. 📑</i>\n\n"
+            "Ab tu bot and channel access kar sakta hai. 🥰\n\n"
+            f"⚠️ <i>Note: Agar Bio se <code>{REQUIRED_TAG}</code> hataya to access firse deny ho jayega. 📑</i>\n\n"
             "👉 <b>Send /start to proceed!</b>"
         )
         try:
@@ -176,6 +176,6 @@ async def verify_user_bio_callback(client: Client, callback_query: CallbackQuery
             pass
     else:
         await callback_query.answer(
-            f"❌ Access Denied!\n\nTag '{REQUIRED_TAG}' was not found in your Bio.\nPlease add it in your Bio and tap Verify Bio again.",
+            f"❌ Access Denied!\n\nBio me '{REQUIRED_TAG}' tag nahi mila bro.\nPlease bio update karke firse Verify Bio button par click kar.",
             show_alert=True
         )
