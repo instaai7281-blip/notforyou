@@ -212,7 +212,7 @@ async def schedule_mirror_auto_updates():
     print("[MirrorAutoScheduler] Daily auto-update scheduler started.")
     while True:
         try:
-            now_utc = datetime.datetime.utcnow()
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
             sessions = await get_all_scheduled_mirror_sessions()
             for sess in sessions:
                 try:
