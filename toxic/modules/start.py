@@ -460,9 +460,9 @@ async def guide_command(_, message: Message):
 | `/settings` | Customize thumbnail, captions, & watermarks |
 | `/plans` | View premium subscription tiers |
 | `/login` | Access private channels with your session |
-| `/logout` | Securely disconnect session |
 
 ---
+
 👉 **Owner / 24x7 Support:** [𝗖𝗿𝗮𝘇𝘆𝘅𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗲𝗿_𝗕𝗼𝘁](https://t.me/CrazyxDeveloper_Bot) 🛡️"""
 
 
