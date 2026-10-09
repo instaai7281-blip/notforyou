@@ -1,6 +1,6 @@
 # ---------------------------------------------------
 # File Name: deleteall.py
-# Description: Mass message deletion module for Groups, Supergroups & Channels
+# Description: Mass message deletion module with full Anonymous Admin & Group support
 # Author: Antigravity
 # ---------------------------------------------------
 
@@ -12,6 +12,8 @@ from toxic import app
 from config import OWNER_ID
 from toxic.core.mongo.db import is_admin_or_owner
 
+ANONYMOUS_ADMIN_IDS = {1087968824, 777000}
+
 @app.on_message(filters.command(["deleteall", "delall", "purgeall", "clearchat", "wipe"]))
 async def delete_all_cmd(_, message):
     chat_id = message.chat.id
@@ -21,9 +23,15 @@ async def delete_all_cmd(_, message):
         await message.reply("❌ **Error:** This command can only be used in channels or groups.")
         return
 
-    # 2. Check authorization of the sender (if sent by a user)
-    if message.from_user:
-        user_id = message.from_user.id
+    # 2. Check authorization of the sender (including Anonymous Admin check)
+    user_id = message.from_user.id if message.from_user else None
+    is_anonymous = (
+        not message.from_user 
+        or user_id in ANONYMOUS_ADMIN_IDS
+        or message.sender_chat is not None
+    )
+
+    if not is_anonymous and user_id:
         if not is_admin_or_owner(user_id):
             # Check if they are admin in this chat
             try:
@@ -137,15 +145,24 @@ async def _delete_batch_adaptive(clients, chat_id, message_ids):
 
 @app.on_callback_query(filters.regex(r"^(confirm_delete_all|cancel_delete_all)$"))
 async def delete_all_callback(_, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
+    user_id = callback_query.from_user.id if callback_query.from_user else None
     chat_id = callback_query.message.chat.id
     prompt_msg_id = callback_query.message.id
     
-    # Verify clicker's rights (Must be chat owner, chat administrator, or bot owner/admin)
+    # Check Anonymous Admin or Channel Sender status
+    is_anonymous = (
+        not callback_query.from_user 
+        or user_id in ANONYMOUS_ADMIN_IDS
+        or callback_query.message.sender_chat is not None
+    )
+
+    # Verify clicker's rights
     authorized = False
-    if is_admin_or_owner(user_id):
+    if is_anonymous:
         authorized = True
-    else:
+    elif user_id and is_admin_or_owner(user_id):
+        authorized = True
+    elif user_id:
         try:
             member = await app.get_chat_member(chat_id, user_id)
             if member.status in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
@@ -165,11 +182,12 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
     await callback_query.message.edit_text("⌛ **Initializing mass deletion engine...**")
     
     userbot = None
-    try:
-        from toxic.modules.main import initialize_userbot
-        userbot = await initialize_userbot(user_id)
-    except Exception:
-        pass
+    if user_id and not is_anonymous:
+        try:
+            from toxic.modules.main import initialize_userbot
+            userbot = await initialize_userbot(user_id)
+        except Exception:
+            pass
 
     # Try shared userbot if user's own userbot is not logged in
     shared_ub = None
@@ -208,7 +226,7 @@ async def delete_all_callback(_, callback_query: CallbackQuery):
             if not message_ids and pass_num == 1:
                 highest_id = prompt_msg_id - 1
                 if highest_id > 0:
-                    message_ids = list(range(highest_id, 0, -1))
+                    message_ids = list(range(highest_id, max(0, highest_id - 5000), -1))
 
             if not message_ids:
                 break
