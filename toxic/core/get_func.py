@@ -968,13 +968,19 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         except FileReferenceExpired:
             print("[DOWNLOAD] FileReferenceExpired encountered! Refetching fresh message...")
             try:
-                msg = await client.get_messages(msg.chat.id, msg.id)
-                file = await client.download_media(
-                    msg,
-                    file_name=target_file_path,            
-                    progress_args=("╔══━⚡️ Downloading ⚡️━══╗\n", edit, time.time()),
-                    progress=progress_bar
-                )
+                if os.path.exists(target_file_path):
+                    try:
+                        os.remove(target_file_path)
+                    except Exception:
+                        pass
+                fresh_msg = await client.get_messages(chat, msg_id)
+                if fresh_msg and not fresh_msg.empty:
+                    file = await client.download_media(
+                        fresh_msg,
+                        file_name=target_file_path,            
+                        progress_args=("╔══━⚡️ Downloading ⚡️━══╗\n", edit, time.time()),
+                        progress=progress_bar
+                    )
             except Exception as ex:
                 print(f"[DOWNLOAD] Refetch download failed: {ex}")
                 file = None
@@ -982,7 +988,27 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             print(f"Download error: {e}")
             file = None
         
-        if not file:
+        # Check if file downloaded is 0-byte file
+        if file and os.path.exists(file) and os.path.getsize(file) == 0:
+            print(f"[DOWNLOAD] File size is 0 B for {file}. Retrying refetch download...")
+            try:
+                os.remove(file)
+            except Exception:
+                pass
+            try:
+                fresh_msg = await client.get_messages(chat, msg_id)
+                if fresh_msg and not fresh_msg.empty:
+                    file = await client.download_media(
+                        fresh_msg,
+                        file_name=target_file_path,            
+                        progress_args=("╔══━⚡️ Retrying Download... ⚡️━══╗\n", edit, time.time()),
+                        progress=progress_bar
+                    )
+            except Exception as ex:
+                print(f"[DOWNLOAD] 0 B Retry failed: {ex}")
+                file = None
+
+        if not file or (os.path.exists(file) and os.path.getsize(file) == 0):
             # Final fallback: if it's protected and failed, maybe the shared client isn't in the channel?
             if getattr(msg, "has_protected_content", False) and not userbot:
                  await edit.edit("❌ **Protected Download Failed**\n\nThis content is protected and the shared userbot couldn't access it. Please **login with your own account** using /login to bypass this restriction.")
