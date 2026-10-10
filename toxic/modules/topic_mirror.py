@@ -1032,10 +1032,10 @@ def extract_topic_id_from_result(created) -> int:
 
 async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False):
     """
-    Transfers a single message using the fastest available method:
-      1. Direct forward_messages (zero-bandwidth, instant — if forward allowed or bot is member)
-      2. Server-side copy_message (no download/upload — removes forward tag)
-      3. Download → Upload full pipeline (protected/restricted content fallback)
+    Transfers a single message using the bot-only pipeline:
+      - All messages in target group are strictly sent by `app` (real bot).
+      - Zero userbot forwarding, zero forward tags, zero user identity leakage.
+      - Full caption cleaning, branding tags, custom thumbnails, and watermarks applied.
     Checks user media filters and settings. Filters service/empty messages.
     """
     # Instant Cancellation Check
@@ -1093,54 +1093,15 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         effective_tgt_topic_id = None
 
     # ─────────────────────────────────────────────────────────────
-    # METHOD 1: Direct forward_messages (zero-bandwidth, instant)
-    # Works when: bot/userbot is admin/member of source and target
+    # STRICT BOT-ONLY SENDER POLICY:
+    #   - NEVER forward messages (prevents "Forwarded from" tags).
+    #   - NEVER allow userbot to send/copy into target chat (prevents user account leakage).
+    #   - Target chat receives ONLY messages posted by `app` (real bot).
+    #   - All text cleaning, branding tags, custom thumbnails, watermarks, and
+    #     media filename sanitization are strictly applied.
     # ─────────────────────────────────────────────────────────────
-    fwd_kwargs = {"chat_id": tgt_chat_id, "from_chat_id": src_chat_id, "message_ids": msg.id}
-    if effective_tgt_topic_id:
-        fwd_kwargs["message_thread_id"] = effective_tgt_topic_id
 
-    for fwd_client in [app, userbot]:
-        try:
-            fwd_result = await fwd_client.forward_messages(**fwd_kwargs)
-            sent_list = fwd_result if isinstance(fwd_result, list) else [fwd_result]
-            sent_id = sent_list[0].id if sent_list and hasattr(sent_list[0], 'id') else None
-            if sent_id:
-                await _log_msg(sent_list[0])
-                return True, "forwarded", sent_id
-        except FloodWait as fw:
-            await asyncio.sleep(fw.value + 1)
-        except Exception as fwd_err:
-            print(f"[Transfer] Direct forward notice ({fwd_client.__class__.__name__}): {fwd_err}")
-            continue  # Try next client (userbot / app)
-
-    # ─────────────────────────────────────────────────────────────
-    # METHOD 2: Server-side copy (no download/upload, removes forward header)
-    # Works when forward is restricted but bot/userbot has read access
-    # ─────────────────────────────────────────────────────────────
-    for copy_client in [app, userbot]:
-        try:
-            copied_m = await copy_client.copy_message(
-                chat_id=tgt_chat_id,
-                from_chat_id=src_chat_id,
-                message_id=msg.id,
-                reply_to_message_id=effective_tgt_topic_id
-            )
-            sent_id = getattr(copied_m, 'id', None)
-            if sent_id:
-                await _log_msg(copied_m)
-                return True, "copied", sent_id
-        except FloodWait as fw:
-            await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
-        except Exception as copy_err:
-            print(f"[Transfer] Server copy notice ({copy_client.__class__.__name__}): {copy_err}")
-            continue  # Try next client
-
-    # ─────────────────────────────────────────────────────────────
-    # METHOD 3: Download via userbot → Upload (protected/restricted content)
-    # Full pipeline: download, thumbnail, watermark, caption clean, upload
-    # ─────────────────────────────────────────────────────────────
+    # 1. TEXT MESSAGES: Instant, clean & branded post via `app`
     if msg.text:
         try:
             raw_text = msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else (msg.text or "")
@@ -1162,6 +1123,30 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         except Exception as txt_err:
             print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
             return False, str(txt_err), None
+
+    # 2. FAST-PATH STICKERS: Direct copy via `app` only if bot is in source chat
+    if msg.sticker:
+        try:
+            copied_m = await app.copy_message(
+                chat_id=tgt_chat_id,
+                from_chat_id=src_chat_id,
+                message_id=msg.id,
+                reply_to_message_id=effective_tgt_topic_id
+            )
+            sent_id = getattr(copied_m, 'id', None)
+            if sent_id:
+                await _log_msg(copied_m)
+                return True, "copied", sent_id
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
+        except Exception:
+            pass  # Fallback to download & upload via app
+
+    # ─────────────────────────────────────────────────────────────
+    # 3. FULL PIPELINE: Download via userbot → Sanitize & Brand → Upload via `app`
+    # Full pipeline: download, thumbnail, watermark, caption clean, upload
+    # ─────────────────────────────────────────────────────────────
 
     # Media download/upload pipeline
     temp_file = None
