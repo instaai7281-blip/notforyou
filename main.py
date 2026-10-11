@@ -1,27 +1,42 @@
 import os
+import sys
 import subprocess
 import time
+import pkgutil
+import importlib.util
 
-# Get port from environment or default to 8000 / 8080 / 5000
-port = os.environ.get("PORT", "8080")
+# ─────────────────────────────────────────────────────────────────────────────
+# Compatibility patch for Python 3.14+ (pkgutil.get_loader was removed)
+# ─────────────────────────────────────────────────────────────────────────────
+if not hasattr(pkgutil, "get_loader"):
+    def _get_loader(name):
+        try:
+            spec = importlib.util.find_spec(name)
+            return spec.loader if spec else None
+        except Exception:
+            return None
+    pkgutil.get_loader = _get_loader
+
+# Get port from environment or default to 8000 / 8080
+port = os.environ.get("PORT", "8000")
 
 def main():
-    print(f"--- Starting Flask web server on port {port} ---")
-    flask_process = None
+    print(f"--- Starting Health Check web server on port {port} ---")
+    web_process = None
     try:
-        flask_process = subprocess.Popen(["python3", "app.py"])
-        print(f"Flask process started with PID: {flask_process.pid}")
+        web_process = subprocess.Popen([sys.executable, "app.py"])
+        print(f"Web server process started with PID: {web_process.pid}")
     except Exception as e:
-        print(f"Failed to start Flask: {e}")
+        print(f"Failed to start web server: {e}")
 
-    # Give the web server a few seconds to initialize
-    time.sleep(3)
+    # Give the web server a moment to bind the port
+    time.sleep(2)
 
     print("--- Starting Telegram Bot module (toxic) ---")
     try:
         while True:
             try:
-                ret = os.system("python3 -m toxic")
+                ret = os.system(f"{sys.executable} -m toxic")
                 print(f"[Main] toxic exited with code {ret}. Restarting in 5 seconds...")
                 time.sleep(5)
             except KeyboardInterrupt:
@@ -31,14 +46,14 @@ def main():
                 print(f"Bot encountered an error: {e}. Retrying in 5 seconds...")
                 time.sleep(5)
     finally:
-        if flask_process:
-            print("Terminating Flask process...")
-            flask_process.terminate()
+        if web_process:
+            print("Terminating web server process...")
+            web_process.terminate()
             try:
-                flask_process.wait(timeout=5)
+                web_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                flask_process.kill()
-            print("Flask process shut down.")
+                web_process.kill()
+            print("Web server process shut down.")
 
 if __name__ == "__main__":
     main()

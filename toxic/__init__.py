@@ -13,6 +13,19 @@
 # ---------------------------------------------------
 
 print("DEBUG: toxic/__init__.py started")
+import pkgutil
+import importlib.util
+
+# Python 3.14+ compatibility patch (pkgutil.get_loader was removed)
+if not hasattr(pkgutil, "get_loader"):
+    def _get_loader(name):
+        try:
+            spec = importlib.util.find_spec(name)
+            return spec.loader if spec else None
+        except Exception:
+            return None
+    pkgutil.get_loader = _get_loader
+
 import asyncio
 import logging
 import re
@@ -96,8 +109,15 @@ async def setup_database():
     print("MongoDB TTL index created.")
 
 
-async def start_telethon_client(client, bot_token, name="Telethon Client (sex)"):
-    """Starts Telethon client with automated FloodWait handling."""
+async def _background_telethon_retry(client, bot_token, name, initial_wait):
+    """Retries starting Telethon client in the background after FloodWait expires, without blocking the main bot."""
+    print(f"⏳ [{name}] Background retry worker waiting {initial_wait}s for FloodWait to clear...")
+    await asyncio.sleep(initial_wait)
+    await start_telethon_client(client, bot_token, name, allow_background_fallback=False)
+
+
+async def start_telethon_client(client, bot_token, name="Telethon Client (sex)", allow_background_fallback=True):
+    """Starts Telethon client with automated FloodWait handling and non-blocking background retry for long waits."""
     max_retries = 10
     retry_count = 0
     while retry_count < max_retries:
@@ -108,6 +128,10 @@ async def start_telethon_client(client, bot_token, name="Telethon Client (sex)")
             return True
         except tele_errors.FloodWaitError as fw:
             wait_time = int(getattr(fw, "seconds", 60)) + 5
+            if wait_time > 30 and allow_background_fallback:
+                print(f"⚠️ [{name}] Long FloodWait detected ({wait_time}s)! Spawning background retry so Main Bot (app) starts immediately...")
+                asyncio.create_task(_background_telethon_retry(client, bot_token, name, wait_time))
+                return False
             print(f"⚠️ [{name}] FloodWait detected! Sleeping {wait_time}s before retrying...")
             await asyncio.sleep(wait_time)
             retry_count += 1
@@ -116,6 +140,10 @@ async def start_telethon_client(client, bot_token, name="Telethon Client (sex)")
             if "FloodWait" in err_str or "FLOOD_WAIT" in err_str or "wait of" in err_str:
                 wait_match = re.search(r'(\d+)\s*seconds?', err_str)
                 wait_time = int(wait_match.group(1)) + 5 if wait_match else 60
+                if wait_time > 30 and allow_background_fallback:
+                    print(f"⚠️ [{name}] Long FloodWait in error ({wait_time}s)! Spawning background retry so Main Bot (app) starts immediately...")
+                    asyncio.create_task(_background_telethon_retry(client, bot_token, name, wait_time))
+                    return False
                 print(f"⚠️ [{name}] FloodWait in error: sleeping {wait_time}s before retrying...")
                 await asyncio.sleep(wait_time)
                 retry_count += 1
