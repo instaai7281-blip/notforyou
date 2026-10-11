@@ -17,7 +17,15 @@ YTUB_COOKIES = """
 API_ID = int(getenv("API_ID", "0"))
 API_HASH = getenv("API_HASH", "")
 BOT_TOKEN = getenv("BOT_TOKEN", "")
-OWNER_ID = list(map(int, getenv("OWNER_ID", "").split()))
+_raw_owner_id = getenv("OWNER_ID", "")
+OWNER_ID = []
+for _p in _raw_owner_id.replace(",", " ").replace(";", " ").split():
+    _p = _p.strip()
+    if _p:
+        try:
+            OWNER_ID.append(int(_p))
+        except ValueError:
+            pass
 MONGO_DB = getenv("MONGO_DB", "")
 LOG_GROUP = getenv("LOG_GROUP", "")
 CHANNEL_ID = int(getenv("CHANNEL_ID", "0"))

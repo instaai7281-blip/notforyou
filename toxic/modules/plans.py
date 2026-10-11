@@ -493,12 +493,23 @@ async def list_admins_cmd_handler(client, message):
 
 
 # ─── Admin Help & Control Panel Command (Guarded: Owner/Admin Only) ───
-@app.on_message(filters.command(["admin", "adminhelp", "panel", "owner"]) & admin_filter)
+@app.on_message(filters.command(["admin", "adminhelp", "panel", "owner"]))
 async def admin_panel_cmd_handler(client, message):
     """
     Admin control panel command that displays all secret & admin commands.
     Restricted to Owner and Promoted Admins.
     """
+    user = getattr(message, "from_user", None) or getattr(message, "sender_chat", None)
+    user_id = user.id if user else 0
+    if not is_admin_or_owner(user_id):
+        await message.reply_text(
+            f"🔒 <b>Access Denied:</b> Admin Control Panel is restricted to Bot Owners and Admins.\n\n"
+            f"👤 <b>Your ID:</b> <code>{user_id}</code>\n"
+            f"<i>If you are the bot owner, make sure your ID is set in <code>OWNER_ID</code>.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     admin_text = (
         f"<blockquote>👑 <b>XTRACTOR PRO — ADMIN CONTROL PANEL</b> 👑</blockquote>\n\n"
         f"👋 <b>Welcome Admin / Owner!</b>\n"
@@ -1341,13 +1352,28 @@ async def build_free_access_panel() -> tuple:
     return text, InlineKeyboardMarkup(buttons)
 
 
-@app.on_message(filters.command(["freeaccess", "free", "globalfree", "freetrial", "freeaccessmode"]) & admin_filter)
+@app.on_message(filters.command([
+    "freeaccess", "free_access", "freemirror", "free_mirror",
+    "freebatch", "free_batch", "free", "globalfree", "freetrial",
+    "freeplan", "freemode", "freeaccessmode"
+]))
 async def free_access_cmd_handler(client, message):
     from toxic.core.mongo.plans_db import (
         set_global_free_access,
         parse_duration_to_seconds,
         format_time_remaining
     )
+    user = getattr(message, "from_user", None) or getattr(message, "sender_chat", None)
+    user_id = user.id if user else 0
+    if not is_admin_or_owner(user_id):
+        await message.reply_text(
+            f"🔒 <b>Access Denied:</b> This command is restricted to Bot Owners and Admins.\n\n"
+            f"👤 <b>Your Telegram ID:</b> <code>{user_id}</code>\n"
+            f"<i>If you are the bot owner, make sure your ID is added to <code>OWNER_ID</code> in bot configuration or promote via <code>/addadmin</code>.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     cmd_parts = message.command
     if len(cmd_parts) == 1:
         text, kb = await build_free_access_panel()
@@ -1415,13 +1441,17 @@ async def _send_promo_broadcast(client, users, text, kb):
     print(f"[PromoBroadcast] Announcement sent to {sent} users.")
 
 
-@app.on_callback_query(filters.regex(r"^fa_") & admin_filter)
+@app.on_callback_query(filters.regex(r"^fa_"))
 async def free_access_callback_handler(client, query: CallbackQuery):
     from toxic.core.mongo.plans_db import (
         get_global_free_access,
         set_global_free_access,
         format_time_remaining
     )
+    user_id = query.from_user.id if query.from_user else 0
+    if not is_admin_or_owner(user_id):
+        await query.answer("🔒 Access Denied: Only Bot Owners & Admins can change Free Access settings.", show_alert=True)
+        return
     action = query.data
 
     if action == "fa_refresh":

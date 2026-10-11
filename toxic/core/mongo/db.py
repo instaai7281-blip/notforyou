@@ -276,15 +276,45 @@ async def get_all_admins_db():
         await load_all_admins()
     return list(BOT_ADMINS)
 
-def is_admin_or_owner(user_id: int) -> bool:
+def is_admin_or_owner(user_id) -> bool:
+    if not user_id:
+        return False
     from config import OWNER_ID
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    return (user_id in owner_list) or (user_id in BOT_ADMINS)
+    owner_list = OWNER_ID if isinstance(OWNER_ID, (list, tuple, set)) else [OWNER_ID]
+    uid_str = str(user_id).strip()
+    try:
+        uid_int = int(user_id)
+    except Exception:
+        uid_int = None
 
-def is_owner(user_id: int) -> bool:
+    for o in owner_list:
+        if o is not None:
+            if str(o).strip() == uid_str or (uid_int is not None and o == uid_int):
+                return True
+
+    for a in BOT_ADMINS:
+        if a is not None:
+            if str(a).strip() == uid_str or (uid_int is not None and a == uid_int):
+                return True
+
+    return False
+
+def is_owner(user_id) -> bool:
+    if not user_id:
+        return False
     from config import OWNER_ID
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    return user_id in owner_list
+    owner_list = OWNER_ID if isinstance(OWNER_ID, (list, tuple, set)) else [OWNER_ID]
+    uid_str = str(user_id).strip()
+    try:
+        uid_int = int(user_id)
+    except Exception:
+        uid_int = None
+
+    for o in owner_list:
+        if o is not None:
+            if str(o).strip() == uid_str or (uid_int is not None and o == uid_int):
+                return True
+    return False
 
 from pyrogram import filters
 
@@ -292,6 +322,12 @@ async def _admin_filter_func(_, __, update):
     user = getattr(update, "from_user", None) or getattr(update, "sender_chat", None)
     if not user:
         return False
+    global BOT_ADMINS
+    if not BOT_ADMINS:
+        try:
+            await load_all_admins()
+        except Exception:
+            pass
     return is_admin_or_owner(user.id)
 
 admin_filter = filters.create(_admin_filter_func)

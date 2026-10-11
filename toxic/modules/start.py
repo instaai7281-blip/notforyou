@@ -78,9 +78,11 @@ async def start_cmd(client, message: Message):
 
 
 @app.on_message(filters.command("set"))
-async def set(_, message):
-    if message.from_user.id not in OWNER_ID:
-        await message.reply("You are not authorized to use this command.")
+async def set(client, message):
+    from toxic.core.mongo.db import is_admin_or_owner
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin_or_owner(user_id):
+        await message.reply("❌ You are not authorized to use this command.")
         return
      
     await app.set_bot_commands([
@@ -100,6 +102,8 @@ async def set(_, message):
         BotCommand("settings", "⚙️ 𝗖𝘂𝘀𝘁𝗼𝗺𝗶𝘇𝗲 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀"),
         BotCommand("speedtest", "🚅 𝗦𝗽𝗲𝗲𝗱 𝘁𝗲𝘀𝘁"),
         BotCommand("terms", "📜 𝗧𝗲𝗿𝗺𝘀 & 𝗰𝗼𝗻𝗱𝗶𝘁𝗶𝗼𝗻𝘀"),
+        BotCommand("admin", "👑 𝗔𝗱𝗺𝗶𝗻 𝗖𝗼𝗻𝘁𝗿𝗼𝗹 𝗣𝗮𝗻𝗲𝗹"),
+        BotCommand("freeaccess", "🎁 𝗚𝗹𝗼𝗯𝗮𝗹 𝗙𝗿𝗲𝗲 𝗔𝗰𝗰𝗲𝘀𝘀 𝗠𝗼𝗱𝗲"),
         BotCommand("mirrorusers", "🎛️ 𝗠𝗮𝗻𝗮𝗴𝗲 𝗺𝗶𝗿𝗿𝗼𝗿 𝘂𝘀𝗲𝗿𝘀 (𝗢𝘄𝗻𝗲𝗿)"),
         BotCommand("addmirror", "👑 𝗔𝗱𝗱 𝗺𝗶𝗿𝗿𝗼𝗿 𝗮𝗰𝗰𝗲𝘀𝘀 (𝗔𝗱𝗺𝗶𝗻)"),
         BotCommand("remmirror", "👑 𝗥𝗲𝗺𝗼𝘃𝗲 𝗺𝗶𝗿𝗿𝗼𝗿 𝗮𝗰𝗰𝗲𝘀𝘀 (𝗔𝗱𝗺𝗶𝗻)"),
