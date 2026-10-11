@@ -507,6 +507,10 @@ async def admin_panel_cmd_handler(client, message):
         f"• <code>/addadmin &lt;user_id&gt;</code> — Promote user to Bot Admin\n"
         f"• <code>/remadmin &lt;user_id&gt;</code> — Demote / revoke Bot Admin\n"
         f"• <code>/admins</code> — List all active bot owners & admins</blockquote>\n\n"
+        f"<blockquote>🎁 <b>GLOBAL FREE ACCESS (FREE TRIAL FOR ALL USERS)</b>\n"
+        f"• <code>/freeaccess</code> — Interactive dashboard to toggle Free Mirror & Batch for all bot users\n"
+        f"• <code>/freeaccess on 1 day</code> — Give 1 Day Free Mirror & Batch to everyone\n"
+        f"• <code>/freeaccess off</code> — Turn OFF all free access immediately</blockquote>\n\n"
         f"<blockquote>🎁 <b>1-HOUR TRIAL DEMO (HIDDEN)</b>\n"
         f"• <code>/mirrordemo &lt;user_id&gt;</code> — Give 1-hour Topic Mirror trial demo (auto-expires in 60m)\n"
         f"• <i>Aliases:</i> <code>/demomirror</code>, <code>/adddemo</code></blockquote>\n\n"
@@ -1249,4 +1253,264 @@ async def check_toxic_cmd(client, message):
     else:
         msg += "<i>No extra keys in MongoDB database. (Only Master Key active)</i>"
     await message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ────── Global Free Access Management (Mirror & Batch Free Trial) ───────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def build_free_access_panel() -> tuple:
+    from toxic.core.mongo.plans_db import (
+        get_global_free_access,
+        format_time_remaining
+    )
+    import datetime
+    data = await get_global_free_access()
+    now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+    # Mirror status
+    mirror_on = data.get("mirror_free", False)
+    mirror_exp = data.get("mirror_expires_at")
+    mirror_rem_sec = None
+    if mirror_on and mirror_exp:
+        mirror_rem_sec = max(0, int((mirror_exp - now_utc).total_seconds()))
+        if mirror_rem_sec == 0:
+            mirror_on = False
+
+    # Batch status
+    batch_on = data.get("batch_free", False)
+    batch_exp = data.get("batch_expires_at")
+    batch_rem_sec = None
+    if batch_on and batch_exp:
+        batch_rem_sec = max(0, int((batch_exp - now_utc).total_seconds()))
+        if batch_rem_sec == 0:
+            batch_on = False
+
+    mirror_badge = "🟢 <b>ACTIVE (FREE)</b>" if mirror_on else "🔴 <b>DISABLED (PAID ONLY)</b>"
+    batch_badge = "🟢 <b>ACTIVE (FREE)</b>" if batch_on else "🔴 <b>DISABLED (PAID ONLY)</b>"
+
+    mirror_time_str = format_time_remaining(mirror_rem_sec) if (mirror_on and mirror_exp) else ("Permanent (Until OFF)" if mirror_on else "N/A")
+    batch_time_str = format_time_remaining(batch_rem_sec) if (batch_on and batch_exp) else ("Permanent (Until OFF)" if batch_on else "N/A")
+
+    text = (
+        "<blockquote>👑 <b>GLOBAL FREE ACCESS CONTROL PANEL</b> 👑</blockquote>\n\n"
+        "⚡ <b>Control Free Access for ALL Bot Users Worldwide</b>\n"
+        "<i>Jab yeh active hoga, sabhi users bina kisi plan ke Topic Mirror aur Batch use kar payenge!</i>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📁 <b>Topic Mirror Free Access:</b> {mirror_badge}\n"
+        f"⏳ <b>Mirror Remaining:</b> <code>{mirror_time_str}</code>\n"
+        f"📅 <b>Mirror Expiry:</b> <code>{mirror_exp.strftime('%Y-%m-%d %H:%M UTC') if (mirror_on and mirror_exp) else 'None'}</code>\n\n"
+        f"📦 <b>Batch / Extract Free Access:</b> {batch_badge}\n"
+        f"⏳ <b>Batch Remaining:</b> <code>{batch_time_str}</code>\n"
+        f"📅 <b>Batch Expiry:</b> <code>{batch_exp.strftime('%Y-%m-%d %H:%M UTC') if (batch_on and batch_exp) else 'None'}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👇 <b>Control Buttons se ON/OFF aur Duration set karein:</b>"
+    )
+
+    mirror_btn_text = "📁 Turn OFF Mirror Free" if mirror_on else "📁 Turn ON Mirror Free (1 Day)"
+    batch_btn_text = "📦 Turn OFF Batch Free" if batch_on else "📦 Turn ON Batch Free (1 Day)"
+
+    buttons = [
+        [
+            InlineKeyboardButton(mirror_btn_text, callback_data="fa_toggle_mirror"),
+            InlineKeyboardButton(batch_btn_text, callback_data="fa_toggle_batch"),
+        ],
+        [
+            InlineKeyboardButton("🎁 1-Click FREE BOTH (1 Day / 24h) 🚀", callback_data="fa_both_1d")
+        ],
+        [
+            InlineKeyboardButton("⏱️ 1 Hour", callback_data="fa_dur_3600"),
+            InlineKeyboardButton("⏱️ 6 Hours", callback_data="fa_dur_21600"),
+            InlineKeyboardButton("⏱️ 12 Hours", callback_data="fa_dur_43200"),
+        ],
+        [
+            InlineKeyboardButton("⏱️ 1 Day (24h)", callback_data="fa_dur_86400"),
+            InlineKeyboardButton("⏱️ 2 Days", callback_data="fa_dur_172800"),
+            InlineKeyboardButton("⏱️ 3 Days", callback_data="fa_dur_259200"),
+        ],
+        [
+            InlineKeyboardButton("♾️ Permanent Free", callback_data="fa_dur_inf"),
+            InlineKeyboardButton("🛑 Turn OFF ALL", callback_data="fa_off_all")
+        ],
+        [
+            InlineKeyboardButton("📢 Announce to All Users", callback_data="fa_announce"),
+            InlineKeyboardButton("🔄 Refresh Status", callback_data="fa_refresh")
+        ]
+    ]
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+@app.on_message(filters.command(["freeaccess", "free", "globalfree", "freetrial", "freeaccessmode"]) & admin_filter)
+async def free_access_cmd_handler(client, message):
+    from toxic.core.mongo.plans_db import (
+        set_global_free_access,
+        parse_duration_to_seconds,
+        format_time_remaining
+    )
+    cmd_parts = message.command
+    if len(cmd_parts) == 1:
+        text, kb = await build_free_access_panel()
+        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    arg1 = cmd_parts[1].lower()
+
+    if arg1 in ("off", "disable", "stop", "close"):
+        target = "both"
+        if len(cmd_parts) >= 3 and cmd_parts[2].lower() in ("mirror", "batch"):
+            target = cmd_parts[2].lower()
+        await set_global_free_access(feature=target, enabled=False, admin_id=message.from_user.id)
+        await message.reply_text(
+            f"🛑 <b>Global Free Access for <code>{target.upper()}</code> has been TURNED OFF!</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    if arg1 in ("status", "check", "info"):
+        text, kb = await build_free_access_panel()
+        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    target = "both"
+    duration_str = "1 day"
+
+    if arg1 == "on":
+        if len(cmd_parts) >= 3 and cmd_parts[2].lower() in ("mirror", "batch", "both", "all"):
+            target = cmd_parts[2].lower()
+            if len(cmd_parts) >= 4:
+                duration_str = " ".join(cmd_parts[3:])
+        elif len(cmd_parts) >= 3:
+            duration_str = " ".join(cmd_parts[2:])
+    elif arg1 in ("mirror", "batch"):
+        target = arg1
+        if len(cmd_parts) >= 3:
+            duration_str = " ".join(cmd_parts[2:])
+    else:
+        duration_str = " ".join(cmd_parts[1:])
+
+    seconds = parse_duration_to_seconds(duration_str)
+    await set_global_free_access(feature=target, enabled=True, duration_seconds=seconds, admin_id=message.from_user.id)
+    time_str = format_time_remaining(seconds)
+    await message.reply_text(
+        f"🎉 <b>Global Free Access ENABLED!</b> 🚀\n\n"
+        f"• <b>Feature:</b> <code>{target.upper()}</code>\n"
+        f"• <b>Duration:</b> <code>{time_str}</code> ({seconds}s)\n\n"
+        f"✅ <i>All users can now use {target.title()} completely FREE!</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+async def _send_promo_broadcast(client, users, text, kb):
+    sent = 0
+    for u in users:
+        try:
+            uid = u.get("user") if isinstance(u, dict) else u
+            if uid:
+                await client.send_message(chat_id=int(uid), text=text, parse_mode=ParseMode.HTML, reply_markup=kb)
+                sent += 1
+                await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    print(f"[PromoBroadcast] Announcement sent to {sent} users.")
+
+
+@app.on_callback_query(filters.regex(r"^fa_") & admin_filter)
+async def free_access_callback_handler(client, query: CallbackQuery):
+    from toxic.core.mongo.plans_db import (
+        get_global_free_access,
+        set_global_free_access,
+        format_time_remaining
+    )
+    action = query.data
+
+    if action == "fa_refresh":
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer("🔄 Status Refreshed!", show_alert=False)
+        return
+
+    if action == "fa_toggle_mirror":
+        data = await get_global_free_access()
+        cur = data.get("mirror_free", False)
+        await set_global_free_access("mirror", enabled=not cur, duration_seconds=86400 if not cur else None, admin_id=query.from_user.id)
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer(f"📁 Mirror Free: {'OFF' if cur else 'ON (1 Day)'}", show_alert=True)
+        return
+
+    if action == "fa_toggle_batch":
+        data = await get_global_free_access()
+        cur = data.get("batch_free", False)
+        await set_global_free_access("batch", enabled=not cur, duration_seconds=86400 if not cur else None, admin_id=query.from_user.id)
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer(f"📦 Batch Free: {'OFF' if cur else 'ON (1 Day)'}", show_alert=True)
+        return
+
+    if action == "fa_both_1d":
+        await set_global_free_access("both", enabled=True, duration_seconds=86400, admin_id=query.from_user.id)
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer("🎁 Free Access ENABLED for BOTH (1 Day)!", show_alert=True)
+        return
+
+    if action.startswith("fa_dur_"):
+        dur_val = action.split("_")[2]
+        if dur_val == "inf":
+            await set_global_free_access("both", enabled=True, duration_seconds=None, admin_id=query.from_user.id)
+            ans = "♾️ Permanent Free Access Enabled (No Limit)!"
+        else:
+            sec = int(dur_val)
+            await set_global_free_access("both", enabled=True, duration_seconds=sec, admin_id=query.from_user.id)
+            ans = f"⏱️ Duration set to {format_time_remaining(sec)} for Both!"
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer(ans, show_alert=True)
+        return
+
+    if action == "fa_off_all":
+        await set_global_free_access("both", enabled=False, admin_id=query.from_user.id)
+        text, kb = await build_free_access_panel()
+        try:
+            await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        await query.answer("🛑 ALL Free Access Disabled!", show_alert=True)
+        return
+
+    if action == "fa_announce":
+        from toxic.core.mongo.users_db import get_users
+        users = await get_users()
+        promo_msg = (
+            "🎉 <b>SPECIAL PROMOTION: FREE ACCESS UNLOCKED!</b> 🚀\n\n"
+            "<blockquote>🎁 <b>Topic Mirroring & Bulk Batch are now 100% FREE!</b>\n\n"
+            "All users have been granted complimentary access. You can now clone full topic groups and batch process files without any plan restrictions!</blockquote>\n\n"
+            "<b>🚀 Quick Start:</b>\n"
+            "• <code>/topicmirror</code> — Clone entire supergroups with topics\n"
+            "• <code>/batch</code> — Bulk extract and upload restricted files\n\n"
+            "<i>Enjoy your free access! 🖤</i>"
+        )
+        promo_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📁 Start Topic Mirror", callback_data="tm_new")],
+            [InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1")]
+        ])
+        asyncio.create_task(_send_promo_broadcast(client, users, promo_msg, promo_kb))
+        await query.answer(f"📢 Announcing promo to {len(users)} users in background!", show_alert=True)
+        return
     

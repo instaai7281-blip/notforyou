@@ -1714,11 +1714,45 @@ async def sync_session_callback(_, query: CallbackQuery):
 async def cancel_mirror_cmd(_, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
     if user_id in active_mirrors:
-        if isinstance(active_mirrors[user_id], dict):
-            active_mirrors[user_id]["running"] = False
+        state = active_mirrors.get(user_id)
+        src_chat_id = None
+        tgt_chat_id = None
+        status_msg = None
+        if isinstance(state, dict):
+            state["running"] = False
+            src_chat_id = state.get("src_chat_id")
+            tgt_chat_id = state.get("tgt_chat_id")
+            status_msg = state.get("status_msg")
         else:
             active_mirrors[user_id] = False
-        await message.reply("🛑 **Cancellation signal sent.** Topic mirror operation will stop shortly.")
+
+        stop_buttons = []
+        if src_chat_id and tgt_chat_id:
+            stop_buttons.append([InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")])
+        stop_buttons.append([InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")])
+        stop_kb = InlineKeyboardMarkup(stop_buttons)
+
+        # 1. Edit the running status message if accessible
+        if status_msg:
+            try:
+                stop_card = (
+                    "<blockquote>🛑 <b>𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗦𝘁𝗼𝗽𝗽𝗲𝗱 𝗯𝘆 𝗨𝘀𝗲𝗿</b></blockquote>\n\n"
+                    "✨ <b>Status:</b> Process Stopped Successfully\n"
+                    "💾 <b>Checkpoint:</b> Safely saved in database!\n\n"
+                    "<i>Aap jab bhi chahein, 'Resume & Update' button dabakar wahi se continue kar sakte hain.</i>"
+                )
+                await status_msg.edit_text(stop_card, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
+            except Exception:
+                pass
+
+        # 2. Send separate confirmation message to user
+        dm_cancel_text = (
+            "🛑 <b>Topic Mirroring Stopped Successfully!</b> 😉\n\n"
+            "<blockquote>✨ <b>Status:</b> Cancelled by user\n"
+            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database</blockquote>\n\n"
+            "Aapka topic mirror process rok diya gaya hai. Jab bhi aapko wapas shuru karna ho ya update karna ho, aap <b>Resume & Update</b> button dabakar wahi se continue kar sakte hain bina kisi duplicate messages ke!"
+        )
+        await message.reply_text(dm_cancel_text, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
     else:
         await message.reply("ℹ️ You have no active topic mirroring process running.")
 
@@ -1739,12 +1773,52 @@ async def cancel_mirror_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
     owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
     if user_id == req_uid or str(user_id) in [str(o) for o in owner_list]:
-        if req_uid in active_mirrors:
-            if isinstance(active_mirrors[req_uid], dict):
-                active_mirrors[req_uid]["running"] = False
-            else:
-                active_mirrors[req_uid] = False
-        await query.answer("🛑 Cancelling topic mirror process...", show_alert=True)
+        state = active_mirrors.get(req_uid)
+        src_chat_id = None
+        tgt_chat_id = None
+        if isinstance(state, dict):
+            state["running"] = False
+            src_chat_id = state.get("src_chat_id")
+            tgt_chat_id = state.get("tgt_chat_id")
+        else:
+            active_mirrors[req_uid] = False
+
+        await query.answer("🛑 Topic Mirror Process Stopped!", show_alert=True)
+
+        stop_buttons = []
+        if src_chat_id and tgt_chat_id:
+            stop_buttons.append([InlineKeyboardButton("⚡ 𝟭-𝗖𝗹𝗶𝗰𝗸 𝗦𝘆𝗻𝗰 & 𝗨𝗽𝗱𝗮𝘁𝗲", callback_data=f"tm_sync_{src_chat_id}_{tgt_chat_id}")])
+        stop_buttons.append([InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")])
+        stop_kb = InlineKeyboardMarkup(stop_buttons)
+
+        # 1. Edit the progress card message immediately
+        stop_card = (
+            "<blockquote>🛑 <b>𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗦𝘁𝗼𝗽𝗽𝗲𝗱 𝗯𝘆 𝗨𝘀𝗲𝗿</b></blockquote>\n\n"
+            "✨ <b>Status:</b> Process Stopped Successfully\n"
+            "💾 <b>Checkpoint:</b> Safely saved in database!\n\n"
+            "<i>Aap jab bhi chahein, 'Resume & Update' button dabakar wahi se continue kar sakte hain bina kisi data loss ke.</i>"
+        )
+        try:
+            await query.message.edit_text(stop_card, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
+        except Exception:
+            pass
+
+        # 2. Send a separate confirmation message to the user in DM
+        dm_cancel_text = (
+            "🛑 <b>Topic Mirroring Stopped Successfully!</b> 😉\n\n"
+            "<blockquote>✨ <b>Status:</b> Cancelled by user\n"
+            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database</blockquote>\n\n"
+            "Aapka topic mirror process rok diya gaya hai. Jab bhi aapko wapas shuru karna ho ya update karna ho, aap <b>Resume & Update</b> button dabakar wahi se continue kar sakte hain bina kisi duplicate messages ke!"
+        )
+        try:
+            await app.send_message(
+                chat_id=user_id,
+                text=dm_cancel_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=stop_kb
+            )
+        except Exception:
+            pass
     else:
         await query.answer("❌ You are not authorized to cancel this task.", show_alert=True)
 
@@ -2641,7 +2715,10 @@ async def run_single_link_mirror(
     active_mirrors[user_id] = {
         "running": True,
         "skip_topic": False,
-        "current_topic": f"Topic {src_topic_id or 1}"
+        "current_topic": f"Topic {src_topic_id or 1}",
+        "src_chat_id": src_chat_id,
+        "tgt_chat_id": tgt_chat_id,
+        "status_msg": status_msg
     }
 
     try:
@@ -3337,7 +3414,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     active_mirrors[user_id] = {
         "running": True,
         "skip_topic": False,
-        "current_topic": ""
+        "current_topic": "",
+        "src_chat_id": src_chat_id,
+        "tgt_chat_id": tgt_chat_id,
+        "status_msg": status_msg
     }
 
     try:
