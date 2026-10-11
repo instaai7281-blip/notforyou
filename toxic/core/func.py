@@ -24,9 +24,8 @@ from datetime import datetime as dt
 import asyncio, subprocess, re, os, time
 from PIL import Image
 async def chk_user(message, user_id):
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    owner_strings = [str(o) for o in owner_list]
-    if str(user_id) in owner_strings:
+    from toxic.core.mongo.db import is_admin_or_owner
+    if is_admin_or_owner(user_id):
         return 0
     # Global Free Access Check (Batch / Free)
     try:
@@ -35,6 +34,7 @@ async def chk_user(message, user_id):
             return 0
     except Exception as e:
         print(f"⚠️ is_global_batch_free check error: {e}")
+    # Separate check for paid/active standard premium plan
     user = await premium_users()
     user_strings = [str(u) for u in user]
     if str(user_id) in user_strings:
@@ -44,9 +44,8 @@ async def chk_user(message, user_id):
 
 async def chk_mirror_user(user_id):
     """Checks if a user has active Topic Mirroring plan (or is Owner/Sudo or Global Free Access is Active). Returns 0 if authorized, 1 if not."""
-    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-    owner_strings = [str(o) for o in owner_list]
-    if str(user_id) in owner_strings:
+    from toxic.core.mongo.db import is_admin_or_owner
+    if is_admin_or_owner(user_id):
         return 0
     # Global Free Access Check (Topic Mirror)
     try:
@@ -55,6 +54,7 @@ async def chk_mirror_user(user_id):
             return 0
     except Exception as e:
         print(f"⚠️ is_global_mirror_free check error: {e}")
+    # Separate check for paid/active topic mirror subscription
     from toxic.core.mongo.plans_db import mirror_premium_users
     mirror_users_list = await mirror_premium_users()
     mirror_user_strings = [str(u) for u in mirror_users_list]

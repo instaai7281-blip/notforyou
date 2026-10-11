@@ -25,12 +25,6 @@ from pyrogram.raw.types import InputUserSelf
 
 from pyrogram.enums import ChatType, ParseMode
 
-@app.on_message(filters.private, group=-1)
-async def restrict_unauthorized_users(client, message: Message):
-    if not message.text and not message.media:
-        return
-    if not await check_user_bio_access(client, message):
-        await message.stop_propagation()
 
 
 @app.on_message(filters.command("start") & filters.private)

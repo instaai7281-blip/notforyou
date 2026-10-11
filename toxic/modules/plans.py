@@ -1318,8 +1318,8 @@ async def build_free_access_panel() -> tuple:
         "👇 <b>Control Buttons se ON/OFF aur Duration set karein:</b>"
     )
 
-    mirror_btn_text = "📁 Turn OFF Mirror Free" if mirror_on else "📁 Turn ON Mirror Free (1 Day)"
-    batch_btn_text = "📦 Turn OFF Batch Free" if batch_on else "📦 Turn ON Batch Free (1 Day)"
+    mirror_btn_text = "📁 Mirror: [🔴 Turn OFF]" if mirror_on else "📁 Mirror: [🟢 Turn ON (1 Day)]"
+    batch_btn_text = "📦 Batch: [🔴 Turn OFF]" if batch_on else "📦 Batch: [🟢 Turn ON (1 Day)]"
 
     buttons = [
         [
@@ -1331,20 +1331,24 @@ async def build_free_access_panel() -> tuple:
         ],
         [
             InlineKeyboardButton("⏱️ 1 Hour", callback_data="fa_dur_3600"),
+            InlineKeyboardButton("⏱️ 3 Hours", callback_data="fa_dur_10800"),
             InlineKeyboardButton("⏱️ 6 Hours", callback_data="fa_dur_21600"),
-            InlineKeyboardButton("⏱️ 12 Hours", callback_data="fa_dur_43200"),
         ],
         [
+            InlineKeyboardButton("⏱️ 12 Hours", callback_data="fa_dur_43200"),
             InlineKeyboardButton("⏱️ 1 Day (24h)", callback_data="fa_dur_86400"),
             InlineKeyboardButton("⏱️ 2 Days", callback_data="fa_dur_172800"),
+        ],
+        [
             InlineKeyboardButton("⏱️ 3 Days", callback_data="fa_dur_259200"),
+            InlineKeyboardButton("⏱️ 7 Days", callback_data="fa_dur_604800"),
+            InlineKeyboardButton("♾️ Permanent", callback_data="fa_dur_inf"),
         ],
         [
-            InlineKeyboardButton("♾️ Permanent Free", callback_data="fa_dur_inf"),
-            InlineKeyboardButton("🛑 Turn OFF ALL", callback_data="fa_off_all")
+            InlineKeyboardButton("🛑 Turn OFF ALL Free Access", callback_data="fa_off_all")
         ],
         [
-            InlineKeyboardButton("📢 Announce to All Users", callback_data="fa_announce"),
+            InlineKeyboardButton("📢 Announce Promo to All", callback_data="fa_announce"),
             InlineKeyboardButton("🔄 Refresh Status", callback_data="fa_refresh")
         ]
     ]
