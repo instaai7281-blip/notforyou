@@ -80,6 +80,10 @@ async def is_user_verified(user_id):
 @app.on_message(filters.command("start"))
 async def token_handler(client, message):
     """Handle the /start command."""
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    from toxic.core.func import is_free_user
+    if await is_free_user(user_id):
+        return
     
     main_channel_url = await get_main_channel_link()
     

@@ -310,6 +310,13 @@ async def devggn_boot():
     except Exception as e:
         print(f"Failed to load thumbnails/admins: {e}")
 
+    # Reset global free access state on boot to ensure no accidental lingering free pass
+    try:
+        from toxic.core.mongo.plans_db import reset_global_free_access
+        await reset_global_free_access()
+    except Exception as e:
+        print(f"Failed to reset global free access: {e}")
+
     for all_module in ALL_MODULES:
         importlib.import_module("toxic.modules." + all_module)
 

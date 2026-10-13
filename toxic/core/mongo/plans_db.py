@@ -32,6 +32,24 @@ _MIRROR_CACHE_EXP = 0.0
 _GLOBAL_FREE_CACHE = None
 _GLOBAL_FREE_CACHE_EXP = 0.0
 
+def _get_id_variants(user_id):
+    variants = [user_id]
+    try:
+        variants.append(int(user_id))
+    except Exception:
+        pass
+    try:
+        variants.append(str(user_id))
+    except Exception:
+        pass
+    seen = set()
+    res = []
+    for v in variants:
+        if v is not None and v not in seen:
+            seen.add(v)
+            res.append(v)
+    return res
+
 def invalidate_plans_cache():
     global _PREMIUM_CACHE, _MIRROR_CACHE, _GLOBAL_FREE_CACHE
     _PREMIUM_CACHE = None
@@ -39,21 +57,36 @@ def invalidate_plans_cache():
     _GLOBAL_FREE_CACHE = None
 
 async def add_premium(user_id, expire_date):
-    global _PREMIUM_CACHE
-    _PREMIUM_CACHE = None
-    data = await check_premium(user_id)
-    if data and data.get("_id"):
-        await db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}})
+    invalidate_plans_cache()
+    ids = _get_id_variants(user_id)
+    # Check if doc exists with any id variant
+    doc = await db.find_one({"_id": {"$in": ids}})
+    if doc and doc.get("_id"):
+        await db.update_one({"_id": doc["_id"]}, {"$set": {"expire_date": expire_date}})
     else:
-        await db.insert_one({"_id": user_id, "expire_date": expire_date})
+        try:
+            uid_int = int(user_id)
+        except Exception:
+            uid_int = user_id
+        await db.insert_one({"_id": uid_int, "expire_date": expire_date})
  
 async def remove_premium(user_id):
-    global _PREMIUM_CACHE
-    _PREMIUM_CACHE = None
-    await db.delete_one({"_id": user_id})
+    invalidate_plans_cache()
+    ids = _get_id_variants(user_id)
+    await db.delete_many({"_id": {"$in": ids}})
  
 async def check_premium(user_id):
-    return await db.find_one({"_id": user_id})
+    ids = _get_id_variants(user_id)
+    doc = await db.find_one({"_id": {"$in": ids}})
+    if doc:
+        expire_date = doc.get("expire_date")
+        if expire_date:
+            now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            if expire_date < now_utc:
+                # Expired! Remove document immediately
+                await remove_premium(user_id)
+                return None
+    return doc
  
 async def premium_users():
     global _PREMIUM_CACHE, _PREMIUM_CACHE_EXP
@@ -61,14 +94,19 @@ async def premium_users():
     if _PREMIUM_CACHE is not None and now < _PREMIUM_CACHE_EXP:
         return _PREMIUM_CACHE
     id_list = []
+    now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     async for data in db.find():
-        id_list.append(data["_id"])
+        exp = data.get("expire_date")
+        if not exp or exp >= now_utc:
+            uid = data["_id"]
+            id_list.append(uid)
+            id_list.append(str(uid))
     _PREMIUM_CACHE = id_list
-    _PREMIUM_CACHE_EXP = now + 20.0  # 20 seconds TTL
+    _PREMIUM_CACHE_EXP = now + 10.0  # 10s TTL
     return id_list
  
 async def check_and_remove_expired_users():
-    current_time = datetime.datetime.utcnow()
+    current_time = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     async for data in db.find():
         expire_date = data.get("expire_date")
         if expire_date and expire_date < current_time:
@@ -79,21 +117,35 @@ async def check_and_remove_expired_users():
 mirror_db = mongo.premium.mirror_premium_db
 
 async def add_mirror_premium(user_id, expire_date):
-    global _MIRROR_CACHE
-    _MIRROR_CACHE = None
-    data = await check_mirror_premium(user_id)
-    if data and data.get("_id"):
-        await mirror_db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}})
+    invalidate_plans_cache()
+    ids = _get_id_variants(user_id)
+    doc = await mirror_db.find_one({"_id": {"$in": ids}})
+    if doc and doc.get("_id"):
+        await mirror_db.update_one({"_id": doc["_id"]}, {"$set": {"expire_date": expire_date}})
     else:
-        await mirror_db.insert_one({"_id": user_id, "expire_date": expire_date})
+        try:
+            uid_int = int(user_id)
+        except Exception:
+            uid_int = user_id
+        await mirror_db.insert_one({"_id": uid_int, "expire_date": expire_date})
 
 async def remove_mirror_premium(user_id):
-    global _MIRROR_CACHE
-    _MIRROR_CACHE = None
-    await mirror_db.delete_one({"_id": user_id})
+    invalidate_plans_cache()
+    ids = _get_id_variants(user_id)
+    await mirror_db.delete_many({"_id": {"$in": ids}})
 
 async def check_mirror_premium(user_id):
-    return await mirror_db.find_one({"_id": user_id})
+    ids = _get_id_variants(user_id)
+    doc = await mirror_db.find_one({"_id": {"$in": ids}})
+    if doc:
+        expire_date = doc.get("expire_date")
+        if expire_date:
+            now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            if expire_date < now_utc:
+                # Expired! Remove document immediately
+                await remove_mirror_premium(user_id)
+                return None
+    return doc
 
 async def mirror_premium_users():
     global _MIRROR_CACHE, _MIRROR_CACHE_EXP
@@ -101,10 +153,15 @@ async def mirror_premium_users():
     if _MIRROR_CACHE is not None and now < _MIRROR_CACHE_EXP:
         return _MIRROR_CACHE
     id_list = []
+    now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     async for data in mirror_db.find():
-        id_list.append(data["_id"])
+        exp = data.get("expire_date")
+        if not exp or exp >= now_utc:
+            uid = data["_id"]
+            id_list.append(uid)
+            id_list.append(str(uid))
     _MIRROR_CACHE = id_list
-    _MIRROR_CACHE_EXP = now + 20.0  # 20 seconds TTL
+    _MIRROR_CACHE_EXP = now + 10.0  # 10s TTL
     return id_list
 
 async def get_all_mirror_users_data():
@@ -242,7 +299,7 @@ async def get_global_free_access() -> dict:
 async def is_global_mirror_free() -> bool:
     """Returns True if global free mirror access is currently active."""
     data = await get_global_free_access()
-    if not data.get("mirror_free"):
+    if not data or not data.get("mirror_free"):
         return False
     expires_at = data.get("mirror_expires_at")
     if expires_at:
@@ -254,12 +311,13 @@ async def is_global_mirror_free() -> bool:
                 {"$set": {"mirror_free": False, "mirror_expires_at": None}}
             )
             return False
-    return True
+        return True
+    return False
 
 async def is_global_batch_free() -> bool:
     """Returns True if global free batch access is currently active."""
     data = await get_global_free_access()
-    if not data.get("batch_free"):
+    if not data or not data.get("batch_free"):
         return False
     expires_at = data.get("batch_expires_at")
     if expires_at:
@@ -271,7 +329,26 @@ async def is_global_batch_free() -> bool:
                 {"$set": {"batch_free": False, "batch_expires_at": None}}
             )
             return False
-    return True
+        return True
+    return False
+
+async def reset_global_free_access():
+    """Resets global free access state in MongoDB to completely OFF."""
+    global _GLOBAL_FREE_CACHE
+    _GLOBAL_FREE_CACHE = None
+    try:
+        await free_access_db.update_one(
+            {"_id": "global_free_access"},
+            {"$set": {
+                "mirror_free": False,
+                "mirror_expires_at": None,
+                "batch_free": False,
+                "batch_expires_at": None
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"Error resetting global free access: {e}")
 
 async def set_global_free_access(feature: str, enabled: bool, duration_seconds: int = None, admin_id: int = None) -> dict:
     """

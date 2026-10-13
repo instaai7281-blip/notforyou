@@ -53,64 +53,60 @@ async def remove_premium(client, message):
         except Exception:
             pass
 
-        # Check premium database
-        data = await plans_db.check_premium(user_id)
-        
         # Check active tokens database
         from motor.motor_asyncio import AsyncIOMotorClient
         from config import MONGO_DB
         tclient = AsyncIOMotorClient(MONGO_DB)
         tdb = tclient["telegram_bot"]
         tokens_col = tdb["tokens"]
-        token_data = await tokens_col.find_one({"user_id": user_id})
 
-        is_premium = data and data.get("_id")
+        u_variants = [user_id]
+        try:
+            u_variants.append(int(user_id))
+        except Exception:
+            pass
+        try:
+            u_variants.append(str(user_id))
+        except Exception:
+            pass
+
+        data = await plans_db.check_premium(user_id)
+        mirror_data = await plans_db.check_mirror_premium(user_id)
+        token_data = await tokens_col.find_one({"user_id": {"$in": u_variants}})
+
+        is_premium = bool(data or mirror_data)
         is_token_verified = token_data is not None
 
-        if is_premium or is_token_verified:
-            if is_premium:
-                await plans_db.remove_premium(user_id)
-            if is_token_verified:
-                await tokens_col.delete_one({"user_id": user_id})
+        # Execute thorough removal across all subscription tables
+        await plans_db.remove_premium(user_id)
+        await plans_db.remove_mirror_premium(user_id)
+        await tokens_col.delete_many({"user_id": {"$in": u_variants}})
+        plans_db.invalidate_plans_cache()
 
-            await message.reply_text(
-                f"⚙️ ⚡ **XTRACTOR BOT PRO** ⚡ ⚙️\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🗑️ **PREMIUM ACCESS REVOKED**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **User:** {user_mention}\n"
-                f"🆔 **ID:** `{user_id}`\n"
-                f"❌ **Status:** Premium access & active token sessions terminated.\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            )
-            try:
-                await client.send_message(
-                    chat_id=user_id,
-                    text=(
-                        f"⚠️ **NOTICE: PREMIUM EXPIRED/TERMINATED** ⚠️\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"Hello, your premium subscription or token session for \n"
-                        f"⚡ **Xtractor Bot Pro** ⚡ has been terminated or expired.\n\n"
-                        f"💬 If you think this is a mistake or wish to renew, please contact @CrazyxDeveloper_Bot.\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                    )
+        await message.reply_text(
+            f"⚙️ ⚡ **XTRACTOR BOT PRO** ⚡ ⚙️\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🗑️ **PREMIUM & MIRROR ACCESS REVOKED**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 **User:** {user_mention}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"❌ **Status:** Premium, Topic Mirror, & active token sessions terminated.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        try:
+            await client.send_message(
+                chat_id=user_id,
+                text=(
+                    f"⚠️ **NOTICE: ACCESS TERMINATED** ⚠️\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Hello, your subscription for \n"
+                    f"⚡ **Xtractor Bot Pro** ⚡ has been removed or expired.\n\n"
+                    f"💬 If you wish to purchase/renew, please contact @CrazyxDeveloper_Bot.\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
-            except Exception:
-                pass
-        else:
-            # Force cleanup of any records in both databases just in case
-            await plans_db.remove_premium(user_id)
-            await tokens_col.delete_one({"user_id": user_id})
-            await message.reply_text(
-                f"⚙️ ⚡ **XTRACTOR BOT PRO** ⚡ ⚙️\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🧹 **FORCE CLEANED**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **User:** {user_mention}\n"
-                f"🆔 **ID:** `{user_id}`\n"
-                f"🧹 **Action:** Force-removed from premium and token databases.\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
+        except Exception:
+            pass
     else:
         await message.reply_text(
             f"💤 **Boring...**\n\n"

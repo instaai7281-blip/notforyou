@@ -61,7 +61,7 @@ async def chk_mirror_user(user_id):
     if str(user_id) in mirror_user_strings:
         return 0
 async def is_free_user(user_id: int) -> bool:
-    """Returns True if user has NO active plan, is not Admin/Owner, and Global Free Access is OFF."""
+    """Returns True if user has NO active plan, is not Admin/Owner."""
     if not user_id:
         return True
 
@@ -69,29 +69,21 @@ async def is_free_user(user_id: int) -> bool:
     if is_admin_or_owner(user_id):
         return False
 
+    # Check direct DB with expiry validation first for absolute accuracy
+    try:
+        from toxic.core.mongo.plans_db import check_premium, check_mirror_premium
+        p_doc = await check_premium(user_id)
+        if p_doc is not None:
+            return False
+        m_doc = await check_mirror_premium(user_id)
+        if m_doc is not None:
+            return False
+    except Exception as e:
+        print(f"Error checking user premium in db: {e}")
+
     try:
         from toxic.core.mongo.plans_db import is_global_batch_free, is_global_mirror_free
         if await is_global_batch_free() or await is_global_mirror_free():
-            return False
-    except Exception:
-        pass
-
-    try:
-        from toxic.core.mongo.plans_db import premium_users, mirror_premium_users
-        p_users = await premium_users()
-        if str(user_id) in [str(u) for u in p_users]:
-            return False
-        m_users = await mirror_premium_users()
-        if str(user_id) in [str(u) for u in m_users]:
-            return False
-
-        # Direct DB fallback check
-        from toxic.core.mongo.plans_db import check_premium, check_mirror_premium
-        p_doc = await check_premium(user_id)
-        if p_doc:
-            return False
-        m_doc = await check_mirror_premium(user_id)
-        if m_doc:
             return False
     except Exception:
         pass
