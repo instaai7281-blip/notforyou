@@ -27,6 +27,7 @@ from pyrogram.errors import FloodWait
 from datetime import datetime, timedelta
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 import subprocess
+from pyrogram.enums import ParseMode
 from pyrogram.types import Message
 from toxic.modules.shrink import is_user_verified
 async def generate_random_name(length=8):
@@ -127,7 +128,13 @@ async def single_link(_, message):
 
     # Check freemium limits
     if await chk_user(message, user_id) == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
-        await message.reply("Freemium service is currently not available. Upgrade to premium for access.")
+        from toxic.core.func import get_upgrade_premium_card
+        text, kb = get_upgrade_premium_card(message.from_user)
+        photo_url = "https://freeimage.host/i/n04TxVa"
+        try:
+            await message.reply_photo(photo=photo_url, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     # Check cooldown
@@ -212,6 +219,16 @@ async def batch_link(_, message):
     if join == 1:
         return
     user_id = message.chat.id
+    from toxic.core.func import is_free_user, get_upgrade_premium_card
+    if await is_free_user(user_id):
+        text, kb = get_upgrade_premium_card(message.from_user)
+        photo_url = "https://freeimage.host/i/n04TxVa"
+        try:
+            await message.reply_photo(photo=photo_url, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        except Exception:
+            await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        return
+
     # Check if a batch process is already running
     if users_loop.get(user_id, False):
         await app.send_message(

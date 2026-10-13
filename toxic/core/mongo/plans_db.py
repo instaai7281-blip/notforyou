@@ -20,7 +20,27 @@ mongo = MongoCli(MONGO_DB)
 db = mongo.premium
 db = db.premium_db
  
+import time
+
+# High-Speed In-Memory Caches (Sub-millisecond access)
+_PREMIUM_CACHE = None
+_PREMIUM_CACHE_EXP = 0.0
+
+_MIRROR_CACHE = None
+_MIRROR_CACHE_EXP = 0.0
+
+_GLOBAL_FREE_CACHE = None
+_GLOBAL_FREE_CACHE_EXP = 0.0
+
+def invalidate_plans_cache():
+    global _PREMIUM_CACHE, _MIRROR_CACHE, _GLOBAL_FREE_CACHE
+    _PREMIUM_CACHE = None
+    _MIRROR_CACHE = None
+    _GLOBAL_FREE_CACHE = None
+
 async def add_premium(user_id, expire_date):
+    global _PREMIUM_CACHE
+    _PREMIUM_CACHE = None
     data = await check_premium(user_id)
     if data and data.get("_id"):
         await db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}})
@@ -28,15 +48,23 @@ async def add_premium(user_id, expire_date):
         await db.insert_one({"_id": user_id, "expire_date": expire_date})
  
 async def remove_premium(user_id):
+    global _PREMIUM_CACHE
+    _PREMIUM_CACHE = None
     await db.delete_one({"_id": user_id})
  
 async def check_premium(user_id):
     return await db.find_one({"_id": user_id})
  
 async def premium_users():
+    global _PREMIUM_CACHE, _PREMIUM_CACHE_EXP
+    now = time.time()
+    if _PREMIUM_CACHE is not None and now < _PREMIUM_CACHE_EXP:
+        return _PREMIUM_CACHE
     id_list = []
     async for data in db.find():
         id_list.append(data["_id"])
+    _PREMIUM_CACHE = id_list
+    _PREMIUM_CACHE_EXP = now + 20.0  # 20 seconds TTL
     return id_list
  
 async def check_and_remove_expired_users():
@@ -51,6 +79,8 @@ async def check_and_remove_expired_users():
 mirror_db = mongo.premium.mirror_premium_db
 
 async def add_mirror_premium(user_id, expire_date):
+    global _MIRROR_CACHE
+    _MIRROR_CACHE = None
     data = await check_mirror_premium(user_id)
     if data and data.get("_id"):
         await mirror_db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}})
@@ -58,15 +88,23 @@ async def add_mirror_premium(user_id, expire_date):
         await mirror_db.insert_one({"_id": user_id, "expire_date": expire_date})
 
 async def remove_mirror_premium(user_id):
+    global _MIRROR_CACHE
+    _MIRROR_CACHE = None
     await mirror_db.delete_one({"_id": user_id})
 
 async def check_mirror_premium(user_id):
     return await mirror_db.find_one({"_id": user_id})
 
 async def mirror_premium_users():
+    global _MIRROR_CACHE, _MIRROR_CACHE_EXP
+    now = time.time()
+    if _MIRROR_CACHE is not None and now < _MIRROR_CACHE_EXP:
+        return _MIRROR_CACHE
     id_list = []
     async for data in mirror_db.find():
         id_list.append(data["_id"])
+    _MIRROR_CACHE = id_list
+    _MIRROR_CACHE_EXP = now + 20.0  # 20 seconds TTL
     return id_list
 
 async def get_all_mirror_users_data():
@@ -76,6 +114,8 @@ async def get_all_mirror_users_data():
     return users
 
 async def update_mirror_premium_expiry(user_id: int, expire_date: datetime.datetime):
+    global _MIRROR_CACHE
+    _MIRROR_CACHE = None
     await mirror_db.update_one({"_id": user_id}, {"$set": {"expire_date": expire_date}}, upsert=True)
 
 async def check_and_remove_expired_mirror_users():
@@ -179,6 +219,10 @@ def format_time_remaining(seconds: int) -> str:
 
 async def get_global_free_access() -> dict:
     """Retrieves current global free access state from MongoDB."""
+    global _GLOBAL_FREE_CACHE, _GLOBAL_FREE_CACHE_EXP
+    now = time.time()
+    if _GLOBAL_FREE_CACHE is not None and now < _GLOBAL_FREE_CACHE_EXP:
+        return _GLOBAL_FREE_CACHE
     data = await free_access_db.find_one({"_id": "global_free_access"})
     if not data:
         data = {
@@ -191,6 +235,8 @@ async def get_global_free_access() -> dict:
             "updated_by": None
         }
         await free_access_db.insert_one(data)
+    _GLOBAL_FREE_CACHE = data
+    _GLOBAL_FREE_CACHE_EXP = now + 10.0  # 10s TTL
     return data
 
 async def is_global_mirror_free() -> bool:
@@ -232,6 +278,8 @@ async def set_global_free_access(feature: str, enabled: bool, duration_seconds: 
     Toggles global free access for 'mirror', 'batch', or 'both'/'all'.
     Duration in seconds. If duration_seconds is None and enabled=True, it stays active permanently until manually toggled OFF.
     """
+    global _GLOBAL_FREE_CACHE
+    _GLOBAL_FREE_CACHE = None
     now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     expires_at = (now_utc + datetime.timedelta(seconds=duration_seconds)) if (enabled and duration_seconds) else None
 

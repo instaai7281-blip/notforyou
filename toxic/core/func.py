@@ -60,7 +60,67 @@ async def chk_mirror_user(user_id):
     mirror_user_strings = [str(u) for u in mirror_users_list]
     if str(user_id) in mirror_user_strings:
         return 0
-    return 1
+async def is_free_user(user_id: int) -> bool:
+    """Returns True if user has NO active plan, is not Admin/Owner, and Global Free Access is OFF."""
+    from toxic.core.mongo.db import is_admin_or_owner
+    if is_admin_or_owner(user_id):
+        return False
+
+    try:
+        from toxic.core.mongo.plans_db import is_global_batch_free, is_global_mirror_free
+        if await is_global_batch_free() or await is_global_mirror_free():
+            return False
+    except Exception:
+        pass
+
+    try:
+        from toxic.core.mongo.plans_db import premium_users, mirror_premium_users
+        p_users = await premium_users()
+        if str(user_id) in [str(u) for u in p_users]:
+            return False
+        m_users = await mirror_premium_users()
+        if str(user_id) in [str(u) for u in m_users]:
+            return False
+    except Exception:
+        pass
+
+    return True
+
+
+def get_upgrade_premium_card(user=None) -> tuple:
+    """Returns (card_text, inline_keyboard) for Upgrade to Premium message."""
+    import html
+    first_name = html.escape(getattr(user, "first_name", "User") or "User") if user else "User"
+    user_id = getattr(user, "id", "") if user else ""
+    user_mention = f"<a href='tg://user?id={user_id}'>{first_name}</a>" if user_id else first_name
+
+    text = (
+        "<blockquote>👑 <b>XTRACTOR PRO — PREMIUM ACCESS REQUIRED</b> 👑</blockquote>\n\n"
+        f"👋 <b>Hey {user_mention}!</b>\n"
+        "<blockquote>🚫 <b>Access Restricted: Free Account Detected</b>\n\n"
+        "Yeh bot aur iske premium features exclusive <b>Paid Members</b> ke liye reserved hain.\n"
+        "Aapke account par abhi koi active subscription activate nahi hai.</blockquote>\n\n"
+        "✨ <b>Upgrade to PRO to Unlock:</b>\n"
+        "• 📁 <b>Topic Mirror Forum Sync:</b> Clone entire supergroups with topics in 1-click\n"
+        "• 🪄 <b>Unlimited Bulk Batch:</b> Extract up to 5,000 files in one command\n"
+        "• 🚀 <b>Multi-Threaded Turbo Speed:</b> Zero wait time & high-speed downloads\n"
+        "• 🏷️ <b>Custom Captions & Thumbnails:</b> 100% clean files with no ads\n"
+        "• 🔒 <b>Restricted Content Access:</b> Private channels & forum groups supported\n\n"
+        "👉 <i>Subscription lene ke liye niche diye gaye buttons se Plans check karein ya Admin se contact karein:</i>"
+    )
+
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💎 View Pricing & Plans", callback_data="see_plan"),
+            InlineKeyboardButton("💬 Buy from Admin", url="https://t.me/CrazyxDeveloper_Bot")
+        ],
+        [
+            InlineKeyboardButton("⌛ Check My Subscription", callback_data="check_my_sub"),
+            InlineKeyboardButton("📘 User Guide", callback_data="guide_page_1")
+        ]
+    ])
+
+    return text, buttons
 async def gen_link(app,chat_id):
    link = await app.export_chat_invite_link(chat_id)
    return link

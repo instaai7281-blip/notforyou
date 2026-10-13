@@ -27,6 +27,88 @@ from pyrogram.enums import ChatType, ParseMode
 
 
 
+# Public commands that free users can use to read info, check plans, or buy
+PUBLIC_EXEMPT_COMMANDS = {
+    "start",
+    "plans",
+    "plan",
+    "myplan",
+    "guide",
+    "help",
+    "terms",
+    "privacy",
+    "freeaccess",
+    "free_access",
+    "freemirror",
+    "free_mirror",
+    "freebatch",
+    "free_batch",
+    "free",
+    "globalfree",
+    "freetrial",
+    "freeplan",
+    "freemode",
+    "freeaccessmode",
+    "admin",
+    "adminhelp",
+    "panel",
+    "owner",
+    "addadmin",
+    "remadmin",
+    "admins",
+    "addmirror",
+    "remmirror",
+    "checkmirror",
+    "mirrorusers",
+    "mirrordemo",
+    "demomirror",
+    "adddemo",
+    "add",
+    "rem",
+    "check",
+    "transfer",
+    "stats",
+    "getusers",
+    "gcast",
+    "autobroadcast",
+    "setmainchannel",
+    "set",
+    "restart"
+}
+
+@app.on_message(filters.private & filters.command, group=-1)
+async def free_user_command_guard(client, message: Message):
+    """
+    Blocks all operational commands for Free Users who have no active subscription.
+    Sends a beautiful Upgrade to Premium card with plans and buy buttons.
+    """
+    if not message.text:
+        return
+
+    # Extract command keyword (e.g. /batch -> batch)
+    raw_cmd = message.text.split()[0].lstrip("/").split("@")[0].lower()
+
+    if raw_cmd in PUBLIC_EXEMPT_COMMANDS:
+        return
+
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    from toxic.core.func import is_free_user, get_upgrade_premium_card
+
+    if await is_free_user(user_id):
+        text, kb = get_upgrade_premium_card(message.from_user)
+        photo_url = "https://freeimage.host/i/n04TxVa"
+        try:
+            await message.reply_photo(
+                photo=photo_url,
+                caption=text,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await message.stop_propagation()
+
+
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message: Message):
     join = await subscribe(client, message)
@@ -35,17 +117,29 @@ async def start_cmd(client, message: Message):
 
     bot_username = get_bot_username()
     user_name = message.from_user.first_name if message.from_user else "User"
+    user_id = message.from_user.id if message.from_user else message.chat.id
+
+    from toxic.core.mongo.db import is_admin_or_owner
+    from toxic.core.func import is_free_user
+
+    if is_admin_or_owner(user_id):
+        membership_line = "👑 <b>Status:</b> <code>👑 Owner / Bot Admin (VIP)</code>"
+    elif not await is_free_user(user_id):
+        membership_line = "👑 <b>Status:</b> <code>🟢 Active Premium Member (PRO)</code>"
+    else:
+        membership_line = "👑 <b>Status:</b> <code>🔴 Free Account (Upgrade Required)</code>"
 
     start_text = (
         f"<blockquote><b>🚀 Welcome to Xtractor Bot Pro, {user_name}! 🖤</b></blockquote>\n\n"
-        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n\n"
+        f"<b>🤖 Bot Username:</b> <code>{bot_username}</code>\n"
+        f"{membership_line}\n\n"
         f"<blockquote><b>✨ WHAT I CAN DO FOR YOU:</b>\n"
         f"• <b>Ultra Fast Xtractor Pro:</b> Extract & sync content from private channels & groups!\n"
         f"• <b>Bulk Extraction (/batch):</b> Extract up to 5000 files in one single command!\n"
         f"• <b>Topic Mirror Forum Sync (/topicmirror):</b> Clone entire forum groups with auto-topic creation & 1-click update sync!\n"
         f"• <b>Direct Topic Link Mirror (/topiclink):</b> Mirror from 1 topic link directly into another!\n"
         f"• <b>Custom Watermarking & Metadata:</b> PDF watermarks, video thumbnails, custom captions!</blockquote>\n\n"
-        f"<i>Just send any post link or tap a button below to get started! ☕🚀</i>"
+        f"<i>Tap a button below or send a link to get started! ☕🚀</i>"
     )
 
     clean_bot_username = bot_username.lstrip("@")
@@ -347,6 +441,24 @@ async def plan(client, message):
             "📲 <b>Contact:</b> @CrazyxDeveloper_Bot"
         )
         await message.reply_text(html_plans, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
+@app.on_callback_query(filters.regex(r"^check_my_sub$"))
+async def check_my_sub_callback_handler(client, query: CallbackQuery):
+    user_id = query.from_user.id
+    from toxic.core.func import is_free_user
+    if await is_free_user(user_id):
+        await query.answer(
+            "❌ No active subscription found on your account!\n\n"
+            "Tap 'View Pricing & Plans' to purchase or contact @CrazyxDeveloper_Bot",
+            show_alert=True
+        )
+    else:
+        await query.answer(
+            "✅ Active Subscription Found!\n\n"
+            "You have full access to bot features. Enjoy PRO access!",
+            show_alert=True
+        )
 
 
 @app.on_callback_query(filters.regex("see_plan"))
