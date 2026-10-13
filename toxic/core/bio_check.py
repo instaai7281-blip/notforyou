@@ -28,9 +28,31 @@ REQUIRED_TAG = "@Crazy_for_Goals"
 
 join_req_db = tdb["pending_join_requests"]
 invite_link_db = tdb["channel_invite_links"]
+bio_settings_db = tdb["global_bio_settings"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+async def is_bio_check_enabled() -> bool:
+    """Returns True if Bio Verification is enabled. Defaults to False (OFF)."""
+    try:
+        doc = await bio_settings_db.find_one({"_id": "bio_verification_status"})
+        if doc is not None:
+            return bool(doc.get("enabled", False))
+    except Exception:
+        pass
+    return False
+
+async def set_bio_check_enabled(enabled: bool):
+    """Saves Bio Verification state to MongoDB."""
+    try:
+        await bio_settings_db.update_one(
+            {"_id": "bio_verification_status"},
+            {"$set": {"enabled": bool(enabled)}},
+            upsert=True
+        )
+    except Exception as e:
+        logger.error("Failed to save bio setting: %s", e)
 
 
 def has_bio_tag(user_bio: str) -> bool:
@@ -252,6 +274,9 @@ async def check_user_bio_access(
     client: Client,
     message: Message
 ) -> bool:
+    if not await is_bio_check_enabled():
+        return True
+
     if not message.from_user:
         return True
 
@@ -309,6 +334,15 @@ async def handle_chat_join_request(
     user_id = request.from_user.id
     chat_id = request.chat.id
     chat_title = request.chat.title or "Channel/Group"
+
+    # If Bio Verification is OFF, auto-approve join request immediately!
+    if not await is_bio_check_enabled():
+        try:
+            await client.approve_chat_join_request(chat_id, user_id)
+            logger.info("Auto-approved user %s in chat %s (Bio verification is OFF)", user_id, chat_id)
+        except Exception as e:
+            logger.error("Failed to auto-approve user %s: %s", user_id, e)
+        return
 
     safe_user_name = html.escape(request.from_user.first_name or "User")
     user_mention = f"<a href='tg://user?id={user_id}'>{safe_user_name}</a>"
@@ -420,27 +454,30 @@ async def verify_user_bio_callback(
     )
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
-    bio = await get_fresh_user_bio(client, user_id)
+    if not await is_bio_check_enabled():
+        await callback_query.answer("🔓 Bio verification is currently OFF! Access granted. 🎉", show_alert=True)
+    else:
+        bio = await get_fresh_user_bio(client, user_id)
 
-    if bio is None or not has_bio_tag(bio):
-        denied_msg = (
-            "❌ Access Denied!\n\n"
-            f"1️⃣ Bio me '{REQUIRED_TAG}' tag lagayein.\n"
-            "2️⃣ Privacy Setting: Settings ⚙️ ➔ "
-            "Privacy & Security ➔ Bio ➔ Set to 'Everybody'!\n\n"
-            "Fir 🟢 Verify Bio 🔄 button par click karein."
-        )
+        if bio is None or not has_bio_tag(bio):
+            denied_msg = (
+                "❌ Access Denied!\n\n"
+                f"1️⃣ Bio me '{REQUIRED_TAG}' tag lagayein.\n"
+                "2️⃣ Privacy Setting: Settings ⚙️ ➔ "
+                "Privacy & Security ➔ Bio ➔ Set to 'Everybody'!\n\n"
+                "Fir 🟢 Verify Bio 🔄 button par click karein."
+            )
+            await callback_query.answer(
+                denied_msg,
+                show_alert=True
+            )
+            return
+
+        # If bio has the tag, grant access
         await callback_query.answer(
-            denied_msg,
+            "🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉",
             show_alert=True
         )
-        return
-
-    # If bio has the tag, grant access
-    await callback_query.answer(
-        "🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉",
-        show_alert=True
-    )
 
 
     pending_requests = await join_req_db.find(
@@ -507,4 +544,77 @@ async def verify_user_bio_callback(
         )
     except Exception as e:
         logger.warning("Could not edit verification message: %s", e)
+
+
+@app.on_message(filters.command(["biocheck", "togglebio", "biostatus"]) & filters.private)
+async def biocheck_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in get_owner_ids():
+        return await message.reply_text(
+            "⛔ <b>Admin Only:</b> Only the bot owner can configure bio check settings.",
+            parse_mode=ParseMode.HTML
+        )
+
+    is_enabled = await is_bio_check_enabled()
+    status_icon = "🟢 <b>ON</b> (Mandatory Bio Verification)" if is_enabled else "🔴 <b>OFF</b> (Free / No Bio Required)"
+    action_text = "Disable Bio Check 🔴" if is_enabled else "Enable Bio Check 🟢"
+
+    text = (
+        "⚙️ <b><u>Global Bio Verification Settings</u></b>\n\n"
+        f"<b>Current Status:</b> {status_icon}\n"
+        f"<b>Required Tag:</b> <code>{REQUIRED_TAG}</code>\n\n"
+        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.</i>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(action_text, callback_data="toggle_bio_status")
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_bio_status")
+        ]
+    ])
+    await message.reply_text(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+
+
+@app.on_callback_query(filters.regex(r"^(toggle_bio_status|refresh_bio_status)$"))
+async def toggle_bio_status_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    if user_id not in get_owner_ids():
+        return await callback_query.answer("⛔ Only the bot owner can change this setting!", show_alert=True)
+
+    action = callback_query.data
+    if action == "toggle_bio_status":
+        curr = await is_bio_check_enabled()
+        new_state = not curr
+        await set_bio_check_enabled(new_state)
+        await callback_query.answer(
+            f"✅ Bio check is now {'ENABLED 🟢' if new_state else 'DISABLED 🔴'}!",
+            show_alert=True
+        )
+    else:
+        await callback_query.answer("🔄 Status refreshed!")
+
+    is_enabled = await is_bio_check_enabled()
+    status_icon = "🟢 <b>ON</b> (Mandatory Bio Verification)" if is_enabled else "🔴 <b>OFF</b> (Free / No Bio Required)"
+    action_text = "Disable Bio Check 🔴" if is_enabled else "Enable Bio Check 🟢"
+
+    text = (
+        "⚙️ <b><u>Global Bio Verification Settings</u></b>\n\n"
+        f"<b>Current Status:</b> {status_icon}\n"
+        f"<b>Required Tag:</b> <code>{REQUIRED_TAG}</code>\n\n"
+        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.</i>"
+    )
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(action_text, callback_data="toggle_bio_status")
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_bio_status")
+        ]
+    ])
+    try:
+        await callback_query.message.edit_text(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
 
