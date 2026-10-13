@@ -27,90 +27,51 @@ from pyrogram.enums import ChatType, ParseMode
 
 
 
-# Public commands that free users can use to read info, check plans, or buy
-PUBLIC_EXEMPT_COMMANDS = {
-    "start",
-    "plans",
-    "plan",
-    "myplan",
-    "guide",
-    "help",
-    "terms",
-    "privacy",
-    "freeaccess",
-    "free_access",
-    "freemirror",
-    "free_mirror",
-    "freebatch",
-    "free_batch",
-    "free",
-    "globalfree",
-    "freetrial",
-    "freeplan",
-    "freemode",
-    "freeaccessmode",
-    "admin",
-    "adminhelp",
-    "panel",
-    "owner",
-    "addadmin",
-    "remadmin",
-    "admins",
-    "addmirror",
-    "remmirror",
-    "checkmirror",
-    "mirrorusers",
-    "mirrordemo",
-    "demomirror",
-    "adddemo",
-    "add",
-    "rem",
-    "check",
-    "transfer",
-    "stats",
-    "getusers",
-    "gcast",
-    "autobroadcast",
-    "setmainchannel",
-    "set",
-    "restart"
-}
-
-@app.on_message(filters.private & filters.command, group=-1)
-async def free_user_command_guard(client, message: Message):
+@app.on_message(group=-2)
+async def free_user_strict_guard(client, message: Message):
     """
-    Blocks all operational commands for Free Users who have no active subscription.
-    Sends a beautiful Upgrade to Premium card with plans and buy buttons.
+    Completely silences and drops all incoming messages and commands from Free Users.
+    No reply, no card, no /start response — only Pro/Premium users and Admins can interact.
     """
-    if not message.text:
+    if not message.from_user:
         return
 
-    # Extract command keyword (e.g. /batch -> batch)
-    raw_cmd = message.text.split()[0].lstrip("/").split("@")[0].lower()
-
-    if raw_cmd in PUBLIC_EXEMPT_COMMANDS:
-        return
-
-    user_id = message.from_user.id if message.from_user else message.chat.id
-    from toxic.core.func import is_free_user, get_upgrade_premium_card
+    user_id = message.from_user.id
+    from toxic.core.func import is_free_user
 
     if await is_free_user(user_id):
-        text, kb = get_upgrade_premium_card(message.from_user)
-        photo_url = "https://freeimage.host/i/n04TxVa"
+        # Absolutely silent! Nothing sent, no reply to /start or any command.
+        message.stop_propagation()
+        return
+
+
+@app.on_callback_query(group=-2)
+async def free_user_strict_callback_guard(client, query: CallbackQuery):
+    """
+    Completely silences and drops all button callback queries from Free Users.
+    """
+    if not query.from_user:
+        return
+
+    user_id = query.from_user.id
+    from toxic.core.func import is_free_user
+
+    if await is_free_user(user_id):
         try:
-            await message.reply_photo(
-                photo=photo_url,
-                caption=text,
-                reply_markup=kb,
-                parse_mode=ParseMode.HTML
-            )
+            await query.answer()
         except Exception:
-            await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-        await message.stop_propagation()
+            pass
+        query.stop_propagation()
+        return
 
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message: Message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    from toxic.core.func import is_free_user
+    if await is_free_user(user_id):
+        return
+
     join = await subscribe(client, message)
     if join == 1:
         return

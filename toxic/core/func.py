@@ -62,6 +62,9 @@ async def chk_mirror_user(user_id):
         return 0
 async def is_free_user(user_id: int) -> bool:
     """Returns True if user has NO active plan, is not Admin/Owner, and Global Free Access is OFF."""
+    if not user_id:
+        return True
+
     from toxic.core.mongo.db import is_admin_or_owner
     if is_admin_or_owner(user_id):
         return False
@@ -80,6 +83,15 @@ async def is_free_user(user_id: int) -> bool:
             return False
         m_users = await mirror_premium_users()
         if str(user_id) in [str(u) for u in m_users]:
+            return False
+
+        # Direct DB fallback check
+        from toxic.core.mongo.plans_db import check_premium, check_mirror_premium
+        p_doc = await check_premium(user_id)
+        if p_doc:
+            return False
+        m_doc = await check_mirror_premium(user_id)
+        if m_doc:
             return False
     except Exception:
         pass
