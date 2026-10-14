@@ -454,7 +454,8 @@ async def set_topic_diamond_icon(userbot, app, tgt_chat_id: int, tgt_topic_id: i
 def extract_caption_content_ids(text: str) -> set:
     """
     Extracts standardized numeric content IDs from message caption text
-    (e.g., PDF ID: 123, Video ID: 456, Lecture ID: 789, [ID: 101], ID: 55).
+    (e.g., PDF ID: 12345, Video ID: 45678, Lecture ID: 78910, [ID: 10123]).
+    Only considers IDs >= 1000 to avoid false duplicate skips on small generic numbers (1, 2, 3).
     """
     if not text:
         return set()
@@ -468,7 +469,9 @@ def extract_caption_content_ids(text: str) -> set:
     for pattern in patterns:
         for match in re.finditer(pattern, str(text)):
             try:
-                extracted_ids.add(int(match.group(1)))
+                val = int(match.group(1))
+                if val >= 1000:
+                    extracted_ids.add(val)
             except Exception:
                 pass
     return extracted_ids
@@ -897,6 +900,17 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
     # ─── Strategy 1: get_discussion_replies (Pyrogram high-level, most accurate) ───
     if topic_id and topic_id != 1:
         try:
+            # Check topic root message itself (msg_id == topic_id)
+            try:
+                top_msg = await userbot.get_messages(src_chat_id, topic_id)
+                if top_msg and not getattr(top_msg, "empty", False):
+                    has_content = bool(top_msg.text or top_msg.caption or top_msg.media or top_msg.document or top_msg.video or top_msg.photo)
+                    if has_content and top_msg.id not in seen_ids:
+                        seen_ids.add(top_msg.id)
+                        collected_messages.append(top_msg)
+            except Exception:
+                pass
+
             async for m in userbot.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
                 if not m or m.id in seen_ids:
                     continue
@@ -981,7 +995,7 @@ async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_
 
             if topic_id == 1:
                 # General topic ONLY: messages with no thread assignment and no thread reply
-                if (m_thread in (None, 1)) and (reply_top in (None, 1)) and (reply_to in (None, 1)):
+                if (m_thread in (None, 1)) and (reply_top in (None, 1)):
                     topic_msg_ids.add(m.id)
             else:
                 # Specific topic thread ONLY:
@@ -1030,6 +1044,102 @@ def extract_topic_id_from_result(created) -> int:
     return None
 
 
+async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=None, disable_web_page_preview=True, reply_markup=None):
+    """
+    Safely sends text messages to Telegram, automatically splitting them if they exceed 3900 characters.
+    Prevents [400 MESSAGE_TOO_LONG] from ever breaking message transfers or reports.
+    """
+    if not text:
+        return None
+
+    str_text = str(text)
+    if len(str_text) <= 3900:
+        try:
+            return await client.send_message(
+                chat_id=chat_id,
+                text=str_text,
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
+                disable_web_page_preview=disable_web_page_preview,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            if "MESSAGE_TOO_LONG" not in str(e):
+                try:
+                    return await client.send_message(
+                        chat_id=chat_id,
+                        text=str_text,
+                        parse_mode=None,
+                        reply_to_message_id=reply_to_message_id,
+                        disable_web_page_preview=disable_web_page_preview,
+                        reply_markup=reply_markup
+                    )
+                except Exception:
+                    pass
+                raise e
+
+    chunks = []
+    lines = str_text.split("\n")
+    curr_chunk = ""
+    for line in lines:
+        if len(curr_chunk) + len(line) + 1 > 3800:
+            if curr_chunk:
+                chunks.append(curr_chunk)
+                curr_chunk = line
+            else:
+                for i in range(0, len(line), 3800):
+                    chunks.append(line[i:i+3800])
+        else:
+            curr_chunk = f"{curr_chunk}\n{line}" if curr_chunk else line
+    if curr_chunk:
+        chunks.append(curr_chunk)
+
+    last_msg = None
+    for idx, chunk in enumerate(chunks):
+        markup = reply_markup if (idx == len(chunks) - 1) else None
+        try:
+            last_msg = await client.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
+                disable_web_page_preview=disable_web_page_preview,
+                reply_markup=markup
+            )
+        except Exception:
+            try:
+                last_msg = await client.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    parse_mode=None,
+                    reply_to_message_id=reply_to_message_id,
+                    disable_web_page_preview=disable_web_page_preview,
+                    reply_markup=markup
+                )
+            except Exception as s_err:
+                print(f"[TopicMirror] send_split_messages chunk error: {s_err}")
+        await asyncio.sleep(0.3)
+    return last_msg
+
+
+async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_markup=None):
+    """Safely edits a status message, capping length at 3800 characters to prevent MESSAGE_TOO_LONG."""
+    if not message or not text:
+        return
+    capped_text = str(text)
+    if len(capped_text) > 3800:
+        capped_text = capped_text[:3700] + "\n\n<i>...[Summary truncated for Telegram message length]</i>"
+    try:
+        await message.edit(capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as e:
+        if "MESSAGE_TOO_LONG" in str(e):
+            capped_text = capped_text[:2800] + "\n\n...[Truncated]"
+            try:
+                await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
+            except Exception:
+                pass
+
+
 async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False):
     """
     Transfers a single message using the bot-only pipeline:
@@ -1049,8 +1159,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         getattr(msg, "empty", False) or 
         getattr(msg, "action", None) or 
         getattr(msg, "forum_topic_created", None) or 
-        getattr(msg, "pinned_message", None) or 
-        (not msg.text and not msg.media and not getattr(msg, 'video', None) and not getattr(msg, 'document', None) and not getattr(msg, 'photo', None) and not getattr(msg, 'audio', None) and not getattr(msg, 'voice', None) and not getattr(msg, 'sticker', None) and not getattr(msg, 'animation', None))):
+        (not msg.text and not msg.media and not getattr(msg, 'video', None) and not getattr(msg, 'document', None) and not getattr(msg, 'photo', None) and not getattr(msg, 'audio', None) and not getattr(msg, 'voice', None) and not getattr(msg, 'sticker', None) and not getattr(msg, 'animation', None) and not getattr(msg, 'poll', None) and not getattr(msg, 'location', None) and not getattr(msg, 'contact', None))):
         return True, "service_skipped", None
 
     user_data = await db.get_data(user_id) or {}
@@ -1101,17 +1210,20 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
     #     media filename sanitization are strictly applied.
     # ─────────────────────────────────────────────────────────────
 
-    # 1. TEXT MESSAGES: Instant, clean & branded post via `app`
+    # 1. TEXT MESSAGES: Instant, clean & branded post via `app` with auto-splitting for long text
     if msg.text:
         try:
             raw_text = msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else (msg.text or "")
             final_text = await clean_and_brand_caption(user_id, raw_text)
             html_text = format_caption_to_html(final_text) if final_text else None
-            sent_txt = await app.send_message(
+            text_to_send = html_text if html_text else (final_text or msg.text)
+
+            sent_txt = await send_split_messages(
+                client=app,
                 chat_id=tgt_chat_id,
-                text=html_text if html_text else (final_text or msg.text),
+                text=text_to_send,
+                parse_mode=ParseMode.HTML if html_text else None,
                 reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True
             )
             sent_id = getattr(sent_txt, 'id', None)
@@ -1123,6 +1235,82 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         except Exception as txt_err:
             print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
             return False, str(txt_err), None
+
+    # 1.1 POLL MESSAGES: Copy or recreate poll in target topic
+    if getattr(msg, "poll", None):
+        try:
+            copied_poll = await app.copy_message(
+                chat_id=tgt_chat_id,
+                from_chat_id=src_chat_id,
+                message_id=msg.id,
+                reply_to_message_id=effective_tgt_topic_id
+            )
+            if copied_poll:
+                await _log_msg(copied_poll)
+                return True, "poll_copied", getattr(copied_poll, 'id', None)
+        except Exception:
+            pass
+        try:
+            poll = msg.poll
+            options = [opt.text for opt in poll.options]
+            sent_poll = await app.send_poll(
+                chat_id=tgt_chat_id,
+                question=poll.question,
+                options=options,
+                is_anonymous=getattr(poll, 'is_anonymous', True),
+                type=getattr(poll, 'type', None),
+                allows_multiple_answers=getattr(poll, 'allows_multiple_answers', False),
+                correct_option_id=getattr(poll, 'correct_option_id', None),
+                explanation=getattr(poll, 'explanation', None),
+                reply_to_message_id=effective_tgt_topic_id
+            )
+            await _log_msg(sent_poll)
+            return True, "poll_sent", getattr(sent_poll, 'id', None)
+        except Exception as p_err:
+            print(f"[TopicMirror] Failed to transfer poll {msg.id}: {p_err}")
+            return False, str(p_err), None
+
+    # 1.2 LOCATION & VENUE MESSAGES
+    if getattr(msg, "location", None) or getattr(msg, "venue", None):
+        try:
+            loc = getattr(msg, "venue", None) or msg.location
+            if getattr(msg, "venue", None):
+                sent_loc = await app.send_venue(
+                    chat_id=tgt_chat_id,
+                    latitude=loc.latitude,
+                    longitude=loc.longitude,
+                    title=getattr(loc, 'title', 'Location'),
+                    address=getattr(loc, 'address', ''),
+                    reply_to_message_id=effective_tgt_topic_id
+                )
+            else:
+                sent_loc = await app.send_location(
+                    chat_id=tgt_chat_id,
+                    latitude=loc.latitude,
+                    longitude=loc.longitude,
+                    reply_to_message_id=effective_tgt_topic_id
+                )
+            await _log_msg(sent_loc)
+            return True, "location_sent", getattr(sent_loc, 'id', None)
+        except Exception as loc_err:
+            print(f"[TopicMirror] Failed to send location {msg.id}: {loc_err}")
+            return False, str(loc_err), None
+
+    # 1.3 CONTACT MESSAGES
+    if getattr(msg, "contact", None):
+        try:
+            sent_cnt = await app.send_contact(
+                chat_id=tgt_chat_id,
+                phone_number=msg.contact.phone_number,
+                first_name=msg.contact.first_name,
+                last_name=msg.contact.last_name or "",
+                reply_to_message_id=effective_tgt_topic_id
+            )
+            await _log_msg(sent_cnt)
+            return True, "contact_sent", getattr(sent_cnt, 'id', None)
+        except Exception as cnt_err:
+            print(f"[TopicMirror] Failed to send contact {msg.id}: {cnt_err}")
+            return False, str(cnt_err), None
 
     # 2. FAST-PATH STICKERS: Direct copy via `app` only if bot is in source chat
     if msg.sticker:
@@ -1168,6 +1356,16 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
         final_caption = await clean_and_brand_caption(user_id, orig_cap)
         caption_html = format_caption_to_html(final_caption) if final_caption else None
+
+        overflow_caption = None
+        if caption_html and len(caption_html) > 1020:
+            split_idx = caption_html.rfind('\n', 0, 1020)
+            if split_idx == -1 or split_idx < 600:
+                split_idx = caption_html.rfind(' ', 0, 1020)
+            if split_idx == -1 or split_idx < 600:
+                split_idx = 1020
+            overflow_caption = caption_html[split_idx:].strip()
+            caption_html = caption_html[:split_idx].strip()
 
         # Check custom thumbnail from settings
         thumb_path = thumbnail(user_id)
@@ -1367,6 +1565,19 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
         # Send copy of uploaded media to LOG_GROUP
         await _log_msg(sent_media)
+
+        # If caption exceeded Telegram's 1024-char limit, send overflow text as continuation reply
+        if overflow_caption and sent_media:
+            try:
+                await send_split_messages(
+                    client=app,
+                    chat_id=tgt_chat_id,
+                    text=overflow_caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=getattr(sent_media, 'id', None)
+                )
+            except Exception as of_err:
+                print(f"[TopicMirror] Overflow caption send notice for msg {msg.id}: {of_err}")
 
         sent_id = getattr(sent_media, 'id', None)
         return True, "download_uploaded", sent_id
@@ -3934,8 +4145,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             overall_failed += 1
                             topic_stats[src_topic_id]["failed"] += 1
 
-                    # Update checkpoint in MongoDB immediately after message is processed
-                    await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                    # Update checkpoint in MongoDB only on success or intended filter skip (never advance on failure)
+                    if success or method in ("service_skipped", "skipped_filter"):
+                        await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
 
                     # Update live high-speed status UI every 3.5 seconds
                     now = time.time()
@@ -4012,7 +4224,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         for tid, stat in topic_stats.items():
             breakdown_lines.append(f"• **{stat['title']}**: ✅ `{stat['copied']}` | ⏩ `{stat['skipped']}` | ❌ `{stat['failed']}`")
 
-        breakdown_text = "\n".join(breakdown_lines) if breakdown_lines else "No messages processed."
+        if len(breakdown_lines) > 25:
+            breakdown_text = "\n".join(breakdown_lines[:25]) + f"\n\n... and {len(breakdown_lines) - 25} more topics synced."
+        else:
+            breakdown_text = "\n".join(breakdown_lines) if breakdown_lines else "No messages processed."
         is_cancelled = not active_mirrors.get(user_id, {}).get("running", True)
         status_label = "🛑 **Mirror Cancelled by User**" if is_cancelled else "🎉 **Mirror Complete!**"
         total_time_taken = TimeFormatter(int((time.time() - start_overall_time) * 1000))
@@ -4040,16 +4255,21 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         ])
 
         final_html = format_caption_to_html(final_report)
+        report_to_send = final_html if final_html else final_report
         try:
-            await status_msg.edit(final_html if final_html else final_report, parse_mode=ParseMode.HTML, reply_markup=final_kb)
+            await safe_edit_message(status_msg, report_to_send, reply_markup=final_kb)
         except Exception:
-            await app.send_message(user_id, final_html if final_html else final_report, parse_mode=ParseMode.HTML, reply_markup=final_kb)
+            try:
+                await send_split_messages(app, user_id, report_to_send, reply_markup=final_kb)
+            except Exception:
+                pass
 
-        # Send Completion Report to LOG_GROUP
+        # Send Completion Report to LOG_GROUP safely with chunking
         log_chat = get_log_group()
         if log_chat:
             try:
-                await app.send_message(
+                await send_split_messages(
+                    client=app,
                     chat_id=log_chat,
                     text=f"📋 **[TOPIC MIRROR FINAL REPORT]**\n\n{final_report}"
                 )
@@ -4066,7 +4286,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 if is_auto_update:
                     target_group_msg = (
                         "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘆𝗻𝗰 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
-                        "✨ <b>Status:</b> All Topics Are Already 100% Up-To-Date!\n"
+                        "✨ <b>Status:</b> All Forum Topics & Content 100% Synced!\n"
                         "📁 <b>New Content Added:</b> <code>0</code> files\n"
                         f"⏩ <b>Verified Synced:</b> <code>{overall_skipped}</code> files\n"
                         f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
@@ -4075,7 +4295,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 else:
                     target_group_msg = (
                         "<blockquote><b>✅ 𝗔𝗹𝗹 𝗧𝗼𝗽𝗶𝗰𝘀 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗨𝗽-𝗧𝗼-𝗗𝗮𝘁𝗲! 😎</b>\n\n"
-                        "✨ <b>Status:</b> No new content was found to copy.\n"
+                        "✨ <b>Status:</b> All Forum Topics & Content 100% Synced!\n"
                         "📁 <b>New Files:</b> <code>0</code> files\n"
                         f"⏩ <b>Already Synced:</b> <code>{overall_skipped}</code> files\n"
                         f"⏱ <b>Check Time:</b> <code>{time_str}</code></blockquote>"
