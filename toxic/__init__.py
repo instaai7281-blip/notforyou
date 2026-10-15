@@ -230,6 +230,7 @@ async def restrict_bot():
             BotCommand("login", "🔑 𝗔𝗰𝗰𝗲𝘀𝘀 𝘆𝗼𝘂𝗿 𝗮𝗰𝗰𝗼𝘂𝗻𝘁"),
             BotCommand("logout", "🚪 𝗦𝗲𝗰𝘂𝗿𝗲 𝗲𝘅𝗶𝘁"),
             BotCommand("settings", "⚙️ 𝗖𝘂𝘀𝘁𝗼𝗺𝗶𝘇𝗲 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀"),
+            BotCommand("viewonce", "🔥 𝗩𝗶𝗲𝘄-𝗢𝗻𝗰𝗲 𝗔𝘂𝘁𝗼-𝗦𝗮𝘃𝗲𝗿"),
             BotCommand("speedtest", "🚅 𝗦𝗽𝗲𝗲𝗱 𝘁𝗲𝘀𝘁"),
             BotCommand("terms", "📜 𝗧𝗲𝗿𝗺𝘀 & 𝗰𝗼𝗻𝗱𝗶𝘁𝗶𝗼𝗻𝘀"),
             BotCommand("mirrorusers", "🎛️ 𝗠𝗮𝗻𝗮𝗴𝗲 𝗺𝗶𝗿𝗿𝗼𝗿 𝘂𝘀𝗲𝗿𝘀 (𝗢𝘄𝗻𝗲𝗿)"),

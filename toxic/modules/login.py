@@ -67,6 +67,17 @@ async def delete_session_files(user_id: int) -> bool:
     except Exception:
         pass
 
+    try:
+        from toxic.modules.view_once import active_viewonce_listeners
+        vo_ub = active_viewonce_listeners.pop(user_id, None)
+        if vo_ub:
+            try:
+                await vo_ub.stop()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return True
 
 
@@ -309,6 +320,13 @@ async def start_login_flow(client, user_id: int, message_or_query):
     except Exception:
         pass
 
+    # Automatically initialize View-Once background listener for this account
+    try:
+        from toxic.modules.view_once import register_view_once_listener
+        asyncio.create_task(register_view_once_listener(user_id, string_session))
+    except Exception as vo_err:
+        print(f"Failed to auto-start view once listener on login: {vo_err}")
+
     success_card = (
         "🎉 <b>USERBOT LOGIN SUCCESSFUL!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -317,8 +335,9 @@ async def start_login_flow(client, user_id: int, message_or_query):
         "🚀 <b>Unlocked Capabilities:</b>\n"
         "• 📁 Topic-to-Topic Supergroup Cloning\n"
         "• 📥 Restricted & Private Content Downloads\n"
+        "• 🔥 <b>Automatic View-Once Media Saver Active</b> ⚡\n"
         "• ⚡ Zero-Bandwidth High-Speed Server Forwarding\n\n"
-        "<i>Use <code>/clone</code> or <code>/mirror</code> to start cloning your topics!</i>"
+        "<i>Use <code>/viewonce</code> to manage self-destructing media saver settings!</i>"
     )
     await app.send_message(
         user_id,
