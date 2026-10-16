@@ -33,10 +33,10 @@ async def free_user_strict_guard(client, message: Message):
     Completely silences and drops all incoming messages and commands from Free Users.
     No reply, no card, no /start response — only Pro/Premium users and Admins can interact.
     """
-    if not message.from_user:
+    user_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
+    if not user_id:
         return
 
-    user_id = message.from_user.id
     from toxic.core.func import is_free_user
 
     if await is_free_user(user_id):
@@ -48,17 +48,30 @@ async def free_user_strict_guard(client, message: Message):
 @app.on_callback_query(group=-2)
 async def free_user_strict_callback_guard(client, query: CallbackQuery):
     """
-    Completely silences and drops all button callback queries from Free Users.
+    Drops button callbacks from Free Users EXCEPT bio verification & plan views.
     """
-    if not query.from_user:
+    user_id = query.from_user.id if query.from_user else 0
+    if not user_id:
         return
 
-    user_id = query.from_user.id
     from toxic.core.func import is_free_user
 
     if await is_free_user(user_id):
+        # Allow bio verification callbacks and plan viewing so user can verify or buy
+        allowed_free_callbacks = (
+            "verify_user_bio",
+            "bio_terms_info",
+            "back_to_bio_prompt",
+            "see_plan",
+            "see_terms",
+            "check_my_sub",
+        )
+        data = getattr(query, "data", "") or ""
+        if any(data == cb or data.startswith(cb) for cb in allowed_free_callbacks):
+            return  # Allow propagation to the bio / plan handler!
+
         try:
-            await query.answer()
+            await query.answer("⛔ Access Restricted: Premium account required.", show_alert=True)
         except Exception:
             pass
         query.stop_propagation()

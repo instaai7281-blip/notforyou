@@ -61,7 +61,7 @@ async def chk_mirror_user(user_id):
     if str(user_id) in mirror_user_strings:
         return 0
 async def is_free_user(user_id: int) -> bool:
-    """Returns True if user has NO active plan, is not Admin/Owner."""
+    """Returns True if user has NO active paid plan, is not Admin/Owner."""
     if not user_id:
         return True
 
@@ -69,7 +69,7 @@ async def is_free_user(user_id: int) -> bool:
     if is_admin_or_owner(user_id):
         return False
 
-    # Check direct DB with expiry validation first for absolute accuracy
+    # Check direct DB with expiry validation for absolute accuracy
     try:
         from toxic.core.mongo.plans_db import check_premium, check_mirror_premium
         p_doc = await check_premium(user_id)
@@ -80,13 +80,6 @@ async def is_free_user(user_id: int) -> bool:
             return False
     except Exception as e:
         print(f"Error checking user premium in db: {e}")
-
-    try:
-        from toxic.core.mongo.plans_db import is_global_batch_free, is_global_mirror_free
-        if await is_global_batch_free() or await is_global_mirror_free():
-            return False
-    except Exception:
-        pass
 
     return True
 

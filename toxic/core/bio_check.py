@@ -9,6 +9,8 @@
 import logging
 import html
 import unicodedata
+import asyncio
+from datetime import datetime, timedelta
 
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -32,9 +34,73 @@ join_req_db = tdb["pending_join_requests"]
 invite_link_db = tdb["channel_invite_links"]
 bio_settings_db = tdb["global_bio_settings"]
 verified_bio_users_db = tdb["verified_bio_users"]
+bio_auto_deletions_db = tdb["bio_auto_deletions"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def schedule_bio_message_auto_delete(
+    client: Client,
+    chat_id: int,
+    message_id: int,
+    delay_seconds: int = 7200
+):
+    """
+    Schedules a bio verification message for automatic deletion after 2 hours (7200s).
+    Saves to MongoDB so it persists across bot restarts, and spawns an asyncio task.
+    """
+    delete_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+    try:
+        await bio_auto_deletions_db.update_one(
+            {"chat_id": chat_id, "message_id": message_id},
+            {"$set": {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "delete_at": delete_at
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        logger.warning("Failed to store bio auto-deletion in DB: %s", e)
+
+    asyncio.create_task(_async_delete_after_delay(client, chat_id, message_id, delay_seconds))
+
+
+async def _async_delete_after_delay(client: Client, chat_id: int, message_id: int, delay_seconds: int):
+    try:
+        await asyncio.sleep(delay_seconds)
+        await client.delete_messages(chat_id=chat_id, message_ids=message_id)
+        logger.info("Auto-deleted bio verification message %s in chat %s after 2 hours.", message_id, chat_id)
+    except Exception as e:
+        logger.debug("Failed to auto-delete bio message %s in chat %s: %s", message_id, chat_id, e)
+    finally:
+        try:
+            await bio_auto_deletions_db.delete_one({"chat_id": chat_id, "message_id": message_id})
+        except Exception:
+            pass
+
+
+async def check_pending_bio_auto_deletions(client: Client):
+    """
+    Checks MongoDB for any expired bio verification messages and deletes them.
+    Called periodically by background scheduler.
+    """
+    try:
+        now = datetime.utcnow()
+        cursor = bio_auto_deletions_db.find({"delete_at": {"$lte": now}})
+        async for item in cursor:
+            chat_id = item.get("chat_id")
+            message_id = item.get("message_id")
+            if chat_id and message_id:
+                try:
+                    await client.delete_messages(chat_id=chat_id, message_ids=message_id)
+                    logger.info("Cleaned up expired bio message %s in chat %s from DB queue.", message_id, chat_id)
+                except Exception as e:
+                    logger.debug("Could not delete expired bio message %s: %s", message_id, e)
+                await bio_auto_deletions_db.delete_one({"_id": item["_id"]})
+    except Exception as e:
+        logger.debug("Error checking pending bio auto deletions: %s", e)
 
 async def mark_user_bio_verified(user_id: int, tag: str, first_name: str = ""):
     """Marks a user as having verified the required bio tag in MongoDB."""
@@ -420,16 +486,19 @@ async def check_user_bio_access(
         "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
         f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
         "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Auto Delete:</b> ⏱️ <i>Yeh verification message 2 ghante baad auto-delete ho jayega.</i>\n"
         "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
     )
 
     try:
-        await message.reply_text(
+        sent_msg = await message.reply_text(
             prompt_text,
             reply_markup=get_verification_buttons(),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
+        if sent_msg and hasattr(sent_msg, "id"):
+            await schedule_bio_message_auto_delete(client, message.chat.id, sent_msg.id, 7200)
     except Exception as e:
         logger.warning("Could not send bio verification prompt: %s", e)
 
@@ -543,18 +612,21 @@ async def handle_chat_join_request(
         "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
         f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
         "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Auto Delete:</b> ⏱️ <i>Yeh verification message 2 ghante baad auto-delete ho jayega.</i>\n"
         "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
     )
 
 
     try:
-        await client.send_message(
+        sent_msg = await client.send_message(
             user_id,
             prompt_text,
             reply_markup=get_verification_buttons(),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
+        if sent_msg and hasattr(sent_msg, "id"):
+            await schedule_bio_message_auto_delete(client, user_id, sent_msg.id, 7200)
     except Exception as e:
         logger.warning("Could not send prompt to user %s: %s", user_id, e)
 
@@ -720,6 +792,7 @@ async def back_to_bio_prompt_callback(client: Client, callback_query: CallbackQu
         "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
         f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
         "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Auto Delete:</b> ⏱️ <i>Yeh verification message 2 ghante baad auto-delete ho jayega.</i>\n"
         "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
     )
     try:

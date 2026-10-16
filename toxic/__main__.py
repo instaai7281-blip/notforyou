@@ -24,13 +24,19 @@ from aiojobs import create_scheduler
 
 loop = asyncio.get_event_loop()
 
-# Function to schedule expiry checks
+# Function to schedule expiry checks & bio message auto-deletions
 async def schedule_expiry_check():
     scheduler = await create_scheduler()
     while True:
         await scheduler.spawn(check_and_remove_expired_users())
         await scheduler.spawn(check_and_remove_expired_mirror_users())
-        await asyncio.sleep(60)  # Check every 60 seconds for accurate demo/hourly expirations
+        try:
+            from toxic import app
+            from toxic.core.bio_check import check_pending_bio_auto_deletions
+            await scheduler.spawn(check_pending_bio_auto_deletions(app))
+        except Exception:
+            pass
+        await asyncio.sleep(60)  # Check every 60 seconds
         gc.collect()
 
 
