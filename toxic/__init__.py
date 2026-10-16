@@ -66,10 +66,10 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=300,
+    workers=24,
     parse_mode=ParseMode.MARKDOWN,
     sleep_threshold=120,
-    max_concurrent_transmissions=128
+    max_concurrent_transmissions=16
 )
 
 # Multi-client pool for balancing
@@ -77,7 +77,7 @@ pro_clients = []
 if STRINGS:
     for i, session in enumerate(STRINGS):
         # Setting no_updates=True prevents the client from crashing on unknown Story updates
-        pro_clients.append(Client(f"pro_client_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session, workers=150, sleep_threshold=120, no_updates=True, max_concurrent_transmissions=128))
+        pro_clients.append(Client(f"pro_client_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session, workers=16, sleep_threshold=120, no_updates=True, max_concurrent_transmissions=16))
     pro = pro_clients[0] # Backward compatibility
 else:
     pro = None

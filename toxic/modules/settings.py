@@ -444,7 +444,10 @@ async def chatid_actions_callback(client, callback_query: CallbackQuery):
             await ask.reply("Action cancelled.")
         else:
             val = ask.text.strip()
-            from toxic.core.get_func import parse_target_chat
+            try:
+                from toxic.core.func import parse_target_chat
+            except ImportError:
+                from toxic.core.get_func import parse_target_chat
             parsed_chat = parse_target_chat(val)
             
             chat_to_save = parsed_chat

@@ -135,6 +135,7 @@ async def sync_all_broadcast_destinations():
                     await add_sb_destination(chat.id, title, c_type)
                     from toxic.core.mongo.db import add_joined_chat
                     await add_joined_chat(chat.id, title, chat_type=c_type)
+                await asyncio.sleep(0.05)
         except Exception:
             pass
 
@@ -158,6 +159,7 @@ async def sync_all_broadcast_destinations():
             pass
 
         for j in all_chats:
+            await asyncio.sleep(0.05)
             cid = j.get("chat_id")
             if not cid or cid >= 0:
                 continue
@@ -212,6 +214,7 @@ async def sync_all_broadcast_destinations():
                     if uid > 0:
                         registered_uids.add(uid)
                         await add_sb_destination(uid, f"User {uid}", "private")
+                await asyncio.sleep(0.01)
 
             # Clean up any non-registered private contacts from destinations collection
             await _dest_col.delete_many({

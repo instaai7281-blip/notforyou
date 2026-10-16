@@ -24,6 +24,16 @@ from aiojobs import create_scheduler
 
 loop = asyncio.get_event_loop()
 
+async def optimized_memory_cleanup():
+    while True:
+        # Purani aur unused memory manually free karo
+        collected = gc.collect()
+        print(f"[MEMORY] Garbage collected: {collected} objects freed.")
+        
+        # Har 10 minute mein memory cleanup run hoga taaki RAM overload na ho
+        await asyncio.sleep(600)
+
+
 # Function to schedule expiry checks & bio message auto-deletions
 async def schedule_expiry_check():
     scheduler = await create_scheduler()
@@ -37,7 +47,6 @@ async def schedule_expiry_check():
         except Exception:
             pass
         await asyncio.sleep(60)  # Check every 60 seconds
-        gc.collect()
 
 
 # Function to broadcast upgrade plans daily at 7 PM
@@ -340,6 +349,7 @@ Status: Running Successfully...
     asyncio.create_task(schedule_expiry_check())
     asyncio.create_task(schedule_broadcast_task())
     asyncio.create_task(schedule_mirror_auto_updates())
+    asyncio.create_task(optimized_memory_cleanup())
     try:
         from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler
         asyncio.create_task(sync_all_broadcast_destinations())

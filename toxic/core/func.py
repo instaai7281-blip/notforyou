@@ -742,3 +742,35 @@ def add_pdf_watermark(pdf_path, watermark_text):
                 pass
         return pdf_path
 
+
+def parse_target_chat(input_str: str) -> str:
+    """
+    Parses a target chat string, channel link, or topic message link into a valid format.
+    Examples:
+      - '-100123456789' -> '-100123456789'
+      - 'https://t.me/c/123456789/430/431' -> '-100123456789/430'
+      - 'https://t.me/c/123456789/5' -> '-100123456789'
+    """
+    if not input_str:
+        return ""
+
+    input_str = str(input_str).strip()
+
+    if "t.me/c/" in input_str or "telegram.me/c/" in input_str:
+        parts = [p for p in input_str.split("/") if p]
+        if "c" in parts:
+            c_idx = parts.index("c")
+            if c_idx + 1 < len(parts):
+                raw_id = parts[c_idx + 1]
+                chat_id = f"-100{raw_id}" if not raw_id.startswith("-") else raw_id
+                
+                remaining = parts[c_idx + 2:]
+                if len(remaining) >= 2:
+                    topic_id = remaining[0]
+                    return f"{chat_id}/{topic_id}"
+                elif len(remaining) == 1:
+                    return f"{chat_id}"
+                return chat_id
+
+    return input_str
+
