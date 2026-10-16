@@ -23,15 +23,59 @@ from pyrogram.raw import functions
 
 from config import OWNER_ID
 from toxic import app, tdb
+from toxic.core.mongo.db import is_admin_or_owner
 
-REQUIRED_TAG = "@Crazy_for_Goals"
+DEFAULT_REQUIRED_TAG = "@Crazy_for_Goals"
+REQUIRED_TAG = DEFAULT_REQUIRED_TAG
 
 join_req_db = tdb["pending_join_requests"]
 invite_link_db = tdb["channel_invite_links"]
 bio_settings_db = tdb["global_bio_settings"]
+verified_bio_users_db = tdb["verified_bio_users"]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+async def mark_user_bio_verified(user_id: int, tag: str, first_name: str = ""):
+    """Marks a user as having verified the required bio tag in MongoDB."""
+    try:
+        await verified_bio_users_db.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "first_name": first_name or "",
+                    "tag": tag,
+                    "status": "verified"
+                }
+            },
+            upsert=True
+        )
+    except Exception as e:
+        logger.error("Failed to mark user bio verified: %s", e)
+
+
+async def mark_user_bio_revoked(user_id: int):
+    """Marks a user as having removed or lost the required bio tag."""
+    try:
+        await verified_bio_users_db.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "status": "revoked"
+                }
+            }
+        )
+    except Exception as e:
+        logger.error("Failed to mark user bio revoked: %s", e)
+
+
+async def get_verified_bio_users_count() -> int:
+    """Returns the total number of users who currently have verified bio tags."""
+    try:
+        return await verified_bio_users_db.count_documents({"status": "verified"})
+    except Exception:
+        return 0
 
 async def is_bio_check_enabled() -> bool:
     """Returns True if Bio Verification is enabled. Defaults to False (OFF)."""
@@ -55,7 +99,35 @@ async def set_bio_check_enabled(enabled: bool):
         logger.error("Failed to save bio setting: %s", e)
 
 
-def has_bio_tag(user_bio: str) -> bool:
+async def get_required_bio_tag() -> str:
+    """Returns the current required bio tag from MongoDB. Defaults to @Crazy_for_Goals."""
+    try:
+        doc = await bio_settings_db.find_one({"_id": "bio_verification_tag"})
+        if doc and doc.get("tag"):
+            return str(doc["tag"]).strip()
+    except Exception:
+        pass
+    return DEFAULT_REQUIRED_TAG
+
+
+async def set_required_bio_tag(tag: str) -> str:
+    """Saves the required bio tag to MongoDB."""
+    tag_clean = str(tag).strip()
+    if not tag_clean.startswith("@"):
+        tag_clean = f"@{tag_clean}"
+    try:
+        await bio_settings_db.update_one(
+            {"_id": "bio_verification_tag"},
+            {"$set": {"tag": tag_clean}},
+            upsert=True
+        )
+        return tag_clean
+    except Exception as e:
+        logger.error("Failed to save required bio tag: %s", e)
+        return tag_clean
+
+
+def has_bio_tag(user_bio: str, target_tag: str = None) -> bool:
     if not user_bio:
         return False
 
@@ -65,10 +137,18 @@ def has_bio_tag(user_bio: str) -> bool:
         c if c.isalnum() or c == "_" else " "
         for c in normalized
     )
+    clean_nospace = clean_text.replace(" ", "")
+
+    if target_tag:
+        raw_tag = str(target_tag).lower().replace("@", "").strip()
+        raw_clean = "".join(c if c.isalnum() or c == "_" else " " for c in raw_tag).strip()
+        raw_nospace = raw_clean.replace(" ", "")
+        if raw_clean and (raw_clean in clean_text or raw_nospace in clean_nospace):
+            return True
 
     return (
         "crazy_for_goals" in clean_text
-        or "crazyforgoals" in clean_text.replace(" ", "")
+        or "crazyforgoals" in clean_nospace
     )
 
 
@@ -259,6 +339,16 @@ def get_verification_buttons():
         ],
         [
             InlineKeyboardButton(
+                "📜 Bio Rules & Terms",
+                callback_data="bio_terms_info"
+            ),
+            InlineKeyboardButton(
+                "💎 View Plans",
+                callback_data="see_plan"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "📢 Main Channel",
                 url="https://t.me/Crazy_for_Goals"
             ),
@@ -284,33 +374,53 @@ async def check_user_bio_access(
     user_name = html.escape(message.from_user.first_name or "User")
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
-    if user_id in get_owner_ids():
+    if user_id in get_owner_ids() or is_admin_or_owner(user_id):
         return True
 
+    req_tag = await get_required_bio_tag()
     bio = await get_fresh_user_bio(client, user_id)
 
-    # If bio has the required tag, grant access
-    if bio is not None and has_bio_tag(bio):
+    # If bio has the required tag, grant access and track
+    if bio is not None and has_bio_tag(bio, req_tag):
+        await mark_user_bio_verified(user_id, req_tag, message.from_user.first_name)
         return True
 
-    # Otherwise (whether bio is hidden by privacy, empty, or missing tag), show the official Access Denied card
-    prompt_text = (
-        "🔒 <b>Access Denied ❌</b>\n\n"
-        f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
+    # Check if previously verified user removed the tag
+    user_doc = await verified_bio_users_db.find_one({"user_id": user_id})
+    was_previously_verified = bool(user_doc and user_doc.get("status") == "verified")
+    if was_previously_verified:
+        await mark_user_bio_revoked(user_id)
+        header_text = (
+            "⚠️ <b>Warning: Bio Tag Removed! ❌</b>\n\n"
+            f"Hey {user_mention} 👋 Aapne apne profile bio se required tag <code>{req_tag}</code> hata diya hai!\n"
+            "Aapka free bot access <b>suspend</b> kar diya gaya hai.\n\n"
+        )
+    else:
+        header_text = (
+            "🔒 <b>Access Denied ❌</b>\n\n"
+            f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
+        )
 
-        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+    # Otherwise show the official Access Denied / Warning card with Bio Terms
+    prompt_text = (
+        f"{header_text}"
+        "Join / Use karne ke liye bas ye 2 simple steps follow karo 😊:\n"
         "─────────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
         "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
-        f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
+        f"<blockquote>● <code>{req_tag}</code> ♡</blockquote>\n"
         "<i>(Tap to Copy 👆)</i>\n\n"
         " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
         "Bio update karne ke baad niche\n\n"
         "<b>🟢 Verify Bio 🔄</b>\n\n"
         "Button par tap kar do,\n"
         "instant Access mil jayega! 🚀\n"
-        "─────────────────"
-
+        "─────────────────\n\n"
+        "<blockquote><b>⚖️ <u>Bio Verification Rules & Terms:</u></b>\n"
+        "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
+        f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
+        "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
     )
 
     try:
@@ -361,12 +471,14 @@ async def handle_chat_join_request(
         suffix=" !"
     )
 
+    req_tag = await get_required_bio_tag()
     bio = await get_fresh_user_bio(client, user_id)
 
-    if bio is not None and has_bio_tag(bio):
+    if bio is not None and has_bio_tag(bio, req_tag):
         try:
             await client.approve_chat_join_request(chat_id, user_id)
             logger.info("Approved user %s in chat %s", user_id, chat_id)
+            await mark_user_bio_verified(user_id, req_tag, request.from_user.first_name)
         except Exception as e:
             logger.error("Failed to approve user %s: %s", user_id, e)
 
@@ -378,7 +490,7 @@ async def handle_chat_join_request(
             f"{chat_display_excl}\n\n"
             "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
             f"⚠️ <b>Note:</b> <i>Agar Bio se "
-            f"<code>{REQUIRED_TAG}</code> hataya to access "
+            f"<code>{req_tag}</code> hataya to access "
             "firse deny ho jayega. 📑</i>\n\n"
             "👉 <b>Send /start to proceed!</b>"
         )
@@ -419,14 +531,19 @@ async def handle_chat_join_request(
         "─────────────────\n"
         " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
         "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
-        f"<blockquote>● <code>{REQUIRED_TAG}</code> ♡</blockquote>\n"
+        f"<blockquote>● <code>{req_tag}</code> ♡</blockquote>\n"
         "<i>(Tap to Copy 👆)</i>\n\n"
         " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
         "Bio update karne ke baad niche\n\n"
         "<b>🟢 Verify Bio 🔄</b>\n\n"
         "Button par tap kar do,\n"
         "instant Access mil jayega! 🚀\n"
-        "─────────────────"
+        "─────────────────\n\n"
+        "<blockquote><b>⚖️ <u>Bio Verification Rules & Terms:</u></b>\n"
+        "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
+        f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
+        "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
     )
 
 
@@ -454,15 +571,16 @@ async def verify_user_bio_callback(
     )
     user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
 
+    req_tag = await get_required_bio_tag()
     if not await is_bio_check_enabled():
         await callback_query.answer("🔓 Bio verification is currently OFF! Access granted. 🎉", show_alert=True)
     else:
         bio = await get_fresh_user_bio(client, user_id)
 
-        if bio is None or not has_bio_tag(bio):
+        if bio is None or not has_bio_tag(bio, req_tag):
             denied_msg = (
                 "❌ Access Denied!\n\n"
-                f"1️⃣ Bio me '{REQUIRED_TAG}' tag lagayein.\n"
+                f"1️⃣ Bio me '{req_tag}' tag lagayein.\n"
                 "2️⃣ Privacy Setting: Settings ⚙️ ➔ "
                 "Privacy & Security ➔ Bio ➔ Set to 'Everybody'!\n\n"
                 "Fir 🟢 Verify Bio 🔄 button par click karein."
@@ -478,6 +596,7 @@ async def verify_user_bio_callback(
             "🔓 Access Granted! Aapka Bio Verify ho gaya hai. 🎉",
             show_alert=True
         )
+        await mark_user_bio_verified(user_id, req_tag, callback_query.from_user.first_name)
 
 
     pending_requests = await join_req_db.find(
@@ -531,7 +650,7 @@ async def verify_user_bio_callback(
     approve_text += (
         "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
         f"⚠️ <b>Note:</b> <i>Agar Bio se "
-        f"<code>{REQUIRED_TAG}</code> hataya to access "
+        f"<code>{req_tag}</code> hataya to access "
         "firse deny ho jayega. 📑</i>\n\n"
         "👉 <b>Send /start to proceed!</b>"
     )
@@ -546,41 +665,155 @@ async def verify_user_bio_callback(
         logger.warning("Could not edit verification message: %s", e)
 
 
-@app.on_message(filters.command(["biocheck", "togglebio", "biostatus"]) & filters.private)
+@app.on_callback_query(filters.regex("^bio_terms_info$"))
+async def bio_terms_info_callback(client: Client, callback_query: CallbackQuery):
+    req_tag = await get_required_bio_tag()
+    terms_info = (
+        "<blockquote><b>📜 <u>OFFICIAL BIO VERIFICATION TERMS</u></b></blockquote>\n\n"
+        "<blockquote><b>1️⃣ Mandatory Tag Requirement:</b>\n"
+        f"• Free users must keep <code>{req_tag}</code> in their profile bio continuously.\n"
+        "• Any tampering or removal of the tag results in immediate access revocation.</blockquote>\n\n"
+        "<blockquote><b>2️⃣ Privacy Settings:</b>\n"
+        "• Telegram profile settings must allow <b>Bio: Everybody</b> (Settings ⚙️ ➔ Privacy & Security ➔ Bio).\n"
+        "• If bio is hidden under 'Nobody' or 'My Contacts', our automated system cannot verify your profile.</blockquote>\n\n"
+        "<blockquote><b>3️⃣ Channel Join Requests:</b>\n"
+        "• All pending channel join requests are approved automatically upon successful bio verification.\n"
+        "• If the tag is removed later, user will be restricted from bot services.</blockquote>\n\n"
+        "<blockquote><b>4️⃣ Premium Exemption:</b>\n"
+        "• Users with an active <b>Premium Plan</b> are 100% exempt from the bio tag rule.</blockquote>"
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🟢 Verify Bio 🔄", callback_data="verify_user_bio"),
+            InlineKeyboardButton("🔙 Back", callback_data="back_to_bio_prompt")
+        ]
+    ])
+    try:
+        await callback_query.message.edit_text(terms_info, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback_query.answer("📜 Please review the bio terms displayed.", show_alert=True)
+
+
+@app.on_callback_query(filters.regex("^back_to_bio_prompt$"))
+async def back_to_bio_prompt_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    user_name = html.escape(callback_query.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+    req_tag = await get_required_bio_tag()
+
+    prompt_text = (
+        "🔒 <b>Access Denied ❌</b>\n\n"
+        f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
+        "Join karne ke liye bas ye 2 simple steps follow karo 😊:\n"
+        "─────────────────\n"
+        " 💡 <b><u>Step</u> 1️⃣</b>\n\n"
+        "Add This 👇 Tag in <a href=\"tg://settings\"><b>Your Bio</b></a> 👀\n\n"
+        f"<blockquote>● <code>{req_tag}</code> ♡</blockquote>\n"
+        "<i>(Tap to Copy 👆)</i>\n\n"
+        " 💡 <b><u>Step</u> 2️⃣</b>\n\n"
+        "Bio update karne ke baad niche\n\n"
+        "<b>🟢 Verify Bio 🔄</b>\n\n"
+        "Button par tap kar do,\n"
+        "instant Access mil jayega! 🚀\n"
+        "─────────────────\n\n"
+        "<blockquote><b>⚖️ <u>Bio Verification Rules & Terms:</u></b>\n"
+        "• <b>Privacy:</b> Settings ⚙️ ➔ Privacy ➔ Bio must be set to <b>'Everybody'</b>.\n"
+        f"• <b>Mandatory:</b> <code>{req_tag}</code> bio me hona anivarya hai.\n"
+        "• <b>Auto Revoke:</b> Tag hatane par access turant terminate ho jata hai.\n"
+        "• <b>Premium Users:</b> Premium users ke liye koi bio tag required nahi hai.</blockquote>"
+    )
+    try:
+        await callback_query.message.edit_text(prompt_text, reply_markup=get_verification_buttons(), parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+
+@app.on_message(filters.command(["biocheck", "togglebio", "biostatus", "bio"]) & filters.private)
 async def biocheck_command(client: Client, message: Message):
     user_id = message.from_user.id
-    if user_id not in get_owner_ids():
+    if not is_admin_or_owner(user_id) and user_id not in get_owner_ids():
         return await message.reply_text(
-            "⛔ <b>Admin Only:</b> Only the bot owner can configure bio check settings.",
+            "⛔ <b>Admin Only:</b> Only bot admins or owner can configure bio check settings.",
             parse_mode=ParseMode.HTML
         )
 
     is_enabled = await is_bio_check_enabled()
+    req_tag = await get_required_bio_tag()
+    verified_count = await get_verified_bio_users_count()
     status_icon = "🟢 <b>ON</b> (Mandatory Bio Verification)" if is_enabled else "🔴 <b>OFF</b> (Free / No Bio Required)"
     action_text = "Disable Bio Check 🔴" if is_enabled else "Enable Bio Check 🟢"
 
     text = (
         "⚙️ <b><u>Global Bio Verification Settings</u></b>\n\n"
         f"<b>Current Status:</b> {status_icon}\n"
-        f"<b>Required Tag:</b> <code>{REQUIRED_TAG}</code>\n\n"
-        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.</i>"
+        f"<b>Required Tag:</b> <code>{req_tag}</code>\n"
+        f"👥 <b>Verified Bio Users:</b> <code>{verified_count}</code> users\n\n"
+        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.\n"
+        "Admins can toggle ON/OFF or change the verification tag directly from this panel or using /setbiotag.</i>"
     )
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(action_text, callback_data="toggle_bio_status")
         ],
         [
-            InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_bio_status")
+            InlineKeyboardButton("🏷️ Change Bio Tag", callback_data="change_bio_tag_prompt"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_bio_status")
         ]
     ])
     await message.reply_text(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
-@app.on_callback_query(filters.regex(r"^(toggle_bio_status|refresh_bio_status)$"))
+@app.on_message(filters.command(["setbiotag", "biotag"]) & filters.private)
+async def set_bio_tag_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if not is_admin_or_owner(user_id) and user_id not in get_owner_ids():
+        return await message.reply_text(
+            "⛔ <b>Admin Only:</b> Only bot admins or owner can configure bio tag.",
+            parse_mode=ParseMode.HTML
+        )
+
+    if len(message.command) > 1:
+        new_tag = message.text.split(None, 1)[1].strip()
+        saved_tag = await set_required_bio_tag(new_tag)
+        return await message.reply_text(
+            f"✅ <b>Required Bio Tag Updated!</b>\n\n"
+            f"🏷️ <b>New Required Tag:</b> <code>{saved_tag}</code>\n\n"
+            f"<i>All future bio checks and channel join requests will verify this tag.</i>",
+            parse_mode=ParseMode.HTML
+        )
+
+    curr_tag = await get_required_bio_tag()
+    try:
+        prompt = await client.ask(
+            chat_id=user_id,
+            text=(
+                f"🏷️ <b><u>Set Required Bio Tag</u></b>\n\n"
+                f"Current Tag: <code>{curr_tag}</code>\n\n"
+                "Please send the new tag to require in user bios (e.g. <code>@Crazy_for_Goals</code> or <code>@MyTag</code>):\n\n"
+                "<i>Send /cancel to abort.</i>"
+            ),
+            timeout=120,
+            parse_mode=ParseMode.HTML
+        )
+        if not prompt or not prompt.text or prompt.text.strip().lower() in ("/cancel", "cancel"):
+            return await message.reply_text("❌ Operation cancelled.")
+        new_tag = prompt.text.strip()
+        saved_tag = await set_required_bio_tag(new_tag)
+        await message.reply_text(
+            f"✅ <b>Required Bio Tag Updated!</b>\n\n"
+            f"🏷️ <b>New Required Tag:</b> <code>{saved_tag}</code>\n\n"
+            f"<i>All future bio checks and channel join requests will verify this tag.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await message.reply_text(f"⚠️ Error: {e}")
+
+
+@app.on_callback_query(filters.regex(r"^(toggle_bio_status|refresh_bio_status|change_bio_tag_prompt)$"))
 async def toggle_bio_status_callback(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
-    if user_id not in get_owner_ids():
-        return await callback_query.answer("⛔ Only the bot owner can change this setting!", show_alert=True)
+    if not is_admin_or_owner(user_id) and user_id not in get_owner_ids():
+        return await callback_query.answer("⛔ Only bot admins or owner can change this setting!", show_alert=True)
 
     action = callback_query.data
     if action == "toggle_bio_status":
@@ -591,25 +824,59 @@ async def toggle_bio_status_callback(client: Client, callback_query: CallbackQue
             f"✅ Bio check is now {'ENABLED 🟢' if new_state else 'DISABLED 🔴'}!",
             show_alert=True
         )
+    elif action == "change_bio_tag_prompt":
+        await callback_query.answer()
+        try:
+            curr_tag = await get_required_bio_tag()
+            prompt = await client.ask(
+                chat_id=user_id,
+                text=(
+                    f"🏷️ <b><u>Set Required Bio Tag</u></b>\n\n"
+                    f"Current Tag: <code>{curr_tag}</code>\n\n"
+                    "Please send the new tag to require in user bios (e.g. <code>@Crazy_for_Goals</code> or <code>@MyTag</code>):\n\n"
+                    "<i>Send /cancel to abort.</i>"
+                ),
+                timeout=120,
+                parse_mode=ParseMode.HTML
+            )
+            if not prompt or not prompt.text or prompt.text.strip().lower() in ("/cancel", "cancel"):
+                return await client.send_message(user_id, "❌ Tag update cancelled.")
+            new_tag = prompt.text.strip()
+            saved_tag = await set_required_bio_tag(new_tag)
+            await client.send_message(
+                user_id,
+                f"✅ <b>Required Bio Tag Updated!</b>\n\n"
+                f"🏷️ <b>New Required Tag:</b> <code>{saved_tag}</code>\n\n"
+                "<i>All future bio checks will look for this tag.</i>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            await client.send_message(user_id, f"⚠️ Error or timeout: {e}")
+            return
     else:
         await callback_query.answer("🔄 Status refreshed!")
 
     is_enabled = await is_bio_check_enabled()
+    req_tag = await get_required_bio_tag()
+    verified_count = await get_verified_bio_users_count()
     status_icon = "🟢 <b>ON</b> (Mandatory Bio Verification)" if is_enabled else "🔴 <b>OFF</b> (Free / No Bio Required)"
     action_text = "Disable Bio Check 🔴" if is_enabled else "Enable Bio Check 🟢"
 
     text = (
         "⚙️ <b><u>Global Bio Verification Settings</u></b>\n\n"
         f"<b>Current Status:</b> {status_icon}\n"
-        f"<b>Required Tag:</b> <code>{REQUIRED_TAG}</code>\n\n"
-        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.</i>"
+        f"<b>Required Tag:</b> <code>{req_tag}</code>\n"
+        f"👥 <b>Verified Bio Users:</b> <code>{verified_count}</code> users\n\n"
+        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.\n"
+        "Admins can toggle ON/OFF or change the verification tag directly from this panel or using /setbiotag.</i>"
     )
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(action_text, callback_data="toggle_bio_status")
         ],
         [
-            InlineKeyboardButton("🔄 Refresh Status", callback_data="refresh_bio_status")
+            InlineKeyboardButton("🏷️ Change Bio Tag", callback_data="change_bio_tag_prompt"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_bio_status")
         ]
     ])
     try:

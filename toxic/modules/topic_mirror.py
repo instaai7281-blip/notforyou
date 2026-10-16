@@ -4225,7 +4225,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             breakdown_lines.append(f"• **{stat['title']}**: ✅ `{stat['copied']}` | ⏩ `{stat['skipped']}` | ❌ `{stat['failed']}`")
 
         if len(breakdown_lines) > 25:
-            breakdown_text = "\n".join(breakdown_lines[:25]) + f"\n\n... and {len(breakdown_lines) - 25} more topics synced."
+            breakdown_text = "\n".join(breakdown_lines[:25]) + f"\n\n... and {len(breakdown_lines) - 25} more topics updated."
         else:
             breakdown_text = "\n".join(breakdown_lines) if breakdown_lines else "No messages processed."
         is_cancelled = not active_mirrors.get(user_id, {}).get("running", True)
@@ -4285,27 +4285,27 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 # Jab koi naya content update hone ke liye na ho
                 if is_auto_update:
                     target_group_msg = (
-                        "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘆𝗻𝗰 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
-                        "✨ <b>Status:</b> All Forum Topics & Content 100% Synced!\n"
+                        "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
+                        "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
                         "📁 <b>New Content Added:</b> <code>0</code> files\n"
-                        f"⏩ <b>Verified Synced:</b> <code>{overall_skipped}</code> files\n"
+                        f"⏩ <b>Verified Updated:</b> <code>{overall_skipped}</code> files\n"
                         f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
                         "<i>Next auto-scan will run tomorrow at the scheduled time! 🚀</i></blockquote>"
                     )
                 else:
                     target_group_msg = (
                         "<blockquote><b>✅ 𝗔𝗹𝗹 𝗧𝗼𝗽𝗶𝗰𝘀 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗨𝗽-𝗧𝗼-𝗗𝗮𝘁𝗲! 😎</b>\n\n"
-                        "✨ <b>Status:</b> All Forum Topics & Content 100% Synced!\n"
+                        "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
                         "📁 <b>New Files:</b> <code>0</code> files\n"
-                        f"⏩ <b>Already Synced:</b> <code>{overall_skipped}</code> files\n"
+                        f"⏩ <b>Already Updated:</b> <code>{overall_skipped}</code> files\n"
                         f"⏱ <b>Check Time:</b> <code>{time_str}</code></blockquote>"
                     )
             else:
-                # Jab naya content download / copy hua ho
+                # Jab naya content download / update hua ho
                 header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎"
                 target_group_msg = (
                     f"<blockquote><b>{header}</b>\n\n"
-                    f"📁 <b>New Files Downloaded & Synced:</b> <code>{overall_copied}</code> files\n"
+                    f"📁 <b>New Files Downloaded & Updated:</b> <code>{overall_copied}</code> files\n"
                     f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
                     f"⏱ <b>Time Taken:</b> <code>{time_str}</code></blockquote>"
                 )

@@ -281,19 +281,33 @@ async def on_help_navigation(client, callback_query):
 @app.on_message(filters.command("terms") & filters.private)
 async def terms(client, message):
     terms_text = (
-        "> 📜 **Terms and Conditions** 📜\n\n"
-        "✨ We are not responsible for user deeds, and we do not promote copyrighted content. If any user engages in such activities, it is solely their responsibility.\n"
-        "✨ Upon purchase, we do not guarantee the uptime, downtime, or the validity of the plan. __Authorization and banning of users are at our discretion; we reserve the right to ban or authorize users at any time.__\n"
-        "✨ Payment to us **__does not guarantee__** authorization for the /batch command. All decisions regarding authorization are made at our discretion and mood.\n"
+        "<blockquote><b>📜 XTRACTOR PRO — TERMS & CONDITIONS</b></blockquote>\n\n"
+        "<b>1️⃣ General Fair Usage:</b>\n"
+        "• Services are strictly for personal backup and utility purposes.\n"
+        "• System spamming, flood triggering, or malicious overloading will result in permanent blacklist without notice.\n\n"
+        "<b>2️⃣ Bio Verification Rules:</b>\n"
+        "• If Bio Verification is active, the designated tag (e.g. <code>@CrazyxDeveloper_Bot</code>) must stay in your public Telegram Bio.\n"
+        "• Your Telegram Bio privacy must be set to <b>'Everybody'</b> so our automated checker can read it.\n"
+        "• Removing the tag after gaining free access revokes bot usage immediately upon next verification.\n"
+        "• Premium plan subscribers are completely exempt from the bio requirement.\n\n"
+        "<b>3️⃣ Topic Mirror & Forum Sync:</b>\n"
+        "• Both source & target groups must have forum topics enabled where applicable.\n"
+        "• The bot and user session require admin privileges (Manage Topics, Send Messages) in target supergroups.\n"
+        "• FloodWait delays are enforced by Telegram's rate-limit engine to protect user sessions and bots from bans.\n\n"
+        "<b>4️⃣ Premium Subscription & Refund Policy:</b>\n"
+        "• All digital subscriptions (Topic Mirror VIP & SRC Plans) are non-refundable once activated.\n"
+        "• We do not host or promote copyrighted content; users bear sole responsibility for their tasks.\n"
+        "• Service uptime and authorization remain at management discretion.\n\n"
+        "<i>By using this bot, you explicitly agree to all terms stated above.</i>"
     )
-     
+    
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📋 See Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Now", url="https://t.me/CrazyxDeveloper_Bot")],
+            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Rules", callback_data="bio_terms_info")],
+            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
-    await message.reply_text(terms_text, reply_markup=buttons)
+    await message.reply_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
  
  
 def get_bot_username():
@@ -452,20 +466,35 @@ async def see_plan(client, callback_query):
 @app.on_callback_query(filters.regex("see_terms"))
 async def see_terms(client, callback_query):
     terms_text = (
-        "<blockquote><b>📜 TERMS AND CONDITIONS</b></blockquote>\n\n"
-        "<blockquote>• <b>Personal Use Only:</b> The bot services are intended strictly for personal utility and backup purposes.\n"
-        "• <b>Fair Usage:</b> Spamming or abusing system resources may result in authorization suspension.\n"
-        "• <b>No Refund Policy:</b> Payments are final once digital premium access is activated.\n"
-        "• <b>Compliance:</b> Users are responsible for ensuring compliance with Telegram's Terms of Service.</blockquote>"
+        "<blockquote><b>📜 XTRACTOR PRO — TERMS & CONDITIONS</b></blockquote>\n\n"
+        "<b>1️⃣ General Fair Usage:</b>\n"
+        "• Services are strictly for personal backup and utility purposes.\n"
+        "• Abuse or spamming leads to instant blacklist.\n\n"
+        "<b>2️⃣ Bio Verification Rules:</b>\n"
+        "• Designated tag must remain in your public bio.\n"
+        "• Bio privacy must be set to <b>'Everybody'</b>.\n"
+        "• Removing the tag revokes access immediately upon next check.\n"
+        "• Premium members are completely exempt.\n\n"
+        "<b>3️⃣ Topic Mirror & Forum Sync:</b>\n"
+        "• Requires forum topics enabled in target group.\n"
+        "• Bot & session need admin rights in target group.\n"
+        "• Automatic rate-limiting protects accounts from flood bans.\n\n"
+        "<b>4️⃣ Premium Subscription & Refund Policy:</b>\n"
+        "• Digital plans are non-refundable once activated.\n"
+        "• We do not host copyrighted files; users bear full responsibility.\n\n"
+        "<i>By using this bot, you explicitly agree to all terms stated above.</i>"
     )
-     
+    
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan")],
-            [InlineKeyboardButton("💬 Contact Admin", url="https://t.me/CrazyxDeveloper_Bot")],
+            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Rules", callback_data="bio_terms_info")],
+            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
-    await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    try:
+        await callback_query.message.edit_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+    except Exception:
+        await callback_query.message.reply_text(terms_text, reply_markup=buttons, parse_mode=ParseMode.HTML)
 
 
 @app.on_callback_query(filters.regex("check_subscription"))
