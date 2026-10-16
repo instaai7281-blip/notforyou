@@ -201,6 +201,9 @@ def clean_filename(text, user_tag=""):
     text = re.sub(r'[({[]', '〘', text)
     text = re.sub(r'[)}\]]', '〙', text)
     
+    # Sanitize Windows illegal characters: \ / : * ? " < > |
+    text = re.sub(r'[\\/:*?"<>|]+', ' ', text)
+
     # Separate base and ext
     base_name, ext = os.path.splitext(text)
     
@@ -213,8 +216,10 @@ def clean_filename(text, user_tag=""):
     else:
         base_name = re.sub(r'[\s⚝⛥\*]+$', '', base_name).strip()
         
-    # Clean extra dashes, underscores, spaces
+    # Clean extra dashes, underscores, spaces and sanitize Windows illegal characters
+    base_name = re.sub(r'[\\/:*?"<>|]+', ' ', base_name)
     base_name = re.sub(r'[ \t\-_]+', ' ', base_name).strip()
+    base_name = re.sub(r'[\s\.]+$', '', base_name).strip()
     
     if ext:
         return f"{base_name} ⚝{ext}".strip()
@@ -588,45 +593,120 @@ async def upload_media(sender, target_chat_id, file, caption, edit, topic_id, th
         if upload_method == "Pyrogram":
             has_spoiler = get_user_spoiler_preference(sender)
             caption_html = format_caption_to_html(caption)
+            curr_thumb = thumb_path if (thumb_path and os.path.isfile(thumb_path) and os.path.getsize(thumb_path) > 0) else None
+            curr_caption = caption_html
+            curr_parse_mode = ParseMode.HTML if curr_caption else None
+
+            dm = None
             if ext in video_formats:
-                # Send to user
-                dm = await app.send_video(
-                    chat_id=target_chat_id,
-                    video=file,
-                    caption=caption_html,
-                    height=height,
-                    width=width,
-                    duration=duration,
-                    thumb=thumb_path,
-                    reply_to_message_id=topic_id,
-                    parse_mode=ParseMode.HTML,
-                    progress=progress_bar,
-                    progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time()),
-                    has_spoiler=has_spoiler
-                )
+                for v_attempt in range(1, 3):
+                    try:
+                        dm = await app.send_video(
+                            chat_id=target_chat_id,
+                            video=file,
+                            caption=curr_caption,
+                            height=height if height > 0 else None,
+                            width=width if width > 0 else None,
+                            duration=duration if duration > 0 else None,
+                            thumb=curr_thumb,
+                            reply_to_message_id=topic_id,
+                            parse_mode=curr_parse_mode,
+                            progress=progress_bar,
+                            progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time()),
+                            has_spoiler=has_spoiler
+                        )
+                        break
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+                    except Exception as ve:
+                        err_str = str(ve).upper()
+                        print(f"[UploadMedia] send_video attempt {v_attempt} notice: {ve}")
+                        if curr_thumb and any(k in err_str for k in ("THUMB", "PHOTO", "DIMENSION", "INVALID", "MEDIA", "IMAGE")):
+                            curr_thumb = None
+                            continue
+                        if curr_parse_mode and any(k in err_str for k in ("ENTITY", "BOUNDS", "PARSE", "TAG", "MESSAGE_TOO_LONG")):
+                            curr_parse_mode = None
+                            curr_caption = clean_surrogates(curr_caption)[:1000] if curr_caption else None
+                            continue
+                        break
+
+                if not dm:
+                    # Video fallback to document for 100% guaranteed delivery
+                    print("[UploadMedia] send_video fallback to send_document...")
+                    try:
+                        dm = await app.send_document(
+                            chat_id=target_chat_id,
+                            document=file,
+                            caption=curr_caption,
+                            thumb=curr_thumb,
+                            reply_to_message_id=topic_id,
+                            parse_mode=curr_parse_mode,
+                            progress=progress_bar,
+                            progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time())
+                        )
+                    except Exception:
+                        dm = await app.send_document(
+                            chat_id=target_chat_id,
+                            document=file,
+                            caption=None,
+                            thumb=None,
+                            reply_to_message_id=topic_id
+                        )
 
             elif ext in image_formats:
-                dm = await app.send_photo(
-                    chat_id=target_chat_id,
-                    photo=file,
-                    caption=None,
-                    progress=progress_bar,
-                    reply_to_message_id=topic_id,
-                    progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time()),
-                    has_spoiler=has_spoiler
-                )
+                try:
+                    dm = await app.send_photo(
+                        chat_id=target_chat_id,
+                        photo=file,
+                        caption=None,
+                        progress=progress_bar,
+                        reply_to_message_id=topic_id,
+                        progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time()),
+                        has_spoiler=has_spoiler
+                    )
+                except Exception:
+                    dm = await app.send_document(
+                        chat_id=target_chat_id,
+                        document=file,
+                        caption=None,
+                        reply_to_message_id=topic_id
+                    )
 
             else:
-                dm = await app.send_document(
-                    chat_id=target_chat_id,
-                    document=file,
-                    caption=caption_html,
-                    thumb=thumb_path,
-                    reply_to_message_id=topic_id,
-                    parse_mode=ParseMode.HTML,
-                    progress=progress_bar,
-                    progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time())
-                )
+                for d_attempt in range(1, 3):
+                    try:
+                        dm = await app.send_document(
+                            chat_id=target_chat_id,
+                            document=file,
+                            caption=curr_caption,
+                            thumb=curr_thumb,
+                            reply_to_message_id=topic_id,
+                            parse_mode=curr_parse_mode,
+                            progress=progress_bar,
+                            progress_args=("╔══━⚡️Uploading...⚡️━══╗\n", edit, time.time())
+                        )
+                        break
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+                    except Exception as de:
+                        err_str = str(de).upper()
+                        print(f"[UploadMedia] send_document attempt {d_attempt} notice: {de}")
+                        if curr_thumb:
+                            curr_thumb = None
+                            continue
+                        if curr_parse_mode:
+                            curr_parse_mode = None
+                            curr_caption = clean_surrogates(curr_caption)[:1000] if curr_caption else None
+                            continue
+                        break
+                if not dm:
+                    dm = await app.send_document(
+                        chat_id=target_chat_id,
+                        document=file,
+                        caption=None,
+                        thumb=None,
+                        reply_to_message_id=topic_id
+                    )
 
             # ✅ Fast log: copy already-uploaded message instead of re-uploading from disk
             log_file_msg = await dm.copy(LOG_GROUP)

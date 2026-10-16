@@ -184,6 +184,9 @@ def format_media_filename(raw_filename: str, media_type: str = "document") -> st
     clean = re.sub(r'[({[]', '〘', clean)
     clean = re.sub(r'[)}\]]', '〙', clean)
     
+    # Sanitize Windows illegal characters: \ / : * ? " < > |
+    clean = re.sub(r'[\\/:*?"<>|]+', ' ', clean)
+    
     # 5. Extract extension
     base_name, ext = os.path.splitext(clean)
     if not ext:
@@ -198,8 +201,10 @@ def format_media_filename(raw_filename: str, media_type: str = "document") -> st
     else:
         base_name = re.sub(r'[\s⚝⛥\*]+$', '', base_name).strip()
 
-    # 7. Clean extra spaces/dashes
+    # 7. Clean extra spaces/dashes and sanitize Windows illegal characters from base_name
+    base_name = re.sub(r'[\\/:*?"<>|]+', ' ', base_name)
     base_name = re.sub(r'[ \t\-_]+', ' ', base_name).strip()
+    base_name = re.sub(r'[\s\.]+$', '', base_name).strip()
     
     return f"{base_name} ⚝{ext}".strip()
 
@@ -1140,6 +1145,169 @@ async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_mark
                 pass
 
 
+async def resilient_send_media(
+    client,
+    chat_id: int,
+    media_type: str,
+    file_path: str,
+    caption: str = None,
+    thumb: str = None,
+    reply_to_message_id: int = None,
+    duration: int = None,
+    width: int = None,
+    height: int = None,
+    performer: str = None,
+    title: str = None,
+    has_spoiler: bool = False
+):
+    """
+    Sends media with multi-stage fallback to guarantee zero failures:
+      1. Tries primary upload method (video, document, photo, audio, animation, voice, sticker).
+      2. If thumbnail fails, retries with thumb=None.
+      3. If caption parse/length fails, retries with unformatted or truncated caption.
+      4. If video fails (codec/header issue), falls back to send_document for 100% reliable delivery.
+      5. Handles FloodWait locally without deleting file on disk.
+    """
+    curr_thumb = thumb if (thumb and os.path.isfile(thumb) and os.path.getsize(thumb) > 0) else None
+    curr_caption = caption
+    curr_parse_mode = ParseMode.HTML if caption else None
+
+    # Step 1: Video upload
+    if media_type == "video":
+        for attempt in range(1, 4):
+            try:
+                while True:
+                    try:
+                        return await client.send_video(
+                            chat_id=chat_id,
+                            video=file_path,
+                            caption=curr_caption,
+                            duration=duration if duration and duration > 0 else None,
+                            width=width if width and width > 0 else None,
+                            height=height if height and height > 0 else None,
+                            thumb=curr_thumb,
+                            reply_to_message_id=reply_to_message_id,
+                            parse_mode=curr_parse_mode,
+                            supports_streaming=True,
+                            has_spoiler=has_spoiler
+                        )
+                    except FloodWait as fw:
+                        print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
+                        await asyncio.sleep(fw.value + 1)
+            except Exception as vid_err:
+                err_str = str(vid_err).upper()
+                print(f"[TopicMirror] send_video attempt {attempt} error: {vid_err}")
+                if curr_thumb and any(k in err_str for k in ("THUMB", "PHOTO", "DIMENSION", "INVALID", "MEDIA", "IMAGE")):
+                    curr_thumb = None
+                    continue
+                if curr_parse_mode and any(k in err_str for k in ("ENTITY", "BOUNDS", "PARSE", "TAG", "MESSAGE_TOO_LONG", "BAD_REQUEST")):
+                    curr_parse_mode = None
+                    curr_caption = clean_surrogates(curr_caption)[:1000] if curr_caption else None
+                    continue
+                break
+
+        # If send_video failed after attempts, fallback to send_document so file is NEVER lost
+        print(f"[TopicMirror] Fallback: Uploading video as document to ensure guaranteed delivery...")
+        media_type = "document"
+
+    # Step 2: Document upload
+    if media_type == "document":
+        for attempt in range(1, 4):
+            try:
+                while True:
+                    try:
+                        return await client.send_document(
+                            chat_id=chat_id,
+                            document=file_path,
+                            caption=curr_caption,
+                            thumb=curr_thumb,
+                            reply_to_message_id=reply_to_message_id,
+                            parse_mode=curr_parse_mode
+                        )
+                    except FloodWait as fw:
+                        print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
+                        await asyncio.sleep(fw.value + 1)
+            except Exception as doc_err:
+                err_str = str(doc_err).upper()
+                print(f"[TopicMirror] send_document attempt {attempt} error: {doc_err}")
+                if curr_thumb:
+                    curr_thumb = None
+                    continue
+                if curr_parse_mode:
+                    curr_parse_mode = None
+                    curr_caption = clean_surrogates(curr_caption)[:1000] if curr_caption else None
+                    continue
+                raise doc_err
+
+    # Step 3: Photo upload
+    if media_type == "photo":
+        try:
+            while True:
+                try:
+                    return await client.send_photo(
+                        chat_id=chat_id,
+                        photo=file_path,
+                        caption=curr_caption,
+                        reply_to_message_id=reply_to_message_id,
+                        parse_mode=curr_parse_mode,
+                        has_spoiler=has_spoiler
+                    )
+                except FloodWait as fw:
+                    await asyncio.sleep(fw.value + 1)
+        except Exception as p_err:
+            print(f"[TopicMirror] send_photo failed ({p_err}). Retrying as document...")
+            return await client.send_document(
+                chat_id=chat_id,
+                document=file_path,
+                caption=curr_caption,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode=curr_parse_mode
+            )
+
+    # Step 4: Audio upload
+    if media_type == "audio":
+        for attempt in range(1, 3):
+            try:
+                while True:
+                    try:
+                        return await client.send_audio(
+                            chat_id=chat_id,
+                            audio=file_path,
+                            caption=curr_caption,
+                            duration=duration if duration and duration > 0 else None,
+                            performer=performer,
+                            title=title,
+                            thumb=curr_thumb,
+                            reply_to_message_id=reply_to_message_id,
+                            parse_mode=curr_parse_mode
+                        )
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+            except Exception as aud_err:
+                if curr_thumb:
+                    curr_thumb = None
+                    continue
+                print(f"[TopicMirror] send_audio failed ({aud_err}). Retrying as document...")
+                return await client.send_document(
+                    chat_id=chat_id,
+                    document=file_path,
+                    caption=curr_caption,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=curr_parse_mode
+                )
+
+    # Step 5: Voice, Animation, Sticker
+    if media_type == "voice":
+        return await client.send_voice(chat_id=chat_id, voice=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id, parse_mode=curr_parse_mode)
+    if media_type == "animation":
+        return await client.send_animation(chat_id=chat_id, animation=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id, parse_mode=curr_parse_mode)
+    if media_type == "sticker":
+        return await client.send_sticker(chat_id=chat_id, sticker=file_path, reply_to_message_id=reply_to_message_id)
+
+    # Generic fallback
+    return await client.send_document(chat_id=chat_id, document=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id)
+
+
 async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False):
     """
     Transfers a single message using the bot-only pipeline:
@@ -1343,13 +1511,39 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         temp_dir = os.path.join("downloads", str(user_id))
         os.makedirs(temp_dir, exist_ok=True)
 
-        # Download media via userbot
-        temp_file = await userbot.download_media(
-            msg,
-            file_name=f"{temp_dir}/"
-        )
+        # Download media via userbot with automatic file_reference refresh & retry
+        temp_file = None
+        for dl_attempt in range(1, 4):
+            try:
+                curr_msg = msg
+                if dl_attempt > 1:
+                    try:
+                        fresh_msg = await userbot.get_messages(src_chat_id, msg.id)
+                        if fresh_msg and not getattr(fresh_msg, "empty", False):
+                            curr_msg = fresh_msg
+                    except Exception as ref_err:
+                        print(f"[Transfer] Refetch fresh msg notice: {ref_err}")
 
-        if not temp_file or not os.path.isfile(temp_file):
+                temp_file = await userbot.download_media(
+                    curr_msg,
+                    file_name=f"{temp_dir}/"
+                )
+                if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
+                    break
+                else:
+                    if temp_file and os.path.isfile(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except Exception:
+                            pass
+                    temp_file = None
+            except FloodWait as fw:
+                await asyncio.sleep(fw.value + 1)
+            except Exception as dl_err:
+                print(f"[Transfer] Download attempt {dl_attempt}/3 failed for msg {msg.id}: {dl_err}")
+                await asyncio.sleep(1.5)
+
+        if not temp_file or not os.path.isfile(temp_file) or os.path.getsize(temp_file) == 0:
             return False, "Download failed", None
 
         # Prepare caption with advanced cleaning & branding (retaining source blockquotes)
@@ -1437,17 +1631,17 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
             has_spoiler = get_user_spoiler_preference(user_id)
 
-            sent_media = await app.send_video(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                video=temp_file,
+                media_type="video",
+                file_path=temp_file,
                 caption=caption_html,
+                thumb=thumb_path,
+                reply_to_message_id=effective_tgt_topic_id,
                 duration=duration if duration > 0 else None,
                 width=width if width > 0 else None,
                 height=height if height > 0 else None,
-                thumb=thumb_path,
-                reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML,
-                supports_streaming=True,
                 has_spoiler=has_spoiler
             )
         elif msg.document or file_extension == 'pdf':
@@ -1482,22 +1676,24 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             if thumb_path and os.path.isfile(thumb_path):
                 thumb_path = optimize_thumbnail(thumb_path)
 
-            sent_media = await app.send_document(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                document=temp_file,
+                media_type="document",
+                file_path=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML
+                reply_to_message_id=effective_tgt_topic_id
             )
         elif msg.photo:
             has_spoiler = get_user_spoiler_preference(user_id)
-            sent_media = await app.send_photo(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                photo=temp_file,
+                media_type="photo",
+                file_path=temp_file,
                 caption=caption_html,
                 reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML,
                 has_spoiler=has_spoiler
             )
         elif msg.audio:
@@ -1518,49 +1714,55 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
             if thumb_path and os.path.isfile(thumb_path):
                 thumb_path = optimize_thumbnail(thumb_path)
-            sent_media = await app.send_audio(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                audio=temp_file,
+                media_type="audio",
+                file_path=temp_file,
                 caption=caption_html,
-                duration=msg.audio.duration or 0,
-                performer=clean_performer,
-                title=clean_title,
                 thumb=thumb_path,
                 reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML
+                duration=msg.audio.duration or 0,
+                performer=clean_performer,
+                title=clean_title
             )
         elif msg.voice:
-            sent_media = await app.send_voice(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                voice=temp_file,
+                media_type="voice",
+                file_path=temp_file,
                 caption=caption_html,
-                reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML
+                reply_to_message_id=effective_tgt_topic_id
             )
         elif msg.animation:
-            sent_media = await app.send_animation(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                animation=temp_file,
+                media_type="animation",
+                file_path=temp_file,
                 caption=caption_html,
-                reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML
+                reply_to_message_id=effective_tgt_topic_id
             )
         elif msg.sticker:
-            sent_media = await app.send_sticker(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                sticker=temp_file,
+                media_type="sticker",
+                file_path=temp_file,
                 reply_to_message_id=effective_tgt_topic_id
             )
         else:
             if thumb_path and os.path.isfile(thumb_path):
                 thumb_path = optimize_thumbnail(thumb_path)
-            sent_media = await app.send_document(
+            sent_media = await resilient_send_media(
+                client=app,
                 chat_id=tgt_chat_id,
-                document=temp_file,
+                media_type="document",
+                file_path=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=effective_tgt_topic_id,
-                parse_mode=ParseMode.HTML
+                reply_to_message_id=effective_tgt_topic_id
             )
 
         # Send copy of uploaded media to LOG_GROUP
@@ -3595,6 +3797,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
     control_kb = get_mirror_keyboard(user_id)
 
+    async def _update_status(text: str, reply_markup=None):
+        if status_msg:
+            try:
+                await safe_edit_message(status_msg, text, reply_markup=reply_markup)
+            except Exception:
+                pass
+
     if status_msg:
         try:
             await status_msg.edit(
@@ -3602,21 +3811,27 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 reply_markup=control_kb
             )
         except Exception:
+            try:
+                status_msg = await app.send_message(
+                    user_id,
+                    "🔄 **Initializing Userbot Session & Verifying Group Access...**",
+                    reply_markup=control_kb
+                )
+            except Exception:
+                status_msg = None
+    else:
+        try:
             status_msg = await app.send_message(
                 user_id,
                 "🔄 **Initializing Userbot Session & Verifying Group Access...**",
                 reply_markup=control_kb
             )
-    else:
-        status_msg = await app.send_message(
-            user_id,
-            "🔄 **Initializing Userbot Session & Verifying Group Access...**",
-            reply_markup=control_kb
-        )
+        except Exception:
+            status_msg = None
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
     if not userbot:
-        await status_msg.edit(
+        await _update_status(
             "❌ **No working userbot session available!**\n\n"
             "Please use `/login` in the bot to login your Telegram account session so the bot can access private source groups."
         )
@@ -3637,7 +3852,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             src_chat = await userbot.get_chat(src_chat_id)
             src_title = src_chat.title or str(src_chat_id)
         except Exception as e:
-            await status_msg.edit(
+            await _update_status(
                 f"❌ **Could not access source group (`{src_chat_id}`):**\n`{e}`\n\n"
                 f"Make sure your logged-in userbot account is a **member** of this group!"
             )
@@ -3648,7 +3863,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             tgt_chat = await app.get_chat(tgt_chat_id)
             tgt_title = tgt_chat.title or str(tgt_chat_id)
         except Exception as e:
-            await status_msg.edit(
+            await _update_status(
                 f"❌ **Could not access target group (`{tgt_chat_id}`):**\n`{e}`\n\n"
                 f"Make sure the bot is an **Admin** in the target group!"
             )
@@ -3676,7 +3891,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         except Exception as bio_err:
             print(f"[TopicMirror] Target group bio update notice: {bio_err}")
 
-        await status_msg.edit(
+        await _update_status(
             f"🔍 **Phase 1: Scanning Topics & Checking Existing Mappings...**\n\n"
             f"📤 **Source:** `{src_title}`\n"
             f"📥 **Target:** `{tgt_title}`",
@@ -3945,7 +4160,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
         total_topics_count = len(topic_map)
 
-        await status_msg.edit(
+        await _update_status(
             f"✅ **Phase 1 Complete:** Mapped `{total_topics_count}` Topics (0 Duplicates)!\n\n"
             f"⚡ **Starting Rapid Extraction:** Mirroring pending messages...\n\n"
             f"*(Use buttons below to Skip Topic or Cancel Mirror)*",
@@ -4343,7 +4558,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     except Exception as general_err:
         print(f"[TopicMirror] General error: {general_err}")
         try:
-            await status_msg.edit(f"❌ **Topic Mirror Failed with Error:**\n`{general_err}`")
+            await _update_status(f"❌ **Topic Mirror Failed with Error:**\n`{general_err}`")
         except Exception:
             pass
     finally:

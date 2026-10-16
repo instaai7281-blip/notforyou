@@ -203,8 +203,8 @@ async def schedule_daily_plans_broadcast():
 async def schedule_mirror_auto_updates():
     """
     Background task that checks all mirror sessions with active auto-schedules
-    every 60 seconds and triggers 1-Click Sync when the scheduled local time matches.
-    Timezone-aware: converts user's local time to UTC for accurate triggering.
+    every 25 seconds and triggers 1-Click Sync when the scheduled local time matches.
+    Timezone-aware: converts user's local time accurately with a 5-minute trigger window.
     """
     import datetime
     from toxic.core.mongo.db import (
@@ -218,7 +218,7 @@ async def schedule_mirror_auto_updates():
     print("[MirrorAutoScheduler] Daily auto-update scheduler started.")
     while True:
         try:
-            now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
             sessions = await get_all_scheduled_mirror_sessions()
             for sess in sessions:
                 try:
@@ -226,22 +226,22 @@ async def schedule_mirror_auto_updates():
                     if not auto_sched or not auto_sched.get("enabled"):
                         continue
 
-                    hour = auto_sched.get("hour", 0)
-                    minute = auto_sched.get("minute", 0)
+                    hour = int(auto_sched.get("hour", 0))
+                    minute = int(auto_sched.get("minute", 0))
                     tz_offset = float(auto_sched.get("tz_offset", 0))
                     last_run_date = auto_sched.get("last_run_date")
 
-                    # Convert user local time to UTC trigger time
-                    tz_offset_mins = int(tz_offset * 60)
-                    local_total_mins = hour * 60 + minute
-                    utc_total_mins = (local_total_mins - tz_offset_mins) % (24 * 60)
-                    utc_hour = utc_total_mins // 60
-                    utc_min = utc_total_mins % 60
+                    # Calculate current time in the user's selected timezone
+                    user_now = now_utc + datetime.timedelta(hours=tz_offset)
+                    user_today_str = user_now.strftime("%Y-%m-%d")
 
-                    now_str = now_utc.strftime("%Y-%m-%d")
-                    already_ran = (last_run_date == now_str)
+                    sched_total_mins = hour * 60 + minute
+                    user_total_mins = user_now.hour * 60 + user_now.minute
 
-                    if now_utc.hour == utc_hour and now_utc.minute == utc_min and not already_ran:
+                    # Check if scheduled time has arrived within a 5-minute window and not yet ran today
+                    diff_mins = user_total_mins - sched_total_mins
+                    
+                    if 0 <= diff_mins <= 5 and last_run_date != user_today_str:
                         src_chat_id = int(sess.get("src_chat_id", 0))
                         tgt_chat_id = int(sess.get("tgt_chat_id", 0))
                         user_id = int(sess.get("user_id", 0))
@@ -252,12 +252,12 @@ async def schedule_mirror_auto_updates():
                         if not src_chat_id or not tgt_chat_id or not user_id:
                             continue
 
-                        print(f"[MirrorAutoScheduler] Triggering auto-sync: {src_title} → {tgt_title} at {hour:02d}:{minute:02d} {tz_label}")
+                        print(f"[MirrorAutoScheduler] ⏰ Auto-sync triggered: '{src_title}' → '{tgt_title}' at {hour:02d}:{minute:02d} {tz_label} (Date: {user_today_str})")
 
-                        # Mark as run first to prevent duplicate triggers
-                        await update_mirror_schedule_last_run(src_chat_id, tgt_chat_id, now_str)
+                        # Mark as run immediately to prevent duplicate runs
+                        await update_mirror_schedule_last_run(src_chat_id, tgt_chat_id, user_today_str)
 
-                        # Notify user
+                        # Notify user / owners
                         owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
                         notify_targets = set(owner_list)
                         if user_id > 0:
@@ -274,11 +274,12 @@ async def schedule_mirror_auto_updates():
                                     f"📥 **Target:** `{tgt_title}`\n\n"
                                     f"🔄 Starting 1-Click Sync now..."
                                 )
-                                break
+                                if notify_msg:
+                                    break
                             except Exception:
                                 pass
 
-                        # Run the mirror sync
+                        # Run the mirror sync task
                         try:
                             from toxic.modules.topic_mirror import run_topic_mirror
                             asyncio.create_task(run_topic_mirror(
@@ -299,7 +300,7 @@ async def schedule_mirror_auto_updates():
         except Exception as e:
             print(f"[MirrorAutoScheduler] Scheduler error: {e}")
 
-        await asyncio.sleep(60)  # Check every minute
+        await asyncio.sleep(25)  # Check every 25 seconds for precise matching
 
 
 async def devggn_boot():
