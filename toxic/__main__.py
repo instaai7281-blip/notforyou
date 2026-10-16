@@ -188,17 +188,8 @@ async def schedule_broadcast_task():
         await asyncio.sleep(30)
 
 async def schedule_daily_plans_broadcast():
-    import datetime
-    last_sent_date = None
-    while True:
-        now = datetime.datetime.now()
-        if now.hour == 19 and now.minute == 0:
-            current_date = now.date()
-            if last_sent_date != current_date:
-                print(f"[DAILY BROADCAST] Starting daily 7 PM upgrade plans broadcast...")
-                await daily_plans_broadcast_task()
-                last_sent_date = current_date
-        await asyncio.sleep(30)
+    """Daily upgrade plans broadcast disabled by admin."""
+    return
 
 async def schedule_mirror_auto_updates():
     """
@@ -347,7 +338,6 @@ Status: Running Successfully...
 """)
 
     asyncio.create_task(schedule_expiry_check())
-    asyncio.create_task(schedule_daily_plans_broadcast())
     asyncio.create_task(schedule_broadcast_task())
     asyncio.create_task(schedule_mirror_auto_updates())
     try:

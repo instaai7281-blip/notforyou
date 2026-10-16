@@ -405,7 +405,7 @@ def get_verification_buttons():
         ],
         [
             InlineKeyboardButton(
-                "📜 Bio Rules & Terms",
+                "📜 Bio Setup Guide & Terms",
                 callback_data="bio_terms_info"
             ),
             InlineKeyboardButton(
@@ -741,29 +741,34 @@ async def verify_user_bio_callback(
 async def bio_terms_info_callback(client: Client, callback_query: CallbackQuery):
     req_tag = await get_required_bio_tag()
     terms_info = (
-        "<blockquote><b>📜 <u>OFFICIAL BIO VERIFICATION TERMS</u></b></blockquote>\n\n"
-        "<blockquote><b>1️⃣ Mandatory Tag Requirement:</b>\n"
-        f"• Free users must keep <code>{req_tag}</code> in their profile bio continuously.\n"
-        "• Any tampering or removal of the tag results in immediate access revocation.</blockquote>\n\n"
-        "<blockquote><b>2️⃣ Privacy Settings:</b>\n"
-        "• Telegram profile settings must allow <b>Bio: Everybody</b> (Settings ⚙️ ➔ Privacy & Security ➔ Bio).\n"
-        "• If bio is hidden under 'Nobody' or 'My Contacts', our automated system cannot verify your profile.</blockquote>\n\n"
-        "<blockquote><b>3️⃣ Channel Join Requests:</b>\n"
-        "• All pending channel join requests are approved automatically upon successful bio verification.\n"
-        "• If the tag is removed later, user will be restricted from bot services.</blockquote>\n\n"
-        "<blockquote><b>4️⃣ Premium Exemption:</b>\n"
-        "• Users with an active <b>Premium Plan</b> are 100% exempt from the bio tag rule.</blockquote>"
+        "<blockquote><b>📜 <u>BIO SETUP GUIDE & VERIFICATION TERMS</u> 📜</b></blockquote>\n\n"
+        "<b>📱 <u>How to Set & Verify Your Bio (Step-by-Step):</u></b>\n"
+        "1️⃣ <b>Copy Tag:</b> Tap on <code>{req_tag}</code> to copy it.\n"
+        "2️⃣ <b>Open Settings:</b> Go to Telegram <b>Settings ⚙️ ➔ Edit Profile / Bio</b> and paste the tag.\n"
+        "3️⃣ <b>Set Privacy:</b> Go to <b>Settings ⚙️ ➔ Privacy & Security ➔ Bio</b> and set it to <b>'Everybody'</b> (zaroori hai taaki hamara automated bot tag check kar sake).\n"
+        "4️⃣ <b>Tap Verify:</b> Niche diye gaye <b>🟢 Verify Bio 🔄</b> button par tap karein aur instant access payein!\n\n"
+        "<b>⚖️ <u>Disclaimer & Verification Terms:</u></b>\n"
+        f"• <b>🤖 Auto Verification Tag Only:</b> <code>{req_tag}</code> kewal ek automated security verification tag hai jisse system real user activity verify karke free access enable karta hai.\n"
+        "• <b>🛡️ No Liability / Not Responsible:</b> We are <b>NOT responsible</b> for any user's profile, bio words, personal actions, or activities. Tag lagana ya hatana user ki apni marzi hai.\n"
+        "• <b>🚫 Copyright Disclaimer:</b> Hum kisi bhi prakar ke copyrighted ya unauthorized content ko promote ya host nahi karte hain. Bot ka upyog kewal personal backup aur educational utility ke liye hai.\n"
+        "• <b>⚡ Auto-Revoke Policy:</b> Access milne ke baad agar bio se tag hataya gaya, toh bot access automatically revoke ho jayega.\n"
+        "• <b>👑 Premium Users Exemption:</b> Paid VIP/PRO plans wale users ke liye bio tag lagana bilkul mandatory nahi hai.\n\n"
+        "<i>By verifying and using this bot, you acknowledge and agree to these terms.</i>"
     )
     kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🟢 Verify Bio 🔄", callback_data="verify_user_bio"),
+            InlineKeyboardButton("⚙️ Open Settings", url="tg://settings")
+        ],
+        [
+            InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan"),
             InlineKeyboardButton("🔙 Back", callback_data="back_to_bio_prompt")
         ]
     ])
     try:
         await callback_query.message.edit_text(terms_info, reply_markup=kb, parse_mode=ParseMode.HTML)
     except Exception:
-        await callback_query.answer("📜 Please review the bio terms displayed.", show_alert=True)
+        await callback_query.answer("📜 Please review the bio setup guide & terms displayed.", show_alert=True)
 
 
 @app.on_callback_query(filters.regex("^back_to_bio_prompt$"))

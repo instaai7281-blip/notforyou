@@ -297,16 +297,16 @@ async def terms(client, message):
         "<blockquote><b>📜 XTRACTOR PRO — TERMS & CONDITIONS</b></blockquote>\n\n"
         "<b>1️⃣ General Fair Usage:</b>\n"
         "• Services are strictly for personal backup and utility purposes.\n"
-        "• System spamming, flood triggering, or malicious overloading will result in permanent blacklist without notice.\n\n"
-        "<b>2️⃣ Bio Verification Rules:</b>\n"
-        "• If Bio Verification is active, the designated tag (e.g. <code>@CrazyxDeveloper_Bot</code>) must stay in your public Telegram Bio.\n"
-        "• Your Telegram Bio privacy must be set to <b>'Everybody'</b> so our automated checker can read it.\n"
-        "• Removing the tag after gaining free access revokes bot usage immediately upon next verification.\n"
-        "• Premium plan subscribers are completely exempt from the bio requirement.\n\n"
+        "• Spamming, flooding, or abusing resources results in permanent blacklist.\n\n"
+        "<b>2️⃣ Bio Verification & Auto-Tag Policy:</b>\n"
+        "• <b>🤖 Auto Verification Tag Only:</b> The required bio tag is strictly an automated verification identifier to validate genuine free access.\n"
+        "• <b>🛡️ No Liability / Not Responsible:</b> We are <b>NOT responsible</b> for any user's profile, bio contents, personal actions, or external activities. Setting the tag is entirely voluntary.\n"
+        "• Bio privacy must be set to <b>'Everybody'</b> (Settings ⚙️ ➔ Privacy & Security ➔ Bio) for the automated bot to verify the tag.\n"
+        "• Removing the tag revokes free bot access automatically.\n"
+        "• Paid Premium subscribers are 100% exempt from the bio requirement.\n\n"
         "<b>3️⃣ Topic Mirror & Forum Sync:</b>\n"
-        "• Both source & target groups must have forum topics enabled where applicable.\n"
-        "• The bot and user session require admin privileges (Manage Topics, Send Messages) in target supergroups.\n"
-        "• FloodWait delays are enforced by Telegram's rate-limit engine to protect user sessions and bots from bans.\n\n"
+        "• Requires forum topics enabled in target group & proper admin rights.\n"
+        "• Telegram rate-limits (FloodWait) are strictly observed to protect accounts.\n\n"
         "<b>4️⃣ Premium Subscription & Refund Policy:</b>\n"
         "• All digital subscriptions (Topic Mirror VIP & SRC Plans) are non-refundable once activated.\n"
         "• We do not host or promote copyrighted content; users bear sole responsibility for their tasks.\n"
@@ -316,7 +316,7 @@ async def terms(client, message):
     
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Rules", callback_data="bio_terms_info")],
+            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Setup Guide", callback_data="bio_terms_info")],
             [InlineKeyboardButton("💬 Contact Support", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
@@ -482,16 +482,16 @@ async def see_terms(client, callback_query):
         "<blockquote><b>📜 XTRACTOR PRO — TERMS & CONDITIONS</b></blockquote>\n\n"
         "<b>1️⃣ General Fair Usage:</b>\n"
         "• Services are strictly for personal backup and utility purposes.\n"
-        "• Abuse or spamming leads to instant blacklist.\n\n"
-        "<b>2️⃣ Bio Verification Rules:</b>\n"
-        "• Designated tag must remain in your public bio.\n"
-        "• Bio privacy must be set to <b>'Everybody'</b>.\n"
+        "• Abuse, spamming, or resource exploitation leads to instant blacklist.\n\n"
+        "<b>2️⃣ Bio Verification & Auto-Tag Policy:</b>\n"
+        "• <b>🤖 Auto Verification Tag Only:</b> Required bio tag is solely an automated identifier to unlock free tier access.\n"
+        "• <b>🛡️ No Liability / Not Responsible:</b> We are <b>NOT responsible</b> for any user's profile, bio contents, personal actions, or external activities. Setting the tag is entirely voluntary.\n"
+        "• Bio privacy must be set to <b>'Everybody'</b> (Settings ⚙️ ➔ Privacy ➔ Bio) so our bot can read the tag.\n"
         "• Removing the tag revokes access immediately upon next check.\n"
-        "• Premium members are completely exempt.\n\n"
+        "• Paid Premium members are completely exempt.\n\n"
         "<b>3️⃣ Topic Mirror & Forum Sync:</b>\n"
-        "• Requires forum topics enabled in target group.\n"
-        "• Bot & session need admin rights in target group.\n"
-        "• Automatic rate-limiting protects accounts from flood bans.\n\n"
+        "• Requires forum topics enabled in target group & proper admin rights.\n"
+        "• Rate-limiting protects accounts from flood bans.\n\n"
         "<b>4️⃣ Premium Subscription & Refund Policy:</b>\n"
         "• Digital plans are non-refundable once activated.\n"
         "• We do not host copyrighted files; users bear full responsibility.\n\n"
@@ -500,7 +500,7 @@ async def see_terms(client, callback_query):
     
     buttons = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Rules", callback_data="bio_terms_info")],
+            [InlineKeyboardButton("💎 View Plans", callback_data="see_plan"), InlineKeyboardButton("📜 Bio Setup Guide", callback_data="bio_terms_info")],
             [InlineKeyboardButton("💬 Contact Support", url="https://t.me/CrazyxDeveloper_Bot")],
         ]
     )
