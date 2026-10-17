@@ -3529,12 +3529,7 @@ async def run_single_link_mirror(
 async def start_topic_link_flow(user_id: int, message, is_callback: bool = False):
     """Interactive prompt flow for mirroring from ONE specific topic link to ANOTHER topic link with range support."""
     if await chk_mirror_user(user_id) != 0:
-        err_msg = (
-            "<blockquote>🔒 <b>Access Denied — Topic Mirror Plan Required</b>\n\n"
-            "The <b>Topic Mirroring</b> feature is exclusively reserved for users with the <b>Topic Mirror Plan</b>.\n\n"
-            "💬 <b>Contact Admin:</b> @CrazyxDeveloper_Bot to purchase or upgrade your plan!</blockquote>"
-        )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Buy Topic Mirror Plan", url="https://t.me/CrazyxDeveloper_Bot")]])
+        err_msg, kb = get_mirror_access_denied_card()
         if is_callback:
             await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:

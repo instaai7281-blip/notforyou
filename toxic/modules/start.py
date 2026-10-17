@@ -27,63 +27,13 @@ from pyrogram.enums import ChatType, ParseMode
 
 
 
-@app.on_message(filters.private, group=-2)
-async def free_user_strict_guard(client, message: Message):
-    """
-    Completely silences and drops incoming private messages and commands from Free Users.
-    No reply, no card, no /start response — only Pro/Premium users and Admins can interact.
-    """
-    user_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
-    if not user_id:
-        return
-
-    from toxic.core.func import is_free_user
-
-    if await is_free_user(user_id):
-        # Absolutely silent! Nothing sent, no reply to /start or any command in private DM.
-        message.stop_propagation()
-        return
-
-
-@app.on_callback_query(group=-2)
-async def free_user_strict_callback_guard(client, query: CallbackQuery):
-    """
-    Drops button callbacks from Free Users EXCEPT bio verification & plan views.
-    """
-    user_id = query.from_user.id if query.from_user else 0
-    if not user_id:
-        return
-
-    from toxic.core.func import is_free_user
-
-    if await is_free_user(user_id):
-        # Allow bio verification callbacks and plan viewing so user can verify or buy
-        allowed_free_callbacks = (
-            "verify_user_bio",
-            "bio_terms_info",
-            "back_to_bio_prompt",
-            "see_plan",
-            "see_terms",
-            "check_my_sub",
-        )
-        data = getattr(query, "data", "") or ""
-        if any(data == cb or data.startswith(cb) for cb in allowed_free_callbacks):
-            return  # Allow propagation to the bio / plan handler!
-
-        try:
-            await query.answer("⛔ Access Restricted: Premium account required.", show_alert=True)
-        except Exception:
-            pass
-        query.stop_propagation()
-        return
-
+# Free users are welcome to use /start, /batch (freemium quota), /plans, /login and standard commands.
+# Feature-specific access (e.g. topic mirror, unlimited batch) is checked gracefully inside each command.
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message: Message):
     user_id = message.from_user.id if message.from_user else message.chat.id
-    from toxic.core.func import is_free_user
-    if await is_free_user(user_id):
-        return
+
 
     join = await subscribe(client, message)
     if join == 1:

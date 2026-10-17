@@ -205,9 +205,13 @@ async def batch_link(_, message):
     join = await subscribe(_, message)
     if join == 1:
         return
+    from toxic.core.func import is_free_user, get_upgrade_premium_card, chk_user
+    from config import FREEMIUM_LIMIT
+    from toxic.core.mongo.db import is_user_verified
+
     user_id = message.chat.id
-    from toxic.core.func import is_free_user, get_upgrade_premium_card
-    if await is_free_user(user_id):
+    freecheck = await chk_user(message, user_id)
+    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
         text, kb = get_upgrade_premium_card(message.from_user)
         photo_url = "https://freeimage.host/i/n04TxVa"
         try:
