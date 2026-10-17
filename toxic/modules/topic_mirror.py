@@ -828,6 +828,11 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
             print(f"[TopicMirror] ✅ Resolved source chat via userbot: '{src_title}' ({src_chat_id})")
             return userbot, src_chat, src_title, None
         except Exception as ub_err:
+            err_str = str(ub_err)
+            if "AUTH_KEY_DUPLICATED" in err_str or "406" in err_str:
+                print(f"[TopicMirror] ⚠️ AUTH_KEY_DUPLICATED on userbot: {err_str}")
+                return None, None, None, "AUTH_KEY_DUPLICATED"
+
             errors_encountered.append(f"userbot: {ub_err}")
             print(f"[TopicMirror] Userbot direct get_chat failed for {src_chat_id}: {ub_err}. Warming peer cache (limit 300)...")
             try:
@@ -844,6 +849,9 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 print(f"[TopicMirror] ✅ Resolved source chat via userbot after cache warm: '{src_title}' ({target_try})")
                 return userbot, src_chat, src_title, None
             except Exception as warm_err:
+                warm_str = str(warm_err)
+                if "AUTH_KEY_DUPLICATED" in warm_str or "406" in warm_str:
+                    return None, None, None, "AUTH_KEY_DUPLICATED"
                 errors_encountered.append(f"userbot_warm: {warm_err}")
 
     # 2. Secondary candidate: app (The Bot itself - added to source group/channel)
@@ -3211,6 +3219,29 @@ async def run_single_link_mirror(
     if not src_client or not src_chat:
         bot_me = await app.get_me()
         bot_uname = bot_me.username or "this bot"
+
+        if resolve_err and ("AUTH_KEY_DUPLICATED" in str(resolve_err) or "406" in str(resolve_err)):
+            err_ub = (
+                f"⚠️ <b>Telegram Userbot Session Conflict!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Aapka account dusre bot me simultaneously active hone ki wajah se Telegram ne session disconnect/invalidate kar diya hai.\n\n"
+                f"👉 <b>Solution:</b>\n"
+                f"Teeno bots se <b>ek sath alag-alag groups</b> me bina kisi error ke parallel extract karne ke liye, is bot (@{bot_uname}) me <code>/login</code> bhej kar apna account connect karein!\n\n"
+                f"✅ <i>Har bot ka apna dedicated secure session ban jayega aur teeno bots ek sath super-fast extract karenge!</i> 🚀"
+            )
+            login_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📲 Login This Bot Account", callback_data="login_start_cb")],
+                [InlineKeyboardButton("💬 Support", url="https://t.me/CrazyxDeveloper_Bot")]
+            ])
+            if status_msg:
+                try:
+                    await status_msg.edit(err_ub, parse_mode=ParseMode.HTML, reply_markup=login_kb)
+                except Exception:
+                    pass
+            else:
+                await app.send_message(user_id, err_ub, parse_mode=ParseMode.HTML, reply_markup=login_kb)
+            return
+
         err_ub = (
             f"❌ <b>Could not access source chat (`{src_chat_id}`):</b>\n<code>{resolve_err}</code>\n\n"
             f"👉 <b>How to fix:</b>\n"
@@ -3941,6 +3972,28 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     if not src_client or not src_chat:
         bot_me = await app.get_me()
         bot_uname = bot_me.username or "this bot"
+        if resolve_err and ("AUTH_KEY_DUPLICATED" in str(resolve_err) or "406" in str(resolve_err)):
+            err_ub = (
+                f"⚠️ **Telegram Userbot Session Conflict!**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Aapka account dusre bot me simultaneously active hone ki wajah se Telegram ne session disconnect/invalidate kar diya hai.\n\n"
+                f"👉 **Solution:**\n"
+                f"Teeno bots se **ek sath alag-alag groups** me bina kisi error ke parallel extract karne ke liye, is bot (@{bot_uname}) me `/login` bhej kar apna account connect karein!\n\n"
+                f"✅ *Har bot ka apna dedicated secure session ban jayega aur teeno bots ek sath super-fast extract karenge!* 🚀"
+            )
+            login_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📲 Login This Bot Account", callback_data="login_start_cb")],
+                [InlineKeyboardButton("💬 Support", url="https://t.me/CrazyxDeveloper_Bot")]
+            ])
+            if status_msg:
+                try:
+                    await status_msg.edit(err_ub, reply_markup=login_kb)
+                except Exception:
+                    pass
+            else:
+                await app.send_message(user_id, err_ub, reply_markup=login_kb)
+            return
+
         await _update_status(
             f"❌ **Could not access source group (`{src_chat_id}`):**\n`{resolve_err}`\n\n"
             f"👉 **How to fix:**\n"

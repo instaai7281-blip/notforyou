@@ -250,16 +250,28 @@ async def register_view_once_listener(user_id: int, session_string: str) -> Opti
 
 
 async def load_all_view_once_listeners():
-    """Scans all users with saved sessions on startup and boots their unified userbot clients."""
+    """Scans users assigned to THIS bot on startup and boots their unified userbot clients."""
     try:
         from toxic.core.mongo.db import db as user_db
-        from toxic.core.userbot_manager import get_or_create_userbot
+        from toxic.core.userbot_manager import get_or_create_userbot, get_current_bot_username
 
-        cursor = user_db.find({"session": {"$exists": True, "$ne": None}})
+        bot_uname = get_current_bot_username()
+        if not bot_uname or bot_uname == "default_bot":
+            return
+
+        cursor = user_db.find({
+            "$or": [
+                {f"sessions.{bot_uname}": {"$exists": True, "$ne": None}},
+                {"assigned_bot": bot_uname, "session": {"$exists": True, "$ne": None}}
+            ]
+        })
         count = 0
         async for doc in cursor:
             uid = doc.get("_id")
-            s_str = doc.get("session")
+            s_dict = doc.get("sessions")
+            s_str = s_dict.get(bot_uname) if isinstance(s_dict, dict) else None
+            if not s_str:
+                s_str = doc.get("session")
             is_enabled = doc.get("view_once_saver", True)
             if uid and s_str and is_enabled:
                 try:
@@ -267,7 +279,7 @@ async def load_all_view_once_listeners():
                     count += 1
                 except Exception as e:
                     logger.error(f"Error restoring userbot for {uid}: {e}")
-        print(f"[VIEW-ONCE] Successfully initiated unified userbot listeners for {count} users on boot!")
+        print(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
     except Exception as e:
         logger.error(f"[VIEW-ONCE] Failed to load listeners on boot: {e}")
 

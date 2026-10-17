@@ -1,25 +1,36 @@
 # ---------------------------------------------------
 # File Name: userbot_manager.py
-# Description: Unified Singleton Userbot Client Manager
-#              Guarantees a SINGLE active Client per user session
-#              Completely prevents [406 AUTH_KEY_DUPLICATED]
+# Description: Multi-Bot Aware Singleton Userbot Client Manager
+#              Guarantees clean session isolation across multiple deployed bots
+#              sharing the same MongoDB database. Completely prevents [406 AUTH_KEY_DUPLICATED]
 # Author: Antigravity
 # ---------------------------------------------------
 
 import asyncio
 import logging
 from typing import Optional, Dict
-from pyrogram import Client
+from pyrogram import Client, errors
 from config import API_ID, API_HASH
 from toxic.core.mongo import db
 
 logger = logging.getLogger(__name__)
 
-# Master dictionary: user_id -> Client instance
+# Master dictionary for THIS bot process: user_id -> Client instance
 _active_userbots: Dict[int, Client] = {}
 # Concurrency locks per user to prevent simultaneous instantiation race conditions
 _locks: Dict[int, asyncio.Lock] = {}
 _master_lock = asyncio.Lock()
+
+
+def get_current_bot_username() -> str:
+    """Returns the current bot's username or identifier."""
+    try:
+        from toxic import app
+        if getattr(app, "me", None) and app.me.username:
+            return app.me.username
+    except Exception:
+        pass
+    return "default_bot"
 
 
 async def get_user_lock(user_id: int) -> asyncio.Lock:
@@ -32,16 +43,17 @@ async def get_user_lock(user_id: int) -> asyncio.Lock:
 
 async def get_or_create_userbot(user_id: int, session_string: Optional[str] = None) -> Optional[Client]:
     """
-    Returns the single, shared, active Pyrogram Client instance for a given user.
-    Guarantees that an auth key (session string) is NEVER opened in multiple clients simultaneously,
-    completely preventing [406 AUTH_KEY_DUPLICATED].
+    Returns the dedicated active Pyrogram Client instance for a given user on THIS bot.
+    Isolates sessions per-bot so multiple bots deployed on the same MongoDB can run
+    simultaneously from the same Telegram user account without [406 AUTH_KEY_DUPLICATED].
     """
     if not user_id:
         return None
 
+    bot_name = get_current_bot_username()
     lock = await get_user_lock(user_id)
     async with lock:
-        # 1. Check existing cached client
+        # 1. Check existing cached client in this bot process
         existing = _active_userbots.get(user_id)
         if existing:
             try:
@@ -49,8 +61,12 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                     return existing
                 else:
                     await existing.start()
-                    logger.info(f"[UserbotManager] Reconnected existing client for user {user_id}")
+                    logger.info(f"[UserbotManager] Reconnected existing client for user {user_id} on @{bot_name}")
                     return existing
+            except errors.AuthKeyDuplicated:
+                logger.error(f"[UserbotManager] AUTH_KEY_DUPLICATED on reconnect for {user_id} on @{bot_name}. Clearing dead session.")
+                await handle_burned_session(user_id, bot_name)
+                return None
             except Exception as re_err:
                 logger.warning(f"[UserbotManager] Reconnecting cached client for {user_id} failed: {re_err}. Rebuilding...")
                 _active_userbots.pop(user_id, None)
@@ -59,11 +75,10 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 except Exception:
                     pass
 
-        # 2. Retrieve session string if not provided
+        # 2. Retrieve session string if not provided (per-bot partition first)
         if not session_string:
             try:
-                user_data = await db.get_data(user_id)
-                session_string = user_data.get("session") if user_data else None
+                session_string = await db.get_user_session(user_id, bot_name=bot_name)
             except Exception as db_err:
                 logger.error(f"[UserbotManager] Failed to fetch session from MongoDB for {user_id}: {db_err}")
                 return None
@@ -71,15 +86,28 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
         if not session_string:
             return None
 
-        # 3. Create single unified Client instance
+        # 3. Check if this session is already running in pro_clients to avoid duplicating
+        try:
+            from toxic import pro_clients
+            if pro_clients:
+                for pc in pro_clients:
+                    if getattr(pc, "is_connected", False):
+                        if getattr(pc, "session_string", None) == session_string:
+                            logger.info(f"[UserbotManager] Reusing pro_client for user {user_id}")
+                            _active_userbots[user_id] = pc
+                            return pc
+        except Exception:
+            pass
+
+        # 4. Create single unified Client instance for THIS bot
         try:
             ub = Client(
-                f"ub_unified_{user_id}",
+                f"ub_{bot_name}_{user_id}",
                 api_id=API_ID,
                 api_hash=API_HASH,
                 session_string=session_string,
                 in_memory=True,
-                no_updates=False,  # Allows handling real-time view-once events while serving API requests
+                no_updates=False,
                 max_concurrent_transmissions=64
             )
             await ub.start()
@@ -92,16 +120,33 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 logger.warning(f"[UserbotManager] Failed to attach view_once handler to {user_id}: {vo_err}")
 
             _active_userbots[user_id] = ub
-            logger.info(f"[UserbotManager] ✅ Unified client started successfully for user {user_id}")
+            logger.info(f"[UserbotManager] ✅ Unified client started successfully for user {user_id} on @{bot_name}")
             return ub
 
+        except errors.AuthKeyDuplicated:
+            logger.error(f"[UserbotManager] AUTH_KEY_DUPLICATED when starting client for {user_id} on @{bot_name}. Clearing dead session.")
+            await handle_burned_session(user_id, bot_name)
+            return None
         except Exception as e:
-            logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id}: {e}")
+            logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id} on @{bot_name}: {e}")
             return None
 
 
+async def handle_burned_session(user_id: int, bot_name: str = None):
+    """Cleans up a session that was invalidated by Telegram."""
+    if not bot_name:
+        bot_name = get_current_bot_username()
+    _active_userbots.pop(user_id, None)
+    try:
+        await db.remove_user_session(user_id, bot_name=bot_name)
+        logger.info(f"[UserbotManager] Successfully wiped dead/invalidated session for user {user_id} on @{bot_name}")
+    except Exception as e:
+        logger.error(f"[UserbotManager] Error clearing dead session for {user_id}: {e}")
+
+
 async def close_userbot(user_id: int):
-    """Gracefully disconnects and unregisters a user's client (e.g. during logout or relogin)."""
+    """Gracefully disconnects and unregisters a user's client."""
+    bot_name = get_current_bot_username()
     lock = await get_user_lock(user_id)
     async with lock:
         client = _active_userbots.pop(user_id, None)
@@ -109,13 +154,13 @@ async def close_userbot(user_id: int):
             try:
                 if getattr(client, "is_connected", False):
                     await client.stop()
-                logger.info(f"[UserbotManager] Client for user {user_id} stopped cleanly.")
+                logger.info(f"[UserbotManager] Client for user {user_id} stopped cleanly on @{bot_name}.")
             except Exception as e:
                 logger.warning(f"[UserbotManager] Client stop notice for user {user_id}: {e}")
 
 
 def get_active_userbot_sync(user_id: int) -> Optional[Client]:
-    """Synchronous lookup for an active, already-connected client instance."""
+    """Synchronous lookup for an active, already-connected client instance in this bot process."""
     client = _active_userbots.get(user_id)
     if client and getattr(client, "is_connected", False):
         return client

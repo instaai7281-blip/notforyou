@@ -45,12 +45,54 @@ async def replace_caption(user_id, replace_txt, to_replace):
     else:
         await db.insert_one({"_id": user_id, "replace_txt": replace_txt, "to_replace": to_replace})
 
-async def set_session(user_id, session):
+def get_current_bot_name() -> str:
+    try:
+        from toxic import app
+        if getattr(app, "me", None) and app.me.username:
+            return app.me.username
+    except Exception:
+        pass
+    return "default_bot"
+
+async def get_user_session(user_id: int, bot_name: str = None):
+    """Retrieves session string, prioritizing dedicated multi-bot session."""
+    if not bot_name:
+        bot_name = get_current_bot_name()
     data = await get_data(user_id)
+    if not data:
+        return None
+    sessions = data.get("sessions")
+    if isinstance(sessions, dict) and bot_name in sessions and sessions[bot_name]:
+        return sessions[bot_name]
+    return data.get("session")
+
+async def set_session(user_id, session, bot_name: str = None):
+    """Saves session with dedicated per-bot partition and legacy fallback."""
+    if not bot_name:
+        bot_name = get_current_bot_name()
+    data = await get_data(user_id)
+    update_doc = {
+        "session": session,
+        f"sessions.{bot_name}": session,
+        "assigned_bot": bot_name
+    }
     if data and data.get("_id"):
-        await db.update_one({"_id": user_id}, {"$set": {"session": session}})
+        await db.update_one({"_id": user_id}, {"$set": update_doc})
     else:
-        await db.insert_one({"_id": user_id, "session": session})
+        init_doc = {"_id": user_id, "session": session, "sessions": {bot_name: session}, "assigned_bot": bot_name}
+        await db.insert_one(init_doc)
+
+async def remove_user_session(user_id, bot_name: str = None):
+    """Removes user session for a specific bot or altogether."""
+    if not bot_name:
+        bot_name = get_current_bot_name()
+    try:
+        await db.update_one(
+            {"_id": user_id},
+            {"$unset": {f"sessions.{bot_name}": "", "session": ""}}
+        )
+    except Exception:
+        pass
 
 async def clean_words(user_id, new_clean_words):
     data = await get_data(user_id)
@@ -528,8 +570,9 @@ async def get_all_active_userbots():
     except Exception:
         pass
 
-    # 3. Add owner userbot session from MongoDB (prioritized and timeout protected)
+    # 3. Add owner userbot session from userbot_manager if active in this bot process
     try:
+        from toxic.core.userbot_manager import get_active_userbot_sync
         owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
         for oid in owner_list:
             if not oid:
@@ -538,34 +581,9 @@ async def get_all_active_userbots():
                 oid_int = int(oid)
             except ValueError:
                 continue
-
-            # Check if already connected
-            already_connected = False
-            for c in clients:
-                try:
-                    if getattr(c, "me", None) and c.me.id == oid_int:
-                        already_connected = True
-                        break
-                except Exception:
-                    pass
-
-            if not already_connected:
-                user_doc = await db.find_one({"_id": oid_int, "session": {"$exists": True, "$ne": None}})
-                if user_doc and user_doc.get("session"):
-                    try:
-                        ub = Client(
-                            f"ub_owner_{oid_int}",
-                            api_id=API_ID,
-                            api_hash=API_HASH,
-                            session_string=user_doc.get("session"),
-                            in_memory=True,
-                            no_updates=True,
-                            max_concurrent_transmissions=16
-                        )
-                        await asyncio.wait_for(ub.start(), timeout=4.0)
-                        clients.append(ub)
-                    except Exception:
-                        pass
+            active_ub = get_active_userbot_sync(oid_int)
+            if active_ub and getattr(active_ub, "is_connected", False) and active_ub not in clients:
+                clients.append(active_ub)
     except Exception as e:
         print(f"[DB] Error loading userbot pool: {e}")
 

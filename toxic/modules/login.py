@@ -316,16 +316,21 @@ async def start_login_flow(client, user_id: int, message_or_query):
             await two_step_msg.reply_text(f"❌ <b>2FA Authentication Error:</b> `{pwd_err}`", parse_mode=ParseMode.HTML)
             return
 
-    # Export session string and save in MongoDB
+    # Export session string and save in MongoDB partitioned for THIS bot
     string_session = await ub_client.export_session_string()
-    await db.set_session(user_id, string_session)
+    try:
+        from toxic.core.userbot_manager import get_current_bot_username
+        bot_uname = get_current_bot_username()
+    except Exception:
+        bot_uname = "default_bot"
+    await db.set_session(user_id, string_session, bot_name=bot_uname)
 
     try:
         await ub_client.disconnect()
     except Exception:
         pass
 
-    # Close any lingering old userbot first, then start unified userbot
+    # Close any lingering old userbot first, then start unified userbot for this bot
     try:
         from toxic.core.userbot_manager import close_userbot, get_or_create_userbot
         await close_userbot(user_id)
@@ -337,13 +342,14 @@ async def start_login_flow(client, user_id: int, message_or_query):
         "🎉 <b>USERBOT LOGIN SUCCESSFUL!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 <b>Authenticated User:</b> <code>{user_id}</code>\n"
+        f"🤖 <b>Dedicated For Bot:</b> <code>@{bot_uname}</code>\n"
         "⚡ <b>Session Status:</b> <code>SAVED IN DATABASE ✅</code>\n\n"
-        "🚀 <b>Unlocked Capabilities:</b>\n"
+        "🚀 <b>Multi-Bot Parallel Capabilities Unlocked:</b>\n"
+        "• Ab aap is bot aur baaki bots se <b>ek sath alag-alag groups</b> me bina session conflict ke simultaneous fast clone kar sakte hain! ⚡\n"
         "• 📁 Topic-to-Topic Supergroup Cloning\n"
         "• 📥 Restricted & Private Content Downloads\n"
-        "• 🔥 <b>Automatic View-Once Media Saver Active</b> ⚡\n"
-        "• ⚡ Zero-Bandwidth High-Speed Server Forwarding\n\n"
-        "<i>Use <code>/viewonce</code> to manage self-destructing media saver settings!</i>"
+        "• 🔥 <b>Automatic View-Once Media Saver Active</b> ⚡\n\n"
+        "<i>Ready to mirror! Send /mirror to start cloning.</i>"
     )
     await app.send_message(
         user_id,
