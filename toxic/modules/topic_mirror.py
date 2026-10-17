@@ -524,42 +524,12 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
 
 
 
-userbot_sessions = {} # user_id -> Client instance
-
-
 async def get_working_userbot(user_id: int):
-    """Returns a cached/reusable authenticated Pyrogram Client for the user session or pool client."""
-    user_data = await db.get_data(user_id)
-    user_session = user_data.get("session") if user_data else None
-
-    if user_session:
-        # Reuse existing cached userbot client if available
-        existing_ub = userbot_sessions.get(user_id)
-        if existing_ub:
-            try:
-                if getattr(existing_ub, "is_connected", False):
-                    return existing_ub, False
-                else:
-                    await existing_ub.start()
-                    return existing_ub, False
-            except Exception as re_err:
-                print(f"[TopicMirror] Cached userbot reconnect notice: {re_err}")
-                userbot_sessions.pop(user_id, None)
-
-        try:
-            ub = Client(
-                f"ub_tm_{user_id}",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                session_string=user_session,
-                no_updates=True,
-                max_concurrent_transmissions=128
-            )
-            await ub.start()
-            userbot_sessions[user_id] = ub
-            return ub, False
-        except Exception as e:
-            print(f"[TopicMirror] User session client start failed: {e}")
+    """Returns the single shared, authenticated Pyrogram Client for the user session or pool client."""
+    from toxic.core.userbot_manager import get_or_create_userbot
+    ub = await get_or_create_userbot(user_id)
+    if ub and getattr(ub, "is_connected", False):
+        return ub, False
 
     client = get_client()
     if client and client.is_connected:
@@ -810,21 +780,43 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     return topics_by_norm_title, topics_by_id
 
 
+def normalize_tg_id(chat_id) -> int:
+    """Normalizes Telegram chat ID ensuring -100 prefix for supergroups/channels."""
+    try:
+        s = str(chat_id).strip()
+        if not s:
+            return 0
+        if s.startswith("-100"):
+            return int(s)
+        if s.startswith("-"):
+            num = s[1:]
+            if len(num) >= 9:
+                return int(f"-100{num}")
+            return int(s)
+        if s.isdigit() and len(s) >= 9:
+            return int(f"-100{s}")
+        return int(s)
+    except Exception:
+        return chat_id
+
+
 async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
     """
     Intelligently resolves the source chat and identifies which client (userbot or app)
     has verified read/extraction access to the channel or group.
 
     Resolves [400 CHANNEL_INVALID] by:
-      1. Attempting userbot.get_chat(src_chat_id).
-      2. If CHANNEL_INVALID or PeerIdInvalid occurs (due to unprimed MemoryStorage in Pyrogram),
-         warms up userbot's peer cache by iterating recent dialogs, then retrying.
-      3. If userbot still cannot access the chat (e.g. userbot not added or session cleared),
-         checks if the bot (`app`) has access! If `app` has access, returns (app, src_chat, src_title, None).
-      4. Checks pro_clients pool as fallback.
+      1. Normalizing src_chat_id to ensure proper -100 prefix.
+      2. Attempting userbot.get_chat(src_chat_id).
+      3. If CHANNEL_INVALID or PeerIdInvalid occurs (due to unprimed MemoryStorage in Pyrogram),
+         warms up userbot's peer cache by iterating up to 300 dialogs with tolerant ID matching.
+      4. If userbot still cannot access the chat, checks if the bot (`app`) has access.
+      5. Checks pro_clients pool as fallback.
 
     Returns: (src_client, src_chat, src_title, error_message)
     """
+    src_chat_id = normalize_tg_id(src_chat_id)
+    clean_target = str(src_chat_id).replace("-100", "").replace("-", "")
     errors_encountered = []
 
     # 1. Primary candidate: userbot (if available)
@@ -837,14 +829,19 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
             return userbot, src_chat, src_title, None
         except Exception as ub_err:
             errors_encountered.append(f"userbot: {ub_err}")
-            print(f"[TopicMirror] Userbot direct get_chat failed for {src_chat_id}: {ub_err}. Warming peer cache...")
+            print(f"[TopicMirror] Userbot direct get_chat failed for {src_chat_id}: {ub_err}. Warming peer cache (limit 300)...")
             try:
-                async for dialog in userbot.get_dialogs(limit=100):
-                    if dialog.chat and (dialog.chat.id == src_chat_id or getattr(dialog.chat, "username", None) == src_chat_id):
-                        break
-                src_chat = await userbot.get_chat(src_chat_id)
-                src_title = src_chat.title or str(src_chat_id)
-                print(f"[TopicMirror] ✅ Resolved source chat via userbot after cache warm: '{src_title}' ({src_chat_id})")
+                matched_id = None
+                async for dialog in userbot.get_dialogs(limit=300):
+                    if dialog.chat:
+                        d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
+                        if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
+                            matched_id = dialog.chat.id
+                            break
+                target_try = matched_id or src_chat_id
+                src_chat = await userbot.get_chat(target_try)
+                src_title = src_chat.title or str(target_try)
+                print(f"[TopicMirror] ✅ Resolved source chat via userbot after cache warm: '{src_title}' ({target_try})")
                 return userbot, src_chat, src_title, None
             except Exception as warm_err:
                 errors_encountered.append(f"userbot_warm: {warm_err}")

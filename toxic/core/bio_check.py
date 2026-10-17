@@ -240,50 +240,76 @@ def get_owner_ids():
 
 
 async def get_fresh_user_bio(client: Client, user_id: int):
-    """Fetch a user's bio. None means the bio could not be verified."""
-
+    """
+    Fetch a user's bio using raw GetFullUser and get_chat across bot and available userbot clients.
+    None means the bio could not be retrieved at all.
+    """
+    # 1. Try with the primary bot client
     try:
         peer = await client.resolve_peer(user_id)
-        result = await client.invoke(
-            functions.users.GetFullUser(id=peer)
-        )
-
+        result = await client.invoke(functions.users.GetFullUser(id=peer))
         if hasattr(result, "full_user"):
             about = getattr(result.full_user, "about", None)
             if about is not None:
                 return about or ""
-
     except Exception as e:
-        logger.warning("Raw bio lookup failed for %s: %s", user_id, e)
-
-    try:
-        from toxic import pro
-
-        if pro and pro.is_connected:
-            peer = await pro.resolve_peer(user_id)
-            result = await pro.invoke(
-                functions.users.GetFullUser(id=peer)
-            )
-
-            if hasattr(result, "full_user"):
-                about = getattr(result.full_user, "about", None)
-                if about is not None:
-                    return about or ""
-
-    except Exception:
-        pass
+        logger.debug("Raw bot bio lookup for %s: %s", user_id, e)
 
     try:
         user = await client.get_chat(user_id)
         about = getattr(user, "bio", None)
-
         if about is not None:
             return about or ""
-
     except Exception as e:
-        logger.warning("get_chat bio lookup failed for %s: %s", user_id, e)
+        logger.debug("get_chat bot bio lookup for %s: %s", user_id, e)
 
-    # Do not treat an API failure as proof that the user has no tag.
+    # 2. Try with pro / pro_clients pool (Userbots see full bios without bot privacy limitations)
+    try:
+        from toxic import pro, pro_clients
+        candidates = [pro] if pro else []
+        if pro_clients:
+            for pc in pro_clients:
+                if pc and pc not in candidates:
+                    candidates.append(pc)
+
+        for ub_cl in candidates:
+            if ub_cl and getattr(ub_cl, "is_connected", False):
+                try:
+                    p = await ub_cl.resolve_peer(user_id)
+                    res = await ub_cl.invoke(functions.users.GetFullUser(id=p))
+                    if hasattr(res, "full_user"):
+                        about = getattr(res.full_user, "about", None)
+                        if about is not None:
+                            return about or ""
+                except Exception:
+                    try:
+                        u = await ub_cl.get_chat(user_id)
+                        about = getattr(u, "bio", None)
+                        if about is not None:
+                            return about or ""
+                    except Exception:
+                        pass
+    except Exception as err:
+        logger.debug("Pro clients bio fallback error: %s", err)
+
+    # 3. Try userbot pool from DB if available
+    try:
+        from toxic.core.mongo.db import get_all_active_userbots
+        active_ubs = await get_all_active_userbots()
+        for ub in active_ubs:
+            if ub and getattr(ub, "is_connected", False):
+                try:
+                    p = await ub.resolve_peer(user_id)
+                    res = await ub.invoke(functions.users.GetFullUser(id=p))
+                    if hasattr(res, "full_user"):
+                        about = getattr(res.full_user, "about", None)
+                        if about is not None:
+                            return about or ""
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     return None
 
 
@@ -698,6 +724,13 @@ async def verify_user_bio_callback(
                 e
             )
 
+    # Fetch channel links to send along with verification message
+    from toxic.core.mongo.db import get_main_channel_link, get_bio_channel, get_auth_channels
+    main_ch_link = await get_main_channel_link()
+    bio_ch_id = await get_bio_channel()
+    auth_chs = await get_auth_channels()
+
+    # If user had pending requests, show those. Otherwise, show main channel / destination links!
     approve_text = (
         "🔓 <b>Access Granted & Bio Verified ✅</b>\n\n"
         f"<blockquote><b>Welcome, {user_mention} ! 🥂</b></blockquote>\n\n"
@@ -706,7 +739,6 @@ async def verify_user_bio_callback(
 
     if approved_chats_list:
         approve_text += "✅ <b>Join Request Approved for:</b>\n"
-
         for item in approved_chats_list:
             approve_text += (
                 format_channel_display(
@@ -716,25 +748,54 @@ async def verify_user_bio_callback(
                 )
                 + "\n"
             )
-
         approve_text += "\n"
+    else:
+        # User verified directly via bot DM or button: provide access channel link!
+        channel_name = "🎯 Official Channel"
+        approve_text += (
+            "✅ <b>Unlocked Channel & Bot Access Link:</b>\n"
+            f"<blockquote><b>{channel_name} 🚀</b>\n"
+            f"<a href='{main_ch_link}'>{main_ch_link}</a></blockquote>\n\n"
+        )
 
     approve_text += (
-        "Ab aap bot and channel access kar sakte hain. 🥰\n\n"
+        "Ab aap bot aur channel ko unhindered access kar sakte hain. 🥰\n\n"
         f"⚠️ <b>Note:</b> <i>Agar Bio se "
-        f"<code>{req_tag}</code> hataya to access "
-        "firse deny ho jayega. 📑</i>\n\n"
-        "👉 <b>Send /start to proceed!</b>"
+        f"<code>{req_tag}</code> hataya toh automated security system access revoke kar dega. 📑</i>\n\n"
+        "👉 <b>Niche button se Channel join karein ya /start karein! 🚀</b>"
     )
+
+    # Add interactive access buttons
+    success_buttons = [
+        [
+            InlineKeyboardButton("📢 Open Channel 🚀", url=main_ch_link),
+            InlineKeyboardButton("🚀 Start Bot (/start)", url=f"https://t.me/{(client.me.username if client.me else 'bot')}?start=verified")
+        ],
+        [
+            InlineKeyboardButton("💎 View Premium Plans", callback_data="see_plan"),
+            InlineKeyboardButton("💬 Contact Support", url="https://t.me/CrazyxDeveloper_Bot")
+        ]
+    ]
 
     try:
         await callback_query.message.edit_text(
             approve_text,
+            reply_markup=InlineKeyboardMarkup(success_buttons),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
     except Exception as e:
         logger.warning("Could not edit verification message: %s", e)
+        try:
+            await client.send_message(
+                user_id,
+                approve_text,
+                reply_markup=InlineKeyboardMarkup(success_buttons),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        except Exception:
+            pass
 
 
 @app.on_callback_query(filters.regex("^bio_terms_info$"))

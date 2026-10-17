@@ -1,30 +1,35 @@
 # ---------------------------------------------------
 # File Name: view_once.py
 # Description: Automatic View-Once (Self-Destructing Media) Saver Module for Userbot & Bot
+#              Saves permanently to Saved Messages AND Bot DM
 # Author: Antigravity
 # ---------------------------------------------------
 
 import os
 import time
+import html
 import asyncio
 import logging
+from typing import Optional
 from pyrogram import Client, filters, enums
+from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from toxic import app
 from toxic.core.mongo import db
-from config import API_ID, API_HASH
 
 logger = logging.getLogger(__name__)
 
-# Active background listener userbots for view-once saver: user_id -> Client
-active_viewonce_listeners = {}
+# Tracks user_ids that have the view-once handler attached
+_attached_userbots = set()
+
 
 async def is_view_once_enabled(user_id: int) -> bool:
     """Check if view-once auto-saving is enabled for this user."""
     data = await db.get_data(user_id)
     if data:
-        return data.get("view_once_saver", True) # Default enabled once logged in
+        return data.get("view_once_saver", True)  # Default enabled once logged in
     return True
+
 
 async def set_view_once_setting(user_id: int, enabled: bool):
     """Toggle view-once saving setting."""
@@ -34,8 +39,43 @@ async def set_view_once_setting(user_id: int, enabled: bool):
     else:
         await db.db.insert_one({"_id": user_id, "view_once_saver": enabled})
 
+
+def is_view_once_media(message: Message) -> bool:
+    """Accurately detects if a message is self-destructing/view-once across all Telegram media types."""
+    if not message:
+        return False
+
+    # 1. Message-level TTL
+    if getattr(message, "ttl_period", None) or getattr(message, "ttl_seconds", None):
+        return True
+
+    # 2. Check all possible media fields in Pyrogram
+    for attr in ("photo", "video", "voice", "video_note", "document", "audio", "animation"):
+        media = getattr(message, attr, None)
+        if media:
+            ttl = getattr(media, "ttl_seconds", None) or getattr(media, "ttl_period", None)
+            if ttl is not None and ttl > 0:
+                return True
+
+    # 3. Raw MTProto object fallback (PyroFork raw message/media inspection)
+    try:
+        raw_msg = getattr(message, "raw", None) or getattr(message, "_raw", None)
+        if raw_msg:
+            if getattr(raw_msg, "ttl_period", None):
+                return True
+            raw_media = getattr(raw_msg, "media", None)
+            if raw_media:
+                raw_ttl = getattr(raw_media, "ttl_seconds", None)
+                if raw_ttl is not None and raw_ttl > 0:
+                    return True
+    except Exception:
+        pass
+
+    return False
+
+
 async def format_sender_caption(message: Message, media_type: str = "Photo") -> str:
-    """Creates a beautiful, clean caption with sender info."""
+    """Creates a beautiful, clean, HTML-safe caption with sender info."""
     sender_name = "Anonymous"
     sender_user = "Unknown"
     sender_id = "Hidden"
@@ -51,16 +91,21 @@ async def format_sender_caption(message: Message, media_type: str = "Photo") -> 
         sender_user = f"@{c.username}" if c.username else "Private"
         sender_id = str(c.id)
 
-    orig_caption = message.caption or ""
-    orig_caption_text = f"\n\n💬 <b>Original Caption:</b>\n<i>{orig_caption}</i>" if orig_caption else ""
+    # HTML-safe escaping to prevent [400 MSG_PARSE_ERROR]
+    safe_name = html.escape(sender_name)
+    safe_user = html.escape(sender_user)
+    safe_id = html.escape(sender_id)
 
-    bot_name = app.me.username if app.me else "Bot"
+    orig_caption = message.caption or ""
+    orig_caption_text = f"\n\n💬 <b>Original Caption:</b>\n<i>{html.escape(orig_caption)}</i>" if orig_caption else ""
+
+    bot_name = app.me.username if getattr(app, "me", None) and app.me.username else "Bot"
     caption = (
         f"🔥 <b>Saved View-Once {media_type}!</b> ⚡\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Sender Name:</b> <code>{sender_name}</code>\n"
-        f"🔗 <b>Username:</b> {sender_user}\n"
-        f"🆔 <b>User ID:</b> <code>{sender_id}</code>\n"
+        f"👤 <b>Sender Name:</b> <code>{safe_name}</code>\n"
+        f"🔗 <b>Username:</b> {safe_user}\n"
+        f"🆔 <b>User ID:</b> <code>{safe_id}</code>\n"
         f"🕒 <b>Received At:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>"
         f"{orig_caption_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -68,148 +113,148 @@ async def format_sender_caption(message: Message, media_type: str = "Photo") -> 
     )
     return caption
 
-async def register_view_once_listener(user_id: int, session_string: str):
-    """Starts a dedicated Pyrogram listener on the user's account to capture incoming or self-sent view-once media."""
-    if user_id in active_viewonce_listeners:
-        existing = active_viewonce_listeners[user_id]
-        if getattr(existing, "is_connected", False):
-            return existing
 
+async def _handle_view_once_media(client: Client, message: Message, user_id: int):
+    """Processes, downloads, and permanently saves detected view-once media."""
     try:
-        ub = Client(
-            f"viewonce_ub_{user_id}",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            session_string=session_string,
-            in_memory=True,
-            no_updates=False # MUST receive live updates to catch incoming view-once messages
-        )
+        # 1. Verify user setting
+        if not await is_view_once_enabled(user_id):
+            return
 
-        @ub.on_message((filters.private | filters.chat("me")) & (filters.photo | filters.video | filters.voice | filters.video_note | filters.document))
-        async def on_private_incoming_media(client: Client, message: Message):
-            try:
-                # 1. Check if user turned setting off
-                if not await is_view_once_enabled(user_id):
-                    return
+        # 2. Check if view-once media
+        if not is_view_once_media(message):
+            return
 
-                # 2. Check if view-once / expiring media (TTL > 0)
-                has_ttl = (
-                    getattr(getattr(message, "photo", None), "ttl_seconds", None) or
-                    getattr(getattr(message, "video", None), "ttl_seconds", None) or
-                    getattr(getattr(message, "voice", None), "ttl_seconds", None) or
-                    getattr(getattr(message, "video_note", None), "ttl_seconds", None) or
-                    getattr(getattr(message, "document", None), "ttl_seconds", None) or
-                    getattr(message, "ttl_period", None)
-                )
+        # 3. Prevent loops if already tagged/saved
+        if message.caption and "Saved permanently by" in message.caption:
+            return
 
-                # Skip normal permanent media (only process self-destructing / view-once media)
-                if not has_ttl:
-                    return
+        # 4. Identify media type
+        if message.photo:
+            media_type = "Photo"
+        elif message.video:
+            media_type = "Video"
+        elif message.voice:
+            media_type = "Voice"
+        elif getattr(message, "video_note", None):
+            media_type = "Video Note"
+        elif message.audio:
+            media_type = "Audio"
+        else:
+            media_type = "Document"
 
-                # Prevent infinite loops if media was already tagged/saved
-                if message.caption and "Saved permanently by" in message.caption:
-                    return
+        sender_id_str = str(message.from_user.id) if message.from_user else "unknown"
+        logger.info(f"[VIEW-ONCE] 🎯 Captured view-once {media_type} for user {user_id} from {sender_id_str}")
 
-                # Determine media type
-                if message.photo:
-                    media_type = "Photo"
-                elif message.video:
-                    media_type = "Video"
-                elif message.voice:
-                    media_type = "Voice"
-                elif getattr(message, "video_note", None):
-                    media_type = "Video Note"
-                else:
-                    media_type = "Document"
+        caption = await format_sender_caption(message, media_type)
 
-                sender_id_str = str(message.from_user.id) if message.from_user else "unknown"
-                logger.info(f"[VIEW-ONCE] 🎯 Detected view-once {media_type} for user {user_id} (TTL: {has_ttl}s) from {sender_id_str}")
+        # 5. Download media to disk
+        temp_dir = os.path.join("downloads", f"vo_{user_id}")
+        os.makedirs(temp_dir, exist_ok=True)
 
-                caption = await format_sender_caption(message, media_type)
+        downloaded_file = await client.download_media(message, file_name=f"{temp_dir}/")
+        if not downloaded_file or not os.path.exists(downloaded_file) or os.path.getsize(downloaded_file) == 0:
+            logger.error(f"[VIEW-ONCE] ❌ Failed to download view-once media for user {user_id}")
+            return
 
-                # Download media immediately before it expires
-                temp_dir = os.path.join("downloads", f"vo_{user_id}")
-                os.makedirs(temp_dir, exist_ok=True)
+        logger.info(f"[VIEW-ONCE] 📥 Downloaded view-once file: {downloaded_file} ({os.path.getsize(downloaded_file)} bytes)")
 
-                downloaded_file = await client.download_media(message, file_name=f"{temp_dir}/")
-                if not downloaded_file or not os.path.exists(downloaded_file) or os.path.getsize(downloaded_file) == 0:
-                    logger.error(f"[VIEW-ONCE] ❌ Failed to download view-once media for user {user_id}")
-                    return
+        # 6. Step 1: Save permanently into User's Saved Messages
+        # Sending to the user's numeric ID via userbot automatically saves into Saved Messages!
+        targets = [user_id, "me"]
+        saved_successfully = False
 
-                logger.info(f"[VIEW-ONCE] 📥 Downloaded view-once file: {downloaded_file} ({os.path.getsize(downloaded_file)} bytes)")
-
-                # 1. Send permanently to User's Saved Messages ("me") without any TTL!
+        for target in targets:
+            if saved_successfully:
+                break
+            for mode in (enums.ParseMode.HTML, None):
                 try:
-                    target_dest = "me"
                     if message.photo:
-                        await client.send_photo(target_dest, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await client.send_photo(target, downloaded_file, caption=caption, parse_mode=mode)
                     elif message.video:
-                        await client.send_video(target_dest, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await client.send_video(target, downloaded_file, caption=caption, parse_mode=mode)
                     elif message.voice:
-                        await client.send_voice(target_dest, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await client.send_voice(target, downloaded_file, caption=caption, parse_mode=mode)
                     elif getattr(message, "video_note", None):
-                        await client.send_video_note(target_dest, downloaded_file)
+                        await client.send_video_note(target, downloaded_file)
+                    elif message.audio:
+                        await client.send_audio(target, downloaded_file, caption=caption, parse_mode=mode)
                     else:
-                        await client.send_document(target_dest, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
-                    logger.info(f"[VIEW-ONCE] ✅ Saved view-once {media_type} to Saved Messages for user {user_id}")
+                        await client.send_document(target, downloaded_file, caption=caption, parse_mode=mode)
+                    logger.info(f"[VIEW-ONCE] ✅ Saved view-once {media_type} to Saved Messages (target: {target}) for user {user_id}")
+                    saved_successfully = True
+                    break
                 except Exception as save_err:
-                    logger.error(f"[VIEW-ONCE] Failed to send to 'me', retrying with numeric id: {save_err}")
-                    try:
-                        me_obj = await client.get_me()
-                        if message.photo:
-                            await client.send_photo(me_obj.id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
-                        elif message.video:
-                            await client.send_video(me_obj.id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
-                        elif message.voice:
-                            await client.send_voice(me_obj.id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
-                        elif getattr(message, "video_note", None):
-                            await client.send_video_note(me_obj.id, downloaded_file)
-                        else:
-                            await client.send_document(me_obj.id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
-                        logger.info(f"[VIEW-ONCE] ✅ Saved view-once {media_type} via numeric id for user {user_id}")
-                    except Exception as fallback_err:
-                        logger.error(f"[VIEW-ONCE] Fallback send to userbot id failed: {fallback_err}")
+                    logger.warning(f"[VIEW-ONCE] Target {target} mode {mode} notice: {save_err}")
 
-                # 2. ALSO deliver a copy directly to User via Bot DM so they never miss it!
+        # 7. Step 2: ALSO send a permanent copy directly in Bot DM
+        try:
+            for mode in (enums.ParseMode.HTML, None):
                 try:
                     if message.photo:
-                        await app.send_photo(user_id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await app.send_photo(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif message.video:
-                        await app.send_video(user_id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await app.send_video(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif message.voice:
-                        await app.send_voice(user_id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await app.send_voice(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif getattr(message, "video_note", None):
                         await app.send_video_note(user_id, downloaded_file)
+                    elif message.audio:
+                        await app.send_audio(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     else:
-                        await app.send_document(user_id, downloaded_file, caption=caption, parse_mode=enums.ParseMode.HTML)
+                        await app.send_document(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     logger.info(f"[VIEW-ONCE] ✅ Delivered view-once {media_type} to Bot DM for user {user_id}")
-                except Exception as bot_send_err:
-                    logger.error(f"[VIEW-ONCE] Bot DM delivery notice: {bot_send_err}")
+                    break
+                except Exception as bot_err:
+                    if mode is None:
+                        logger.error(f"[VIEW-ONCE] Bot DM delivery error: {bot_err}")
+        except Exception as dm_err:
+            logger.warning(f"[VIEW-ONCE] Bot DM notice: {dm_err}")
 
-                # Clean up local downloaded file
-                try:
-                    if os.path.exists(downloaded_file):
-                        os.remove(downloaded_file)
-                except Exception:
-                    pass
-
-            except Exception as e:
-                logger.error(f"[VIEW-ONCE] Error processing incoming view-once media: {e}")
-
-        await ub.start()
-        active_viewonce_listeners[user_id] = ub
-        logger.info(f"✅ View-Once auto-saver started for user {user_id}")
-        return ub
+        # 8. Clean up local downloaded file
+        try:
+            if os.path.exists(downloaded_file):
+                os.remove(downloaded_file)
+        except Exception:
+            pass
 
     except Exception as e:
-        logger.error(f"Failed to start View-Once listener for user {user_id}: {e}")
-        return None
+        logger.error(f"[VIEW-ONCE] Error processing view-once media: {e}")
+
+
+def attach_view_once_to_client(client: Client, user_id: int):
+    """Attaches the view-once MessageHandler dynamically to a unified userbot client."""
+    if user_id in _attached_userbots:
+        return
+
+    # Filter catches any private message (incoming or outgoing) containing media
+    media_filter = filters.private & (
+        filters.photo | filters.video | filters.voice | filters.video_note | filters.document | filters.audio
+    )
+
+    async def _handler(c: Client, m: Message):
+        await _handle_view_once_media(c, m, user_id)
+
+    client.add_handler(MessageHandler(_handler, media_filter))
+    _attached_userbots.add(user_id)
+    logger.info(f"[VIEW-ONCE] Attached view-once listener to client for user {user_id}")
+
+
+async def register_view_once_listener(user_id: int, session_string: str) -> Optional[Client]:
+    """Retrieves or boots the unified userbot client for user_id with view-once active."""
+    from toxic.core.userbot_manager import get_or_create_userbot
+    ub = await get_or_create_userbot(user_id, session_string)
+    if ub:
+        attach_view_once_to_client(ub, user_id)
+    return ub
 
 
 async def load_all_view_once_listeners():
-    """Scans all users with saved sessions on startup and registers their view-once listeners."""
+    """Scans all users with saved sessions on startup and boots their unified userbot clients."""
     try:
         from toxic.core.mongo.db import db as user_db
+        from toxic.core.userbot_manager import get_or_create_userbot
+
         cursor = user_db.find({"session": {"$exists": True, "$ne": None}})
         count = 0
         async for doc in cursor:
@@ -218,11 +263,11 @@ async def load_all_view_once_listeners():
             is_enabled = doc.get("view_once_saver", True)
             if uid and s_str and is_enabled:
                 try:
-                    asyncio.create_task(register_view_once_listener(uid, s_str))
+                    asyncio.create_task(get_or_create_userbot(uid, s_str))
                     count += 1
                 except Exception as e:
-                    logger.error(f"Error restoring view-once listener for {uid}: {e}")
-        print(f"[VIEW-ONCE] Successfully restored {count} view-once auto-saver listeners on boot!")
+                    logger.error(f"Error restoring userbot for {uid}: {e}")
+        print(f"[VIEW-ONCE] Successfully initiated unified userbot listeners for {count} users on boot!")
     except Exception as e:
         logger.error(f"[VIEW-ONCE] Failed to load listeners on boot: {e}")
 
@@ -231,7 +276,7 @@ async def load_all_view_once_listeners():
 @app.on_message(filters.command(["viewonce", "vo", "antisave"]))
 async def view_once_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else message.chat.id
-    
+
     user_data = await db.get_data(user_id) or {}
     session_str = user_data.get("session")
 
@@ -257,8 +302,9 @@ async def view_once_command_handler(client: Client, message: Message):
     toggle_btn_text = "🔴 Turn OFF Saver" if is_enabled else "🟢 Turn ON Saver"
 
     # Ensure background listener is running
-    if is_enabled and user_id not in active_viewonce_listeners:
-        asyncio.create_task(register_view_once_listener(user_id, session_str))
+    if is_enabled:
+        from toxic.core.userbot_manager import get_or_create_userbot
+        asyncio.create_task(get_or_create_userbot(user_id, session_str))
 
     panel_text = (
         "🔥 <b>TELEGRAM VIEW-ONCE AUTO-SAVER</b> ⚡\n"
@@ -266,7 +312,7 @@ async def view_once_command_handler(client: Client, message: Message):
         f"⚡ <b>Status:</b> <code>{status_text}</code>\n"
         "🛡️ <b>Destination:</b> <code>Your Saved Messages + Bot DM</code>\n\n"
         "✨ <b>Features:</b>\n"
-        "• Koi bhi private DM ya Saved Messages me <b>View-Once Photo/Video</b> bhejega, to wo expire hone se pehle auto-download ho jayegi.\n"
+        "• Koi bhi private DM me <b>View-Once Photo/Video/Voice</b> bhejega (ya aap bhejenge), to wo expire hone se pehle auto-download ho jayegi.\n"
         "• Aapke <b>Saved Messages</b> aur <b>Bot DM</b> me sender ke Full Name, Username aur User ID ke saath permanently save ho jayegi!\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -291,14 +337,8 @@ async def toggle_viewonce_callback(client: Client, callback_query):
     session_str = user_data.get("session")
 
     if new_status and session_str:
-        asyncio.create_task(register_view_once_listener(user_id, session_str))
-    elif not new_status:
-        ub = active_viewonce_listeners.pop(user_id, None)
-        if ub:
-            try:
-                await ub.stop()
-            except Exception:
-                pass
+        from toxic.core.userbot_manager import get_or_create_userbot
+        asyncio.create_task(get_or_create_userbot(user_id, session_str))
 
     await callback_query.answer(f"View-Once Saver {'Activated ✅' if new_status else 'Deactivated ❌'}", show_alert=True)
     status_text = "🟢 ACTIVE & RUNNING" if new_status else "🔴 TURNED OFF"
@@ -310,7 +350,7 @@ async def toggle_viewonce_callback(client: Client, callback_query):
         f"⚡ <b>Status:</b> <code>{status_text}</code>\n"
         "🛡️ <b>Destination:</b> <code>Your Saved Messages + Bot DM</code>\n\n"
         "✨ <b>Features:</b>\n"
-        "• Koi bhi private DM ya Saved Messages me <b>View-Once Photo/Video</b> bhejega, to wo expire hone se pehle auto-download ho jayegi.\n"
+        "• Koi bhi private DM me <b>View-Once Photo/Video/Voice</b> bhejega (ya aap bhejenge), to wo expire hone se pehle auto-download ho jayegi.\n"
         "• Aapke <b>Saved Messages</b> aur <b>Bot DM</b> me sender ke Full Name, Username aur User ID ke saath permanently save ho jayegi!\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -330,15 +370,17 @@ async def toggle_viewonce_callback(client: Client, callback_query):
 @app.on_callback_query(filters.regex(r"^check_viewonce_cb$"))
 async def check_viewonce_callback(client: Client, callback_query):
     user_id = callback_query.from_user.id
-    
-    # Try auto-connecting if session exists but not in active map
-    if user_id not in active_viewonce_listeners:
+
+    from toxic.core.userbot_manager import get_or_create_userbot, get_active_userbot_sync
+    active_ub = get_active_userbot_sync(user_id)
+
+    if not active_ub:
         user_data = await db.get_data(user_id) or {}
         session_str = user_data.get("session")
         if session_str and await is_view_once_enabled(user_id):
-            await register_view_once_listener(user_id, session_str)
+            active_ub = await get_or_create_userbot(user_id, session_str)
 
-    is_active = user_id in active_viewonce_listeners and getattr(active_viewonce_listeners[user_id], "is_connected", False)
+    is_active = active_ub is not None and getattr(active_ub, "is_connected", False)
     status_msg = (
         "✅ Listener Online!\n\nUserbot background me live active hai aur kisi bhi incoming/outgoing view-once photo/video ko auto-save karne ke liye ready hai!"
         if is_active else

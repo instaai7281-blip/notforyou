@@ -162,6 +162,11 @@ async def login_callback_handler(client, query: CallbackQuery):
         return
 
     if data == "login_logout_cb":
+        try:
+            from toxic.core.userbot_manager import close_userbot
+            await close_userbot(user_id)
+        except Exception:
+            pass
         await delete_session_files(user_id)
         await query.answer("🚪 Session logged out successfully!", show_alert=True)
         logout_card = (
@@ -320,12 +325,13 @@ async def start_login_flow(client, user_id: int, message_or_query):
     except Exception:
         pass
 
-    # Automatically initialize View-Once background listener for this account
+    # Close any lingering old userbot first, then start unified userbot
     try:
-        from toxic.modules.view_once import register_view_once_listener
-        asyncio.create_task(register_view_once_listener(user_id, string_session))
+        from toxic.core.userbot_manager import close_userbot, get_or_create_userbot
+        await close_userbot(user_id)
+        asyncio.create_task(get_or_create_userbot(user_id, string_session))
     except Exception as vo_err:
-        print(f"Failed to auto-start view once listener on login: {vo_err}")
+        print(f"Failed to auto-start unified userbot on login: {vo_err}")
 
     success_card = (
         "🎉 <b>USERBOT LOGIN SUCCESSFUL!</b>\n"

@@ -172,27 +172,14 @@ async def single_link(_, message):
             pass
 
 
-async def initialize_userbot(user_id): # this ensure the single startup .. even if logged in or not
-    """Initialize the userbot session for the given user."""
-    data = await db.get_data(user_id)
-    if data and data.get("session"):
-        try:
-            device = 'iPhone 16 Pro' # added gareebi text
-            userbot = Client(
-                f"userbot_{user_id}",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                device_model=device,
-                session_string=data.get("session"),
-                in_memory=True,
-                no_updates=True,
-                max_concurrent_transmissions=16
-            )
-            await userbot.start()
-            return userbot
-        except Exception:
-            return None
-    return None
+async def initialize_userbot(user_id):
+    """Returns the shared unified userbot session for the given user."""
+    try:
+        from toxic.core.userbot_manager import get_or_create_userbot
+        return await get_or_create_userbot(user_id)
+    except Exception as e:
+        print(f"[Main] initialize_userbot error for {user_id}: {e}")
+        return None
 
 
 async def is_normal_tg_link(link: str) -> bool:
