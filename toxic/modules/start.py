@@ -27,10 +27,10 @@ from pyrogram.enums import ChatType, ParseMode
 
 
 
-@app.on_message(group=-2)
+@app.on_message(filters.private, group=-2)
 async def free_user_strict_guard(client, message: Message):
     """
-    Completely silences and drops all incoming messages and commands from Free Users.
+    Completely silences and drops incoming private messages and commands from Free Users.
     No reply, no card, no /start response — only Pro/Premium users and Admins can interact.
     """
     user_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
@@ -40,7 +40,7 @@ async def free_user_strict_guard(client, message: Message):
     from toxic.core.func import is_free_user
 
     if await is_free_user(user_id):
-        # Absolutely silent! Nothing sent, no reply to /start or any command.
+        # Absolutely silent! Nothing sent, no reply to /start or any command in private DM.
         message.stop_propagation()
         return
 
