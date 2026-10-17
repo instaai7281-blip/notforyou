@@ -3367,6 +3367,15 @@ async def run_single_link_mirror(
 
         control_kb = get_mirror_keyboard(user_id)
 
+        if status_msg:
+            try:
+                await status_msg.pin(both_sides=True)
+            except Exception:
+                try:
+                    await status_msg.pin()
+                except Exception:
+                    pass
+
         for idx, msg in enumerate(messages_to_copy, 1):
             if not active_mirrors.get(user_id, {}).get("running", True):
                 await app.send_message(user_id, "🛑 <b>Link Mirror stopped by user!</b>", parse_mode=ParseMode.HTML)
@@ -3946,6 +3955,14 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 "🔄 **Initializing Userbot Session & Verifying Group Access...**",
                 reply_markup=control_kb
             )
+            # Auto-pin the mirror dashboard message in bot chat so user can easily track it
+            try:
+                await status_msg.pin(both_sides=True)
+            except Exception:
+                try:
+                    await status_msg.pin()
+                except Exception:
+                    pass
         except Exception:
             try:
                 status_msg = await app.send_message(
@@ -3953,6 +3970,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     "🔄 **Initializing Userbot Session & Verifying Group Access...**",
                     reply_markup=control_kb
                 )
+                try:
+                    await status_msg.pin(both_sides=True)
+                except Exception:
+                    try:
+                        await status_msg.pin()
+                    except Exception:
+                        pass
             except Exception:
                 status_msg = None
     else:
@@ -3962,6 +3986,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 "🔄 **Initializing Userbot Session & Verifying Group Access...**",
                 reply_markup=control_kb
             )
+            try:
+                await status_msg.pin(both_sides=True)
+            except Exception:
+                try:
+                    await status_msg.pin()
+                except Exception:
+                    pass
         except Exception:
             status_msg = None
 
