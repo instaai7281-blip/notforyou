@@ -810,215 +810,287 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     return topics_by_norm_title, topics_by_id
 
 
-async def get_all_source_forum_topics(userbot, src_chat_id: int):
+async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
+    """
+    Intelligently resolves the source chat and identifies which client (userbot or app)
+    has verified read/extraction access to the channel or group.
+
+    Resolves [400 CHANNEL_INVALID] by:
+      1. Attempting userbot.get_chat(src_chat_id).
+      2. If CHANNEL_INVALID or PeerIdInvalid occurs (due to unprimed MemoryStorage in Pyrogram),
+         warms up userbot's peer cache by iterating recent dialogs, then retrying.
+      3. If userbot still cannot access the chat (e.g. userbot not added or session cleared),
+         checks if the bot (`app`) has access! If `app` has access, returns (app, src_chat, src_title, None).
+      4. Checks pro_clients pool as fallback.
+
+    Returns: (src_client, src_chat, src_title, error_message)
+    """
+    errors_encountered = []
+
+    # 1. Primary candidate: userbot (if available)
+    if userbot:
+        try:
+            await ensure_userbot_connected(userbot)
+            src_chat = await userbot.get_chat(src_chat_id)
+            src_title = src_chat.title or str(src_chat_id)
+            print(f"[TopicMirror] ✅ Resolved source chat via userbot: '{src_title}' ({src_chat_id})")
+            return userbot, src_chat, src_title, None
+        except Exception as ub_err:
+            errors_encountered.append(f"userbot: {ub_err}")
+            print(f"[TopicMirror] Userbot direct get_chat failed for {src_chat_id}: {ub_err}. Warming peer cache...")
+            try:
+                async for dialog in userbot.get_dialogs(limit=100):
+                    if dialog.chat and (dialog.chat.id == src_chat_id or getattr(dialog.chat, "username", None) == src_chat_id):
+                        break
+                src_chat = await userbot.get_chat(src_chat_id)
+                src_title = src_chat.title or str(src_chat_id)
+                print(f"[TopicMirror] ✅ Resolved source chat via userbot after cache warm: '{src_title}' ({src_chat_id})")
+                return userbot, src_chat, src_title, None
+            except Exception as warm_err:
+                errors_encountered.append(f"userbot_warm: {warm_err}")
+
+    # 2. Secondary candidate: app (The Bot itself - added to source group/channel)
+    if app:
+        try:
+            src_chat = await app.get_chat(src_chat_id)
+            src_title = src_chat.title or str(src_chat_id)
+            print(f"[TopicMirror] ✅ Resolved source chat via bot (app): '{src_title}' ({src_chat_id})")
+            return app, src_chat, src_title, None
+        except Exception as app_err:
+            errors_encountered.append(f"app: {app_err}")
+            print(f"[TopicMirror] Bot (app) get_chat notice for {src_chat_id}: {app_err}")
+
+    # 3. Tertiary candidate: pool of pro_clients (if configured)
+    if pro_clients:
+        for idx, pc in enumerate(pro_clients):
+            try:
+                if getattr(pc, "is_connected", False):
+                    src_chat = await pc.get_chat(src_chat_id)
+                    src_title = src_chat.title or str(src_chat_id)
+                    print(f"[TopicMirror] ✅ Resolved source chat via pro_client #{idx}: '{src_title}' ({src_chat_id})")
+                    return pc, src_chat, src_title, None
+            except Exception:
+                continue
+
+    combined_err = " | ".join(errors_encountered) if errors_encountered else "No available client could access this chat."
+    return None, None, None, combined_err
+
+
+async def get_all_source_forum_topics(client, src_chat_id: int, fallback_client=None):
     """
     Scans ALL forum topics from the source group using raw RPC GetForumTopics with pagination.
-    Falls back to deep history scanning if needed.
+    Falls back to deep history scanning or fallback_client if needed.
     Returns: list of dicts [{"id": tid, "title": title, "icon_color": ..., "icon_emoji_id": ...}]
     """
     source_topics = []
     seen_ids = set()
+    clients_to_try = [c for c in [client, fallback_client] if c]
 
-    # 1. Primary Strategy: Raw RPC GetForumTopics with pagination
-    try:
-        peer = await userbot.resolve_peer(src_chat_id)
-        offset_date = 0
-        offset_id = 0
-        offset_topic = 0
-        while True:
-            res = await userbot.invoke(raw.functions.messages.GetForumTopics(
-                peer=peer,
-                offset_date=offset_date,
-                offset_id=offset_id,
-                offset_topic=offset_topic,
-                limit=100
-            ))
-            topics_list = getattr(res, "topics", [])
-            if not topics_list:
-                break
-            new_found = 0
-            for t in topics_list:
-                tid = getattr(t, "id", None)
-                if not tid or tid in seen_ids:
-                    continue
-                seen_ids.add(tid)
-                new_found += 1
-                source_topics.append({
-                    "id": tid,
-                    "title": getattr(t, "title", f"Topic {tid}") or f"Topic {tid}",
-                    "icon_color": getattr(t, "icon_color", None),
-                    "icon_emoji_id": getattr(t, "icon_emoji_id", None)
-                })
-                offset_date = getattr(t, "date", offset_date)
-                top_msg = getattr(t, "top_message", 0)
-                offset_id = top_msg if top_msg else tid
-                offset_topic = tid
-            if new_found == 0:
-                break
-        if source_topics:
-            print(f"[TopicMirror] ✅ Discovered {len(source_topics)} source topics via raw RPC GetForumTopics")
-    except Exception as rpc_err:
-        print(f"[TopicMirror] Raw RPC GetForumTopics source scan notice: {rpc_err}")
-
-    # 2. Fallback: Deep chat history topic discovery if RPC failed or returned nothing
-    if not source_topics:
-        discovered_tids = set()
+    for cl in clients_to_try:
+        # 1. Primary Strategy: Raw RPC GetForumTopics with pagination
         try:
-            async for m in userbot.get_chat_history(src_chat_id, limit=600):
-                if not m:
-                    continue
-                m_thread = getattr(m, "message_thread_id", None)
-                reply_to = getattr(m, "reply_to_message_id", None)
-                reply_top_id = getattr(getattr(m, "reply_to_message", None), "reply_to_top_id", None)
-                for tid in (m_thread, reply_to, reply_top_id):
-                    if tid and isinstance(tid, int) and tid > 1 and tid not in seen_ids:
-                        discovered_tids.add(tid)
+            peer = await cl.resolve_peer(src_chat_id)
+            offset_date = 0
+            offset_id = 0
+            offset_topic = 0
+            while True:
+                res = await cl.invoke(raw.functions.messages.GetForumTopics(
+                    peer=peer,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100
+                ))
+                topics_list = getattr(res, "topics", [])
+                if not topics_list:
+                    break
+                new_found = 0
+                for t in topics_list:
+                    tid = getattr(t, "id", None)
+                    if not tid or tid in seen_ids:
+                        continue
+                    seen_ids.add(tid)
+                    new_found += 1
+                    source_topics.append({
+                        "id": tid,
+                        "title": getattr(t, "title", f"Topic {tid}") or f"Topic {tid}",
+                        "icon_color": getattr(t, "icon_color", None),
+                        "icon_emoji_id": getattr(t, "icon_emoji_id", None)
+                    })
+                    offset_date = getattr(t, "date", offset_date)
+                    top_msg = getattr(t, "top_message", 0)
+                    offset_id = top_msg if top_msg else tid
+                    offset_topic = tid
+                if new_found == 0:
+                    break
+            if source_topics:
+                print(f"[TopicMirror] ✅ Discovered {len(source_topics)} source topics via raw RPC GetForumTopics")
+                return source_topics
+        except Exception as rpc_err:
+            print(f"[TopicMirror] Raw RPC GetForumTopics source scan notice: {rpc_err}")
 
-            for tid in sorted(discovered_tids):
-                t_title = f"Topic {tid}"
-                try:
-                    async for rep in userbot.get_discussion_replies(src_chat_id, tid, limit=3):
-                        if getattr(rep, "forum_topic_created", None) and getattr(rep.forum_topic_created, "title", None):
-                            t_title = rep.forum_topic_created.title
-                            break
-                except Exception:
-                    pass
-                seen_ids.add(tid)
-                source_topics.append({"id": tid, "title": t_title, "icon_color": None, "icon_emoji_id": None})
-        except Exception as hist_err:
-            print(f"[TopicMirror] Deep History Topic Discovery notice: {hist_err}")
+        # 2. Fallback: Deep chat history topic discovery if RPC failed or returned nothing
+        if not source_topics:
+            discovered_tids = set()
+            try:
+                async for m in cl.get_chat_history(src_chat_id, limit=600):
+                    if not m:
+                        continue
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    reply_top_id = getattr(getattr(m, "reply_to_message", None), "reply_to_top_id", None)
+                    for tid in (m_thread, reply_to, reply_top_id):
+                        if tid and isinstance(tid, int) and tid > 1 and tid not in seen_ids:
+                            discovered_tids.add(tid)
+
+                for tid in sorted(discovered_tids):
+                    t_title = f"Topic {tid}"
+                    try:
+                        async for rep in cl.get_discussion_replies(src_chat_id, tid, limit=3):
+                            if getattr(rep, "forum_topic_created", None) and getattr(rep.forum_topic_created, "title", None):
+                                t_title = rep.forum_topic_created.title
+                                break
+                    except Exception:
+                        pass
+                    seen_ids.add(tid)
+                    source_topics.append({"id": tid, "title": t_title, "icon_color": None, "icon_emoji_id": None})
+                if source_topics:
+                    return source_topics
+            except Exception as hist_err:
+                print(f"[TopicMirror] Deep History Topic Discovery notice: {hist_err}")
 
     return source_topics
 
 
 
-async def fetch_all_messages_for_topic(userbot, src_chat_id, topic_id: int, min_msg_id: int = 0, max_limit: int = 4000):
+async def fetch_all_messages_for_topic(client, src_chat_id, topic_id: int, min_msg_id: int = 0, max_limit: int = 4000, fallback_client=None):
     """
     Fetches all pending messages for a specific forum topic up to max_limit (default 4000).
     Returns messages sorted oldest→newest (ascending by id).
     Only messages strictly > min_msg_id are returned (checkpoint resume).
     Guarantees messages belong ONLY to this topic — zero cross-topic leakage.
     """
-    collected_messages = []
-    seen_ids = set()
+    clients_to_try = [c for c in [client, fallback_client] if c]
 
-    # ─── Strategy 1: get_discussion_replies (Pyrogram high-level, most accurate) ───
-    if topic_id and topic_id != 1:
-        try:
-            # Check topic root message itself (msg_id == topic_id)
+    for cl in clients_to_try:
+        collected_messages = []
+        seen_ids = set()
+
+        # ─── Strategy 1: get_discussion_replies (Pyrogram high-level, most accurate) ───
+        if topic_id and topic_id != 1:
             try:
-                top_msg = await userbot.get_messages(src_chat_id, topic_id)
-                if top_msg and not getattr(top_msg, "empty", False):
-                    has_content = bool(top_msg.text or top_msg.caption or top_msg.media or top_msg.document or top_msg.video or top_msg.photo)
-                    if has_content and top_msg.id not in seen_ids:
-                        seen_ids.add(top_msg.id)
-                        collected_messages.append(top_msg)
-            except Exception:
-                pass
+                # Check topic root message itself (msg_id == topic_id)
+                try:
+                    top_msg = await cl.get_messages(src_chat_id, topic_id)
+                    if top_msg and not getattr(top_msg, "empty", False):
+                        has_content = bool(top_msg.text or top_msg.caption or top_msg.media or top_msg.document or top_msg.video or top_msg.photo)
+                        if has_content and top_msg.id not in seen_ids:
+                            seen_ids.add(top_msg.id)
+                            collected_messages.append(top_msg)
+                except Exception:
+                    pass
 
-            async for m in userbot.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
-                if not m or m.id in seen_ids:
-                    continue
-                # Verify thread consistency (never pull messages belonging to another topic)
-                m_thread = getattr(m, "message_thread_id", None)
-                if m_thread and m_thread != topic_id and m_thread != 1:
-                    continue
-                seen_ids.add(m.id)
-                collected_messages.append(m)
-            if collected_messages:
-                collected_messages = [m for m in collected_messages if m.id > min_msg_id]
-                collected_messages.sort(key=lambda x: x.id)
-                return collected_messages
-        except Exception as disc_err:
-            print(f"[TopicMirror] get_discussion_replies notice for topic {topic_id}: {disc_err}")
-            collected_messages.clear()
-            seen_ids.clear()
-
-    # ─── Strategy 2: Raw RPC GetReplies (fallback when Strategy 1 fails) ───
-    if topic_id and topic_id != 1:
-        try:
-            peer = await userbot.resolve_peer(src_chat_id)
-            offset_id = 0
-            while len(collected_messages) < max_limit:
-                res = await userbot.invoke(raw.functions.messages.GetReplies(
-                    peer=peer,
-                    msg_id=topic_id,
-                    offset_id=offset_id,
-                    offset_date=0,
-                    add_offset=0,
-                    limit=100,
-                    max_id=0,
-                    min_id=0,
-                    hash=0
-                ))
-                raw_msgs = getattr(res, "messages", [])
-                if not raw_msgs:
-                    break
-                users_map = {u.id: u for u in getattr(res, "users", [])}
-                chats_map = {c.id: c for c in getattr(res, "chats", [])}
-                new_found = 0
-                for rm in raw_msgs:
-                    mid = getattr(rm, "id", None)
-                    if not mid or mid in seen_ids:
+                async for m in cl.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
+                    if not m or m.id in seen_ids:
                         continue
-                    try:
-                        parsed_m = await types.Message._parse(userbot, rm, users_map, chats_map)
-                        if parsed_m:
-                            seen_ids.add(mid)
-                            collected_messages.append(parsed_m)
-                            new_found += 1
-                    except Exception:
-                        pass
-                if new_found == 0 or len(raw_msgs) < 100:
-                    break
-                offset_id = raw_msgs[-1].id
+                    m_thread = getattr(m, "message_thread_id", None)
+                    if m_thread and m_thread != topic_id and m_thread != 1:
+                        continue
+                    seen_ids.add(m.id)
+                    collected_messages.append(m)
+                if collected_messages:
+                    collected_messages = [m for m in collected_messages if m.id > min_msg_id]
+                    collected_messages.sort(key=lambda x: x.id)
+                    return collected_messages
+            except Exception as disc_err:
+                print(f"[TopicMirror] get_discussion_replies notice for topic {topic_id}: {disc_err}")
+                collected_messages.clear()
+                seen_ids.clear()
+
+        # ─── Strategy 2: Raw RPC GetReplies (fallback when Strategy 1 fails) ───
+        if topic_id and topic_id != 1:
+            try:
+                peer = await cl.resolve_peer(src_chat_id)
+                offset_id = 0
+                while len(collected_messages) < max_limit:
+                    res = await cl.invoke(raw.functions.messages.GetReplies(
+                        peer=peer,
+                        msg_id=topic_id,
+                        offset_id=offset_id,
+                        offset_date=0,
+                        add_offset=0,
+                        limit=100,
+                        max_id=0,
+                        min_id=0,
+                        hash=0
+                    ))
+                    raw_msgs = getattr(res, "messages", [])
+                    if not raw_msgs:
+                        break
+                    users_map = {u.id: u for u in getattr(res, "users", [])}
+                    chats_map = {c.id: c for c in getattr(res, "chats", [])}
+                    new_found = 0
+                    for rm in raw_msgs:
+                        mid = getattr(rm, "id", None)
+                        if not mid or mid in seen_ids:
+                            continue
+                        try:
+                            parsed_m = await types.Message._parse(cl, rm, users_map, chats_map)
+                            if parsed_m:
+                                seen_ids.add(mid)
+                                collected_messages.append(parsed_m)
+                                new_found += 1
+                        except Exception:
+                            pass
+                    if new_found == 0 or len(raw_msgs) < 100:
+                        break
+                    offset_id = raw_msgs[-1].id
+                if collected_messages:
+                    collected_messages = [m for m in collected_messages if m.id > min_msg_id]
+                    collected_messages.sort(key=lambda x: x.id)
+                    return collected_messages
+            except Exception as rpc_err:
+                print(f"[TopicMirror] Raw GetReplies notice for topic {topic_id}: {rpc_err}")
+                collected_messages.clear()
+                seen_ids.clear()
+
+        # ─── Strategy 3: Chat history scan — for General topic or fallback ───
+        try:
+            topic_msg_ids = set()
+            all_scanned = []
+
+            async for m in cl.get_chat_history(src_chat_id, limit=min(max_limit * 2, 8000)):
+                if not m:
+                    continue
+                all_scanned.append(m)
+
+                m_thread = getattr(m, "message_thread_id", None)
+                reply_to = getattr(m, "reply_to_message_id", None)
+                reply_top = None
+                rt_msg = getattr(m, "reply_to_message", None)
+                if rt_msg:
+                    reply_top = getattr(rt_msg, "reply_to_top_id", None) or getattr(rt_msg, "message_thread_id", None)
+
+                if topic_id == 1:
+                    if (m_thread in (None, 1)) and (reply_top in (None, 1)):
+                        topic_msg_ids.add(m.id)
+                else:
+                    if m_thread == topic_id or (m_thread is None and (reply_top == topic_id or reply_to == topic_id or m.id == topic_id)):
+                        topic_msg_ids.add(m.id)
+
+            for m in all_scanned:
+                if m.id in topic_msg_ids and m.id > min_msg_id and m.id not in seen_ids:
+                    seen_ids.add(m.id)
+                    collected_messages.append(m)
+
             if collected_messages:
-                collected_messages = [m for m in collected_messages if m.id > min_msg_id]
                 collected_messages.sort(key=lambda x: x.id)
                 return collected_messages
-        except Exception as rpc_err:
-            print(f"[TopicMirror] Raw GetReplies notice for topic {topic_id}: {rpc_err}")
-            collected_messages.clear()
-            seen_ids.clear()
 
-    # ─── Strategy 3: Chat history scan — for General topic or fallback ───
-    try:
-        topic_msg_ids: set = set()
-        all_scanned = []
+        except Exception as scan_err:
+            print(f"[TopicMirror] get_chat_history scan notice for topic {topic_id}: {scan_err}")
 
-        async for m in userbot.get_chat_history(src_chat_id, limit=min(max_limit * 2, 8000)):
-            if not m:
-                continue
-            all_scanned.append(m)
-
-            m_thread = getattr(m, "message_thread_id", None)
-            reply_to = getattr(m, "reply_to_message_id", None)
-            reply_top = None
-            rt_msg = getattr(m, "reply_to_message", None)
-            if rt_msg:
-                reply_top = getattr(rt_msg, "reply_to_top_id", None) or getattr(rt_msg, "message_thread_id", None)
-
-            if topic_id == 1:
-                # General topic ONLY: messages with no thread assignment and no thread reply
-                if (m_thread in (None, 1)) and (reply_top in (None, 1)):
-                    topic_msg_ids.add(m.id)
-            else:
-                # Specific topic thread ONLY:
-                if m_thread == topic_id or (m_thread is None and (reply_top == topic_id or reply_to == topic_id or m.id == topic_id)):
-                    topic_msg_ids.add(m.id)
-
-        for m in all_scanned:
-            if m.id in topic_msg_ids and m.id > min_msg_id and m.id not in seen_ids:
-                seen_ids.add(m.id)
-                collected_messages.append(m)
-
-    except Exception as scan_err:
-        print(f"[TopicMirror] get_chat_history scan notice for topic {topic_id}: {scan_err}")
-
-    # Sort chronologically oldest→newest
-    collected_messages.sort(key=lambda x: x.id)
-    return collected_messages
-
+    return []
 
 
 
@@ -1308,7 +1380,7 @@ async def resilient_send_media(
     return await client.send_document(chat_id=chat_id, document=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id)
 
 
-async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False):
+async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False, src_client=None):
     """
     Transfers a single message using the bot-only pipeline:
       - All messages in target group are strictly sent by `app` (real bot).
@@ -1399,7 +1471,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             return True, "text_sent", sent_id
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client)
         except Exception as txt_err:
             print(f"[TopicMirror] Failed to send text msg {msg.id}: {txt_err}")
             return False, str(txt_err), None
@@ -1495,7 +1567,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 return True, "copied", sent_id
         except FloodWait as fw:
             await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client)
         except Exception:
             pass  # Fallback to download & upload via app
 
@@ -1511,20 +1583,22 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         temp_dir = os.path.join("downloads", str(user_id))
         os.makedirs(temp_dir, exist_ok=True)
 
-        # Download media via userbot with automatic file_reference refresh & retry
+        # Download media via src_client / userbot / app with automatic file_reference refresh & retry
+        dl_client = src_client or userbot or app
+        alt_client = app if dl_client != app else userbot
         temp_file = None
         for dl_attempt in range(1, 4):
             try:
                 curr_msg = msg
                 if dl_attempt > 1:
                     try:
-                        fresh_msg = await userbot.get_messages(src_chat_id, msg.id)
+                        fresh_msg = await dl_client.get_messages(src_chat_id, msg.id)
                         if fresh_msg and not getattr(fresh_msg, "empty", False):
                             curr_msg = fresh_msg
                     except Exception as ref_err:
                         print(f"[Transfer] Refetch fresh msg notice: {ref_err}")
 
-                temp_file = await userbot.download_media(
+                temp_file = await dl_client.download_media(
                     curr_msg,
                     file_name=f"{temp_dir}/"
                 )
@@ -1540,7 +1614,14 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
             except Exception as dl_err:
-                print(f"[Transfer] Download attempt {dl_attempt}/3 failed for msg {msg.id}: {dl_err}")
+                print(f"[Transfer] Download attempt {dl_attempt}/3 failed with primary client for msg {msg.id}: {dl_err}")
+                if alt_client:
+                    try:
+                        temp_file = await alt_client.download_media(curr_msg, file_name=f"{temp_dir}/")
+                        if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
+                            break
+                    except Exception as alt_err:
+                        print(f"[Transfer] Alternate download attempt failed: {alt_err}")
                 await asyncio.sleep(1.5)
 
         if not temp_file or not os.path.isfile(temp_file) or os.path.getsize(temp_file) == 0:
@@ -1569,16 +1650,30 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         if not thumb_path:
             if msg.video and getattr(msg.video, 'thumbs', None) and len(msg.video.thumbs) > 0:
                 try:
-                    thumb_path = await userbot.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                    thumb_path = await dl_client.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
                     auto_thumb_file = thumb_path
                 except Exception:
-                    thumb_path = None
+                    if alt_client:
+                        try:
+                            thumb_path = await alt_client.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                            auto_thumb_file = thumb_path
+                        except Exception:
+                            thumb_path = None
+                    else:
+                        thumb_path = None
             elif msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
                 try:
-                    thumb_path = await userbot.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                    thumb_path = await dl_client.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
                     auto_thumb_file = thumb_path
                 except Exception:
-                    thumb_path = None
+                    if alt_client:
+                        try:
+                            thumb_path = await alt_client.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
+                            auto_thumb_file = thumb_path
+                        except Exception:
+                            thumb_path = None
+                    else:
+                        thumb_path = None
 
         sent_media = None
         file_size = os.path.getsize(temp_file)
@@ -1786,7 +1881,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
     except FloodWait as fw:
         await asyncio.sleep(fw.value + 1)
-        return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic)
+        return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client)
     except Exception as dl_up_err:
         print(f"[TopicMirror] Save-Restricted extraction error for msg {msg.id}: {dl_up_err}")
         return False, str(dl_up_err), None
@@ -1873,15 +1968,16 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
     Returns tuple: (report_html_text, missing_topics_list, total_pending_msgs)
     """
     userbot, is_temp_userbot = await get_working_userbot(user_id)
-    if not userbot:
-        return "❌ **No working userbot session!** Please login via `/login` first.", [], 0
+    src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    if not src_client:
+        if not userbot:
+            return "❌ **No working userbot session or bot access!** Please login via `/login` or add bot to source group.", [], 0
+        src_client = userbot
+        src_title = str(src_chat_id)
 
     try:
         # 1. Resolve chat titles
-        try:
-            src_chat = await userbot.get_chat(src_chat_id)
-            src_title = src_chat.title or str(src_chat_id)
-        except Exception:
+        if not src_title:
             src_title = str(src_chat_id)
 
         try:
@@ -1894,7 +1990,7 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
         saved_topics = saved_session.get("topics", {}) if saved_session else {}
 
         # 2. Stage 1 Scan: Discover Source Topics & Target Topics
-        source_topics = await get_all_source_forum_topics(userbot, src_chat_id)
+        source_topics = await get_all_source_forum_topics(src_client, src_chat_id, fallback_client=userbot if src_client != userbot else app)
         if not source_topics:
             source_topics = [{"id": 1, "title": "General", "icon_color": None, "icon_emoji_id": None}]
 
@@ -1954,7 +2050,7 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
                 last_msg_id = highest_ckpt
 
             # Fetch messages for topic
-            messages = await fetch_all_messages_for_topic(userbot, src_chat_id, st_id, min_msg_id=0, max_limit=5000)
+            messages = await fetch_all_messages_for_topic(src_client, src_chat_id, st_id, min_msg_id=0, max_limit=5000, fallback_client=userbot if src_client != userbot else app)
 
             # Filter content messages (non-service)
             content_msgs = [m for m in messages if not (
@@ -3114,8 +3210,16 @@ async def run_single_link_mirror(
 
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
-    if not userbot:
-        err_ub = "❌ <b>No working userbot session!</b>\nPlease use `/login` to login your account first."
+    src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    if not src_client or not src_chat:
+        bot_me = await app.get_me()
+        bot_uname = bot_me.username or "this bot"
+        err_ub = (
+            f"❌ <b>Could not access source chat (`{src_chat_id}`):</b>\n<code>{resolve_err}</code>\n\n"
+            f"👉 <b>How to fix:</b>\n"
+            f"• Make sure the bot (@{bot_uname}) OR your logged-in userbot account is a <b>member / admin</b> in the source group!\n"
+            f"• If it's a private group, add @{bot_uname} to the group or log in your account using <code>/login</code>."
+        )
         if status_msg:
             try:
                 await status_msg.edit(err_ub, parse_mode=ParseMode.HTML)
@@ -3135,11 +3239,11 @@ async def run_single_link_mirror(
     }
 
     try:
-        # Check if source is a broadcast channel
         # Check if source is a broadcast channel or if explicit post range is provided
         try:
             from pyrogram import enums
-            src_chat = await userbot.get_chat(src_chat_id)
+            if not src_chat:
+                src_chat = await src_client.get_chat(src_chat_id)
             if src_chat.type == enums.ChatType.CHANNEL or not getattr(src_chat, "is_forum", False):
                 if src_topic_id and src_topic_id > 1:
                     if not src_start_id or src_start_id == 0:
@@ -3169,7 +3273,7 @@ async def run_single_link_mirror(
 
         if src_topic_id and src_topic_id > 1:
             # Forum topic — use discussion replies (already fetches everything properly)
-            all_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=effective_start)
+            all_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=effective_start, fallback_client=userbot if src_client != userbot else app)
             if src_end_id and src_end_id > 0:
                 messages_to_copy = [m for m in all_messages if m.id <= src_end_id]
             else:
@@ -3180,7 +3284,7 @@ async def run_single_link_mirror(
             max_limit_id = src_end_id
             if not max_limit_id or max_limit_id <= 0:
                 try:
-                    async for m in userbot.get_chat_history(src_chat_id, limit=1):
+                    async for m in src_client.get_chat_history(src_chat_id, limit=1):
                         if m:
                             max_limit_id = m.id
                 except Exception:
@@ -3286,7 +3390,7 @@ async def run_single_link_mirror(
 
             # Live UI Dashboard Update
             now = time.time()
-            if now - last_edit_time > 3.5:
+            if idx == 1 or now - last_edit_time > 3.0:
                 last_edit_time = now
                 pct = int((idx / total_count) * 100)
                 filled = int(pct / 10)
@@ -3599,14 +3703,16 @@ async def pick_single_topic_callback(_, query: CallbackQuery):
 
     await query.answer("🔍 Fetching topics...")
     userbot, is_temp = await get_working_userbot(user_id)
-    if not userbot:
-        await query.message.reply("❌ No userbot session available!")
+    src_client, _, _, _ = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    scan_cl = src_client or userbot or app
+    if not scan_cl:
+        await query.message.reply("❌ No userbot session or bot access available!")
         return
 
     topics = []
     try:
-        peer = await userbot.resolve_peer(src_chat_id)
-        res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+        peer = await scan_cl.resolve_peer(src_chat_id)
+        res = await scan_cl.invoke(raw.functions.messages.GetForumTopics(
             peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
         ))
         for t in getattr(res, "topics", []):
@@ -3677,14 +3783,16 @@ async def reupload_single_topic_callback(_, query: CallbackQuery):
 
     await query.answer("🔍 Fetching topics for re-upload...")
     userbot, is_temp = await get_working_userbot(user_id)
-    if not userbot:
-        await query.message.reply("❌ No userbot session available!")
+    src_client, _, _, _ = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    scan_cl = src_client or userbot or app
+    if not scan_cl:
+        await query.message.reply("❌ No userbot session or bot access available!")
         return
 
     topics = []
     try:
-        peer = await userbot.resolve_peer(src_chat_id)
-        res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+        peer = await scan_cl.resolve_peer(src_chat_id)
+        res = await scan_cl.invoke(raw.functions.messages.GetForumTopics(
             peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
         ))
         for t in getattr(res, "topics", []):
@@ -3830,10 +3938,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             status_msg = None
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
-    if not userbot:
+
+    # Intelligently resolve source chat via userbot (with peer cache warm-up) or bot (app)
+    src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    if not src_client or not src_chat:
+        bot_me = await app.get_me()
+        bot_uname = bot_me.username or "this bot"
         await _update_status(
-            "❌ **No working userbot session available!**\n\n"
-            "Please use `/login` in the bot to login your Telegram account session so the bot can access private source groups."
+            f"❌ **Could not access source group (`{src_chat_id}`):**\n`{resolve_err}`\n\n"
+            f"👉 **How to fix:**\n"
+            f"• Make sure the bot (@{bot_uname}) OR your logged-in userbot account is a **member / admin** in the source group!\n"
+            f"• If it's a private group, add @{bot_uname} to the group or log in your account using `/login`."
         )
         return
 
@@ -3847,16 +3962,6 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     }
 
     try:
-        # Resolve source chat
-        try:
-            src_chat = await userbot.get_chat(src_chat_id)
-            src_title = src_chat.title or str(src_chat_id)
-        except Exception as e:
-            await _update_status(
-                f"❌ **Could not access source group (`{src_chat_id}`):**\n`{e}`\n\n"
-                f"Make sure your logged-in userbot account is a **member** of this group!"
-            )
-            return
 
         # Resolve target chat
         try:
@@ -3951,8 +4056,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         if forced_tgt_topic_id is not None and detected_topic_id is not None:
             st_title = f"Topic {detected_topic_id}"
             try:
-                peer = await userbot.resolve_peer(src_chat_id)
-                res = await userbot.invoke(raw.functions.messages.GetForumTopics(
+                peer = await src_client.resolve_peer(src_chat_id)
+                res = await src_client.invoke(raw.functions.messages.GetForumTopics(
                     peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100
                 ))
                 for t in getattr(res, "topics", []):
@@ -3968,7 +4073,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, detected_topic_id, forced_tgt_topic_id, st_title)
 
         # Fetch all source topics with complete pagination & deep history fallback
-        source_topics = await get_all_source_forum_topics(userbot, src_chat_id)
+        source_topics = await get_all_source_forum_topics(src_client, src_chat_id, fallback_client=userbot if src_client != userbot else app)
 
         # Include any historically saved topics from MongoDB not returned by live scan
         if saved_topics:
@@ -4043,16 +4148,12 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 print(f"[TopicMirror] ✅ RPC search found '{st_title}' → tgt ({rpc_matched_id})")
                 continue
 
-            # 6. Fresh full re-scan of target group before creating (final dedup guard)
-            fresh_target_topics, fresh_target_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-            target_topics_by_title.update(fresh_target_topics)
-            target_topics_by_id.update(fresh_target_by_id)
-            existing_tgt_id = match_existing_target_topic(st_title, fresh_target_topics)
+            # 6. In-memory check (target_topics_by_title already has all existing + newly created topics)
+            existing_tgt_id = match_existing_target_topic(st_title, target_topics_by_title)
             if existing_tgt_id:
                 topic_map[st_id] = existing_tgt_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, existing_tgt_id)
                 await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, existing_tgt_id, st_title)
-                print(f"[TopicMirror] ✅ Fresh scan match: '{st_title}' → tgt ({existing_tgt_id})")
                 continue
 
             # ────────────────────────────────────────────────────────────
@@ -4122,15 +4223,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     except Exception as ub_rpc_err:
                         print(f"[TopicMirror] ⚠️ Userbot CreateForumTopic RPC failed for '{st_title}': {ub_rpc_err}")
 
-            # After creation, verify by re-scanning if ID not returned
-            if new_tgt_topic_id:
-                verified_id = new_tgt_topic_id
-            else:
-                await asyncio.sleep(1.5)
-                verify_topics, verify_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-                target_topics_by_title.update(verify_topics)
-                target_topics_by_id.update(verify_by_id)
-                verified_id = match_existing_target_topic(st_title, verify_topics)
+            # After creation, immediately register created topic ID without redundant full scan
+            verified_id = new_tgt_topic_id
 
             if verified_id:
                 topic_map[st_id] = verified_id
@@ -4160,12 +4254,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
         total_topics_count = len(topic_map)
 
-        await _update_status(
-            f"✅ **Phase 1 Complete:** Mapped `{total_topics_count}` Topics (0 Duplicates)!\n\n"
-            f"⚡ **Starting Rapid Extraction:** Mirroring pending messages...\n\n"
-            f"*(Use buttons below to Skip Topic or Cancel Mirror)*",
-            reply_markup=control_kb
+        phase1_text = (
+            "<blockquote><b>✅ 𝗧𝗼𝗽𝗶𝗰 𝗠𝗮𝗽𝗽𝗶𝗻𝗴 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲!</b>\n\n"
+            f"📁 <b>Mapped Topics:</b> <code>{total_topics_count}</code> (0 Duplicates)\n"
+            f"⚡ <b>Status:</b> <code>Starting Rapid Extraction...</code>\n"
+            "<i>Initializing live progress monitor...</i></blockquote>"
         )
+        await _update_status(phase1_text, reply_markup=control_kb)
 
         # Send Session Start Log to LOG_GROUP
         log_chat = get_log_group()
@@ -4212,12 +4307,25 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             current_state["skip_topic"] = False
             topic_stats[src_topic_id] = {"copied": 0, "failed": 0, "skipped": 0, "title": topic_title}
 
+            # Immediately show active progress card on topic transition!
+            init_progress_text = (
+                f"<blockquote><b>⚡️ 𝗫𝗧𝗥𝗔𝗖𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖𝗦...</b></blockquote>\n\n"
+                f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
+                f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+                f"📊 <b>Progress:</b> [▰▱▱▱▱▱▱▱▱▱] 0%\n"
+                f"🔢 <b>Status:</b> <code>Scanning topic messages...</code>\n"
+                f"🚀 <b>Speed:</b> <code>Calculating...</code>\n"
+                f"⏳ <b>ETA:</b> <code>Estimating...</code>\n\n"
+                f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
+                f"❌ Failed: {overall_failed}"
+            )
+            await _update_status(init_progress_text, reply_markup=control_kb)
+
             try:
-                # Ensure userbot client is connected before fetching topic messages
-                await ensure_userbot_connected(userbot)
+                if src_client == userbot and userbot:
+                    await ensure_userbot_connected(userbot)
 
                 # Always fetch FRESH checkpoint from MongoDB per-topic (not stale startup snapshot)
-                # This guarantees accurate resume even after bot restart mid-mirror
                 fresh_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
                 fresh_topics_data = fresh_session.get("topics", {})
                 saved_checkpoint = fresh_topics_data.get(str(src_topic_id), {}).get("last_msg_id", 0)
@@ -4232,7 +4340,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     fetch_cutoff = max(0, src_start_id - 1)
                 else:
                     fetch_cutoff = saved_checkpoint
-                all_topic_messages = await fetch_all_messages_for_topic(userbot, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff)
+                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
 
                 # Filter pending messages to copy (respecting range + checkpoint)
                 effective_start = max(saved_checkpoint, src_start_id - 1 if src_start_id else 0)
@@ -4248,6 +4356,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                 if total_msgs_in_topic == 0:
                     print(f"[TopicMirror] Topic '{topic_title}' already up to date ({already_done_count} msgs). Skipping.")
+                    up_to_date_text = (
+                        f"<blockquote><b>⚡️ 𝗫𝗧𝗥𝗔𝗖𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖𝗦...</b></blockquote>\n\n"
+                        f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
+                        f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+                        f"📊 <b>Progress:</b> [▰▰▰▰▰▰▰▰▰▰] 100%\n"
+                        f"🔢 <b>Status:</b> <code>Already up-to-date ({already_done_count} msgs)</code>\n"
+                        f"🚀 <b>Speed:</b> <code>Fast Sync ⚡</code>\n"
+                        f"⏳ <b>ETA:</b> <code>00:00:00</code>\n\n"
+                        f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
+                        f"❌ Failed: {overall_failed}"
+                    )
+                    await _update_status(up_to_date_text, reply_markup=control_kb)
                     continue
 
                 # Scan target topic content IDs for smart deduplication & zero-skip continuation
@@ -4303,7 +4423,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                                 tgt_topic_id=tgt_topic_id,
                                 msg=msg,
                                 user_id=user_id,
-                                is_general_topic=is_gen
+                                is_general_topic=is_gen,
+                                src_client=src_client
                             )
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break
@@ -4366,7 +4487,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                     # Update live high-speed status UI every 3.5 seconds
                     now = time.time()
-                    if now - last_edit_time > 3.5:
+                    if idx == 1 or now - last_edit_time > 3.0:
                         last_edit_time = now
                         topic_elapsed = now - topic_start_time
                         
@@ -4399,10 +4520,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
                             f"❌ Failed: {overall_failed}"
                         )
-                        try:
-                            await status_msg.edit(status_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
-                        except Exception:
-                            pass
+                        await _update_status(status_text, reply_markup=control_kb)
 
                 # Send Completion Message DIRECTLY into the specific target topic thread where content was synced
                 effective_thread = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
