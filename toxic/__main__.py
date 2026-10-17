@@ -352,6 +352,11 @@ Status: Running Successfully...
     asyncio.create_task(schedule_mirror_auto_updates())
     asyncio.create_task(optimized_memory_cleanup())
     try:
+        from toxic.modules.view_once import load_all_view_once_listeners
+        asyncio.create_task(load_all_view_once_listeners())
+    except Exception as e:
+        print(f"Failed to start view_once listeners loader: {e}")
+    try:
         from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler
         asyncio.create_task(sync_all_broadcast_destinations())
         asyncio.create_task(smart_broadcast_background_scheduler())
