@@ -127,7 +127,7 @@ async def single_link(_, message):
         return
 
     # Check freemium limits
-    if await chk_user(message, user_id) == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
+    if await chk_user(message, user_id) == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID:
         from toxic.core.func import get_upgrade_premium_card
         text, kb = get_upgrade_premium_card(message.from_user)
         photo_url = "https://freeimage.host/i/n04TxVa"
@@ -207,11 +207,11 @@ async def batch_link(_, message):
         return
     from toxic.core.func import is_free_user, get_upgrade_premium_card, chk_user
     from config import FREEMIUM_LIMIT
-    from toxic.core.mongo.db import is_user_verified
+    from toxic.modules.shrink import is_user_verified
 
     user_id = message.chat.id
     freecheck = await chk_user(message, user_id)
-    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
+    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID:
         text, kb = get_upgrade_premium_card(message.from_user)
         photo_url = "https://freeimage.host/i/n04TxVa"
         try:
@@ -259,8 +259,10 @@ async def handle_batch_choice(_, query):
 
 async def prompt_new_batch(user_id, message):
     freecheck = await chk_user(message, user_id)
-    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
-        await app.send_message(user_id, "Freemium service is currently not available. Upgrade to premium for access.")
+    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID:
+        from toxic.core.func import get_upgrade_premium_card
+        text, kb = get_upgrade_premium_card(message.from_user if hasattr(message, "from_user") else None)
+        await app.send_message(user_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     max_batch_size = FREEMIUM_LIMIT if freecheck == 1 else PREMIUM_LIMIT
@@ -326,8 +328,10 @@ async def prompt_new_batch(user_id, message):
 
 async def prompt_resume_batch(user_id, message):
     freecheck = await chk_user(message, user_id)
-    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID and not await is_user_verified(user_id):
-        await app.send_message(user_id, "Freemium service is currently not available. Upgrade to premium for access.")
+    if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID:
+        from toxic.core.func import get_upgrade_premium_card
+        text, kb = get_upgrade_premium_card(message.from_user if hasattr(message, "from_user") else None)
+        await app.send_message(user_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     max_batch_size = FREEMIUM_LIMIT if freecheck == 1 else PREMIUM_LIMIT

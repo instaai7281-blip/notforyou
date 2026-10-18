@@ -887,3 +887,13 @@ async def reset_link_mirror_checkpoint(src_chat_id, src_topic_id, tgt_chat_id, t
         await link_mirror_db.delete_one({"_id": _lm_key(src_chat_id, src_topic_id, tgt_chat_id, tgt_topic_id)})
     except Exception:
         pass
+
+
+async def is_user_verified(user_id: int) -> bool:
+    """Safe check if user has verified session/token or bio access."""
+    try:
+        from toxic.modules.shrink import is_user_verified as shrink_is_verified
+        return await shrink_is_verified(user_id)
+    except Exception:
+        return False
+
