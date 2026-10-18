@@ -216,6 +216,8 @@ async def schedule_mirror_auto_updates():
     from config import OWNER_ID
 
     print("[MirrorAutoScheduler] Daily auto-update scheduler started.")
+    # Wait 60 seconds after bot boot so Telegram sessions and peer caches initialize cleanly
+    await asyncio.sleep(60)
     while True:
         try:
             now_utc = datetime.datetime.now(datetime.timezone.utc)

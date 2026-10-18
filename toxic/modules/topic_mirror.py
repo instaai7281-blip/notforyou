@@ -807,75 +807,131 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
 
     Resolves [400 CHANNEL_INVALID] by:
       1. Normalizing src_chat_id to ensure proper -100 prefix.
-      2. Attempting userbot.get_chat(src_chat_id).
+      2. Attempting client.get_chat(src_chat_id) on userbot, app, and pro_clients.
       3. If CHANNEL_INVALID or PeerIdInvalid occurs (due to unprimed MemoryStorage in Pyrogram),
-         warms up userbot's peer cache by iterating up to 300 dialogs with tolerant ID matching.
-      4. If userbot still cannot access the chat, checks if the bot (`app`) has access.
-      5. Checks pro_clients pool as fallback.
+         primes the peer cache using raw MTProto messages.GetDialogs and GetChannels/GetFullChannel.
+      4. Checks all available clients before failing.
 
     Returns: (src_client, src_chat, src_title, error_message)
     """
     src_chat_id = normalize_tg_id(src_chat_id)
     clean_target = str(src_chat_id).replace("-100", "").replace("-", "")
+    target_int = int(clean_target) if clean_target.isdigit() else None
     errors_encountered = []
+
+    async def _try_resolve(client, client_name: str):
+        if not client:
+            return None, None, None, None
+        try:
+            if hasattr(client, "is_connected") and not client.is_connected:
+                await client.start()
+        except Exception:
+            pass
+
+        # Step A: Direct get_chat
+        try:
+            chat = await client.get_chat(src_chat_id)
+            title = chat.title or str(src_chat_id)
+            print(f"[TopicMirror] ✅ Resolved source chat via {client_name}: '{title}' ({src_chat_id})")
+            return client, chat, title, None
+        except Exception as err:
+            err_str = str(err)
+            if "AUTH_KEY_DUPLICATED" in err_str or "406" in err_str:
+                return None, None, None, "AUTH_KEY_DUPLICATED"
+            errors_encountered.append(f"{client_name}: {err}")
+
+        # Step B: Prime peer cache via raw messages.GetDialogs (iterating chunks)
+        try:
+            matched_chat = None
+            offset_date = 0
+            offset_id = 0
+            offset_peer = raw.types.InputPeerEmpty()
+            for _ in range(5):  # Scan up to 500 dialogs in chunks of 100
+                res = await client.invoke(raw.functions.messages.GetDialogs(
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_peer=offset_peer,
+                    limit=100,
+                    hash=0
+                ))
+                chats_list = getattr(res, "chats", [])
+                if not chats_list:
+                    break
+                for c in chats_list:
+                    cid = getattr(c, "id", None)
+                    c_username = getattr(c, "username", None)
+                    if cid and target_int and cid == target_int:
+                        matched_chat = c
+                        break
+                    if c_username and str(c_username).lower() == str(src_chat_id).lower().lstrip("@"):
+                        matched_chat = c
+                        break
+                if matched_chat:
+                    break
+                messages_list = getattr(res, "messages", [])
+                if messages_list:
+                    last_m = messages_list[-1]
+                    offset_date = getattr(last_m, "date", 0)
+                    offset_id = getattr(last_m, "id", 0)
+                else:
+                    break
+
+            if matched_chat:
+                try:
+                    chat = await client.get_chat(src_chat_id)
+                    title = chat.title or str(src_chat_id)
+                    print(f"[TopicMirror] ✅ Resolved source chat via {client_name} after raw dialog warm: '{title}' ({src_chat_id})")
+                    return client, chat, title, None
+                except Exception:
+                    pass
+        except Exception as warm_err:
+            warm_str = str(warm_err)
+            if "AUTH_KEY_DUPLICATED" in warm_str or "406" in warm_str:
+                return None, None, None, "AUTH_KEY_DUPLICATED"
+            errors_encountered.append(f"{client_name}_warm: {warm_err}")
+
+        # Step C: Fallback to get_dialogs generator
+        try:
+            matched_id = None
+            async for dialog in client.get_dialogs(limit=300):
+                if dialog.chat:
+                    d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
+                    if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
+                        matched_id = dialog.chat.id
+                        break
+            if matched_id:
+                chat = await client.get_chat(matched_id)
+                title = chat.title or str(matched_id)
+                print(f"[TopicMirror] ✅ Resolved source chat via {client_name} after pyrogram dialog warm: '{title}' ({matched_id})")
+                return client, chat, title, None
+        except Exception as diag_err:
+            diag_str = str(diag_err)
+            if "AUTH_KEY_DUPLICATED" in diag_str or "406" in diag_str:
+                return None, None, None, "AUTH_KEY_DUPLICATED"
+            errors_encountered.append(f"{client_name}_diag: {diag_err}")
+
+        return None, None, None, None
 
     # 1. Primary candidate: userbot (if available)
     if userbot:
-        try:
-            await ensure_userbot_connected(userbot)
-            src_chat = await userbot.get_chat(src_chat_id)
-            src_title = src_chat.title or str(src_chat_id)
-            print(f"[TopicMirror] ✅ Resolved source chat via userbot: '{src_title}' ({src_chat_id})")
-            return userbot, src_chat, src_title, None
-        except Exception as ub_err:
-            err_str = str(ub_err)
-            if "AUTH_KEY_DUPLICATED" in err_str or "406" in err_str:
-                print(f"[TopicMirror] ⚠️ AUTH_KEY_DUPLICATED on userbot: {err_str}")
-                return None, None, None, "AUTH_KEY_DUPLICATED"
-
-            errors_encountered.append(f"userbot: {ub_err}")
-            print(f"[TopicMirror] Userbot direct get_chat failed for {src_chat_id}: {ub_err}. Warming peer cache (limit 300)...")
-            try:
-                matched_id = None
-                async for dialog in userbot.get_dialogs(limit=300):
-                    if dialog.chat:
-                        d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
-                        if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
-                            matched_id = dialog.chat.id
-                            break
-                target_try = matched_id or src_chat_id
-                src_chat = await userbot.get_chat(target_try)
-                src_title = src_chat.title or str(target_try)
-                print(f"[TopicMirror] ✅ Resolved source chat via userbot after cache warm: '{src_title}' ({target_try})")
-                return userbot, src_chat, src_title, None
-            except Exception as warm_err:
-                warm_str = str(warm_err)
-                if "AUTH_KEY_DUPLICATED" in warm_str or "406" in warm_str:
-                    return None, None, None, "AUTH_KEY_DUPLICATED"
-                errors_encountered.append(f"userbot_warm: {warm_err}")
+        cl, chat, title, auth_err = await _try_resolve(userbot, "userbot")
+        if cl:
+            return cl, chat, title, None
+        if auth_err == "AUTH_KEY_DUPLICATED":
+            return None, None, None, "AUTH_KEY_DUPLICATED"
 
     # 2. Secondary candidate: app (The Bot itself - added to source group/channel)
     if app:
-        try:
-            src_chat = await app.get_chat(src_chat_id)
-            src_title = src_chat.title or str(src_chat_id)
-            print(f"[TopicMirror] ✅ Resolved source chat via bot (app): '{src_title}' ({src_chat_id})")
-            return app, src_chat, src_title, None
-        except Exception as app_err:
-            errors_encountered.append(f"app: {app_err}")
-            print(f"[TopicMirror] Bot (app) get_chat notice for {src_chat_id}: {app_err}")
+        cl, chat, title, _ = await _try_resolve(app, "app")
+        if cl:
+            return cl, chat, title, None
 
     # 3. Tertiary candidate: pool of pro_clients (if configured)
     if pro_clients:
         for idx, pc in enumerate(pro_clients):
-            try:
-                if getattr(pc, "is_connected", False):
-                    src_chat = await pc.get_chat(src_chat_id)
-                    src_title = src_chat.title or str(src_chat_id)
-                    print(f"[TopicMirror] ✅ Resolved source chat via pro_client #{idx}: '{src_title}' ({src_chat_id})")
-                    return pc, src_chat, src_title, None
-            except Exception:
-                continue
+            cl, chat, title, _ = await _try_resolve(pc, f"pro_client_{idx}")
+            if cl:
+                return cl, chat, title, None
 
     combined_err = " | ".join(errors_encountered) if errors_encountered else "No available client could access this chat."
     return None, None, None, combined_err
