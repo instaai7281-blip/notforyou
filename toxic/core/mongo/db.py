@@ -55,19 +55,24 @@ def get_current_bot_name() -> str:
     return "default_bot"
 
 async def get_user_session(user_id: int, bot_name: str = None):
-    """Retrieves session string, prioritizing dedicated multi-bot session."""
+    """Retrieves session string. Seamlessly shares session across all bots or fallbacks cleanly."""
     if not bot_name:
         bot_name = get_current_bot_name()
     data = await get_data(user_id)
     if not data:
         return None
     sessions = data.get("sessions")
-    if isinstance(sessions, dict) and bot_name in sessions and sessions[bot_name]:
-        return sessions[bot_name]
+    if isinstance(sessions, dict):
+        if bot_name in sessions and sessions[bot_name]:
+            return sessions[bot_name]
+        # Fallback to any valid session saved by another bot
+        for b_name, s_val in sessions.items():
+            if s_val:
+                return s_val
     return data.get("session")
 
 async def set_session(user_id, session, bot_name: str = None):
-    """Saves session with dedicated per-bot partition and legacy fallback."""
+    """Saves session with dedicated per-bot partition and shared fallback so all bots can access it."""
     if not bot_name:
         bot_name = get_current_bot_name()
     data = await get_data(user_id)
@@ -83,14 +88,35 @@ async def set_session(user_id, session, bot_name: str = None):
         await db.insert_one(init_doc)
 
 async def remove_user_session(user_id, bot_name: str = None):
-    """Removes user session for a specific bot or altogether."""
+    """Removes user session for a specific bot without wiping the shared session for other bots."""
     if not bot_name:
         bot_name = get_current_bot_name()
     try:
-        await db.update_one(
-            {"_id": user_id},
-            {"$unset": {f"sessions.{bot_name}": "", "session": ""}}
-        )
+        data = await get_data(user_id)
+        if not data:
+            return
+        sessions = data.get("sessions", {})
+        if isinstance(sessions, dict):
+            remaining = {k: v for k, v in sessions.items() if k != bot_name and v}
+        else:
+            remaining = {}
+        
+        # If no other bot sessions remain, wipe session as well
+        if not remaining:
+            await db.update_one(
+                {"_id": user_id},
+                {"$unset": {f"sessions.{bot_name}": "", "session": ""}}
+            )
+        else:
+            # Promote another remaining session to global session so other bots keep working
+            next_session = next(iter(remaining.values()))
+            await db.update_one(
+                {"_id": user_id},
+                {
+                    "$unset": {f"sessions.{bot_name}": ""},
+                    "$set": {"session": next_session}
+                }
+            )
     except Exception:
         pass
 

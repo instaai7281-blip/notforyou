@@ -64,7 +64,7 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                     logger.info(f"[UserbotManager] Reconnected existing client for user {user_id} on @{bot_name}")
                     return existing
             except errors.AuthKeyDuplicated:
-                logger.error(f"[UserbotManager] AUTH_KEY_DUPLICATED on reconnect for {user_id} on @{bot_name}. Clearing dead session.")
+                logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED on reconnect for {user_id} on @{bot_name}. Evicting cached instance.")
                 await handle_burned_session(user_id, bot_name)
                 return None
             except Exception as re_err:
@@ -100,6 +100,8 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
             pass
 
         # 4. Create single unified Client instance for THIS bot
+        # Using no_updates=True allows multiple bots to share the exact same userbot session
+        # concurrently for cloning/mirroring without triggering Telegram's AUTH_KEY_DUPLICATED!
         try:
             ub = Client(
                 f"ub_{bot_name}_{user_id}",
@@ -107,25 +109,18 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 api_hash=API_HASH,
                 session_string=session_string,
                 in_memory=True,
-                no_updates=False,
+                no_updates=True,
                 max_concurrent_transmissions=64
             )
             await ub.start()
-
-            # Attach view-once auto-saver handler dynamically to this unified client
-            try:
-                from toxic.modules.view_once import attach_view_once_to_client
-                attach_view_once_to_client(ub, user_id)
-            except Exception as vo_err:
-                logger.warning(f"[UserbotManager] Failed to attach view_once handler to {user_id}: {vo_err}")
 
             _active_userbots[user_id] = ub
             logger.info(f"[UserbotManager] ✅ Unified client started successfully for user {user_id} on @{bot_name}")
             return ub
 
         except errors.AuthKeyDuplicated:
-            logger.error(f"[UserbotManager] AUTH_KEY_DUPLICATED when starting client for {user_id} on @{bot_name}. Clearing dead session.")
-            await handle_burned_session(user_id, bot_name)
+            logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED for {user_id} on @{bot_name}. Releasing in-memory client without deleting DB session.")
+            _active_userbots.pop(user_id, None)
             return None
         except Exception as e:
             logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id} on @{bot_name}: {e}")
@@ -133,15 +128,17 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
 
 
 async def handle_burned_session(user_id: int, bot_name: str = None):
-    """Cleans up a session that was invalidated by Telegram."""
+    """Safely cleans up an active client instance without aggressively deleting valid Mongo sessions."""
     if not bot_name:
         bot_name = get_current_bot_username()
-    _active_userbots.pop(user_id, None)
-    try:
-        await db.remove_user_session(user_id, bot_name=bot_name)
-        logger.info(f"[UserbotManager] Successfully wiped dead/invalidated session for user {user_id} on @{bot_name}")
-    except Exception as e:
-        logger.error(f"[UserbotManager] Error clearing dead session for {user_id}: {e}")
+    client = _active_userbots.pop(user_id, None)
+    if client:
+        try:
+            if getattr(client, "is_connected", False):
+                await client.stop()
+        except Exception:
+            pass
+    logger.info(f"[UserbotManager] Evicted in-memory client for user {user_id} on @{bot_name}")
 
 
 async def close_userbot(user_id: int):

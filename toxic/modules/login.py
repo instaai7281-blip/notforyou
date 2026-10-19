@@ -51,8 +51,14 @@ async def delete_session_files(user_id: int) -> bool:
             pass
 
     try:
+        from toxic.core.userbot_manager import close_userbot
+        await close_userbot(user_id)
+    except Exception:
+        pass
+
+    try:
         from toxic.core.mongo.db import db as user_data_db
-        await user_data_db.update_one({"_id": user_id}, {"$unset": {"session": ""}})
+        await user_data_db.update_one({"_id": user_id}, {"$unset": {"session": "", "sessions": ""}})
     except Exception:
         pass
 
@@ -126,9 +132,8 @@ async def generate_session(client, message: Message):
     if joined == 1:
         return
 
-    # Check if user is already logged in
-    user_data = await db.get_data(user_id) or {}
-    session_string = user_data.get("session")
+    # Check if user is already logged in (checks dedicated or shared session across bots)
+    session_string = await db.get_user_session(user_id)
 
     if session_string:
         status_card = (

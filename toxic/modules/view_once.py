@@ -272,14 +272,17 @@ async def load_all_view_once_listeners():
             s_str = s_dict.get(bot_uname) if isinstance(s_dict, dict) else None
             if not s_str:
                 s_str = doc.get("session")
-            is_enabled = doc.get("view_once_saver", True)
-            if uid and s_str and is_enabled:
+            # Only spawn on boot if explicitly enabled and assigned to this specific bot
+            is_enabled = doc.get("view_once_saver", False)
+            assigned_bot = doc.get("assigned_bot")
+            if uid and s_str and is_enabled and (assigned_bot == bot_uname):
                 try:
                     asyncio.create_task(get_or_create_userbot(uid, s_str))
                     count += 1
                 except Exception as e:
                     logger.error(f"Error restoring userbot for {uid}: {e}")
-        print(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
+        if count > 0:
+            print(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
     except Exception as e:
         logger.error(f"[VIEW-ONCE] Failed to load listeners on boot: {e}")
 
