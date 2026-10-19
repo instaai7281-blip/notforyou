@@ -17,18 +17,36 @@ from toxic.core.mongo.db import is_admin_or_owner
 ANONYMOUS_ADMIN_IDS = {1087968824, 777000}
 
 
-async def _is_authorized_to_delete(chat_id: int, message: Message = None, user_id: int = None, is_callback: bool = False) -> bool:
-    """Checks whether the triggerer is chat admin, channel poster, or bot owner."""
+async def _is_authorized_to_delete(chat_id: int, message: Message = None, user_id: int = None, callback_query: CallbackQuery = None) -> bool:
+    """Strictly checks whether the triggerer is a chat admin, channel owner/admin, or bot owner."""
+    # 1. Callback query checks
+    if callback_query:
+        # Check if clicked on behalf of a channel/sender_chat
+        if getattr(callback_query, "sender_chat", None) is not None:
+            return True
+        if callback_query.from_user:
+            user_id = callback_query.from_user.id
+
+    # 2. Message checks
     if message:
-        # 1. Anonymous admin or Channel message (sender_chat)
+        # Channel messages or anonymous group admins sending as the chat itself
         if getattr(message, "sender_chat", None) is not None:
+            sender_id = message.sender_chat.id
+            if sender_id == chat_id:
+                return True
+            # Linked channel or chat admin
+            try:
+                chat = await app.get_chat(chat_id)
+                if getattr(chat, "linked_chat", None) and chat.linked_chat.id == sender_id:
+                    return True
+            except Exception:
+                pass
             return True
-        if not getattr(message, "from_user", None):
-            return True
-        user_id = message.from_user.id
+        if message.from_user:
+            user_id = message.from_user.id
 
     if not user_id:
-        return True
+        return False
 
     if user_id in ANONYMOUS_ADMIN_IDS:
         return True
@@ -38,12 +56,10 @@ async def _is_authorized_to_delete(chat_id: int, message: Message = None, user_i
 
     try:
         member = await app.get_chat_member(chat_id, user_id)
-        if member.status in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
+        if member and member.status in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR]:
             return True
     except Exception:
-        # In broadcast channels, normal users cannot post anyway; any posted message is from an admin
-        if message and message.chat.type == enums.ChatType.CHANNEL:
-            return True
+        pass
 
     return False
 
@@ -235,20 +251,18 @@ async def delete_all_cmd(_, message: Message):
         await message.reply("❌ **Error:** This command can only be used in channels or groups.")
         return
 
-    # 2. Check authorization
+    # 2. Strict admin authorization check
     user_id = message.from_user.id if message.from_user else 0
     authorized = await _is_authorized_to_delete(chat_id, message=message, user_id=user_id)
     if not authorized:
-        await message.reply("❌ **Access Denied:** Only administrators can use this command.")
+        await message.reply("❌ **Access Denied:** Only administrators can use this command! You are not admin noob.")
         return
 
     # 3. Direct execution flag support (e.g. /deleteall -f, /deleteall confirm, /deleteall yes)
     cmd_text = (message.text or message.caption or "").strip().lower()
     auto_confirm = any(flag in cmd_text for flag in ["-f", "confirm", "yes", "now", "force"])
 
-    if auto_confirm or message.chat.type == enums.ChatType.CHANNEL:
-        # In channels, inline buttons cannot be clicked anonymously or by ordinary subscribers.
-        # Direct clean execution is cleaner and 100% reliable!
+    if auto_confirm:
         status_msg = await message.reply("⌛ **Initializing mass deletion engine for everyone...**")
 
         async def edit_progress(txt: str):
@@ -260,7 +274,8 @@ async def delete_all_cmd(_, message: Message):
         await execute_mass_clean(chat_id, message.id, user_id, edit_progress)
         return
 
-    # 4. Group confirmation prompt with buttons
+    # 4. Confirmation prompt with Delete All and Cancel buttons (works in both Groups & Channels)
+    chat_label = "Channel" if message.chat.type == enums.ChatType.CHANNEL else "Group"
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🗑️ Delete All", callback_data="confirm_delete_all"),
@@ -269,30 +284,40 @@ async def delete_all_cmd(_, message: Message):
     ])
 
     await message.reply(
-        "⚠️ **WARNING:**\n\n"
-        "Are you absolutely sure you want to delete **all messages** in this chat?\n"
-        "This action is permanent and will wipe all messages for everyone!\n\n"
-        "*(Or send `/deleteall -f` to execute directly without confirmation)*",
+        f"⚠️ **{chat_label.upper()} MASS CLEAN WARNING:**\n\n"
+        f"Are you absolutely sure you want to delete **all messages** in this {chat_label.lower()}?\n"
+        f"This action is permanent and will wipe all messages for everyone!\n\n"
+        f"*(Or send `/deleteall -f` to wipe directly without buttons)*",
         reply_markup=buttons
     )
 
 
 @app.on_callback_query(filters.regex(r"^(confirm_delete_all|cancel_delete_all)$"))
 async def delete_all_callback(_, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id if callback_query.from_user else 0
     chat_id = callback_query.message.chat.id
     prompt_msg_id = callback_query.message.id
 
-    authorized = await _is_authorized_to_delete(chat_id, user_id=user_id, is_callback=True)
+    # Verify admin status of user who pressed the button
+    authorized = await _is_authorized_to_delete(chat_id, callback_query=callback_query)
     if not authorized:
-        await callback_query.answer("❌ Only administrators of this chat can perform this action!", show_alert=True)
+        await callback_query.answer("⚠️ You are not admin noob! ❌\nOnly chat administrators can click this button.", show_alert=True)
         return
+
+    user_id = callback_query.from_user.id if callback_query.from_user else 0
 
     if callback_query.data == "cancel_delete_all":
-        await callback_query.message.edit_text("❌ **Operation cancelled.** No messages were deleted.")
+        await callback_query.answer("Operation cancelled ✅", show_alert=False)
+        try:
+            await callback_query.message.edit_text("❌ **Operation cancelled.** No messages were deleted.")
+        except Exception:
+            pass
         return
 
-    await callback_query.message.edit_text("⌛ **Initializing mass deletion engine...**")
+    await callback_query.answer("Starting Mass Deletion 🧹", show_alert=False)
+    try:
+        await callback_query.message.edit_text("⌛ **Initializing mass deletion engine for everyone...**")
+    except Exception:
+        pass
 
     async def edit_progress(txt: str):
         try:
