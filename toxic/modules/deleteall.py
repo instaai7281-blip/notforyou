@@ -188,11 +188,14 @@ async def execute_mass_clean(chat_id: int, trigger_msg_id: int, user_id: int, pr
                 except Exception as scan_err:
                     print(f"[DELETEALL] Scan error on {scanner_client.__class__.__name__}: {scan_err}")
 
-            # Fallback range scan if get_chat_history returned nothing or for basic group cleanup
-            if not message_ids and pass_num == 1:
-                highest_id = trigger_msg_id - 1
-                if highest_id > 0:
-                    message_ids = list(range(highest_id, max(0, highest_id - 5000), -1))
+            # Supplement with sequential ID range sweep to catch service messages (joins, left, title changes)
+            highest_id = trigger_msg_id - 1
+            if highest_id > 0:
+                min_id_to_check = max(1, min(message_ids) - 100) if message_ids else max(1, highest_id - 3000)
+                all_range_ids = set(range(highest_id, min_id_to_check - 1, -1))
+                missing_service_ids = [mid for mid in all_range_ids if mid not in message_ids and mid != trigger_msg_id]
+                if missing_service_ids:
+                    message_ids.extend(missing_service_ids[:1500])
 
             if not message_ids:
                 break
