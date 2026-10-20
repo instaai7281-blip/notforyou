@@ -29,6 +29,11 @@ async def _is_authorized_to_delete(chat_id: int, message: Message = None, user_i
 
     # 2. Message checks
     if message:
+        # IN BROADCAST CHANNELS: Telegram only allows channel administrators / owner to post!
+        # Normal subscribers/members cannot post messages in a channel.
+        if message.chat.type == enums.ChatType.CHANNEL:
+            return True
+
         # Channel messages or anonymous group admins sending as the chat itself
         if getattr(message, "sender_chat", None) is not None:
             sender_id = message.sender_chat.id
@@ -42,6 +47,7 @@ async def _is_authorized_to_delete(chat_id: int, message: Message = None, user_i
             except Exception:
                 pass
             return True
+
         if message.from_user:
             user_id = message.from_user.id
 
