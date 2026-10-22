@@ -27,38 +27,77 @@ from pyrogram.enums import ChatType, ParseMode
 
 
 
+import time
+
+_last_bio_prompt_time = {}
+
 @app.on_message(filters.private & ~filters.service, group=-2)
 async def free_user_strict_guard(client, message: Message):
     """
-    Completely silences and drops all incoming messages and commands from Free Users.
-    No reply, no card, no /start response — only Pro/Premium users and Admins can interact.
+    Completely silences and turns off all command replies for Free Users.
+    The ONLY message sent from the bot's side is the Bio Verification message!
+    Admins and paid Premium users can interact normally.
     """
     if not message.from_user:
         return
 
     user_id = message.from_user.id
     from toxic.core.func import is_free_user
+    from toxic.core.mongo.db import is_admin_or_owner
+
+    if is_admin_or_owner(user_id):
+        return
 
     if await is_free_user(user_id):
-        # Absolutely silent! Nothing sent, no reply to /start or any command.
+        # Stop all operational commands/start handler propagation
         message.stop_propagation()
+
+        # Send ONLY the official Bio Verification message (with 3s debounce per user to prevent flood)
+        now = time.time()
+        last_sent = _last_bio_prompt_time.get(user_id, 0)
+        if (now - last_sent) >= 3:
+            _last_bio_prompt_time[user_id] = now
+            try:
+                from toxic.core.bio_check import send_bio_verification_prompt
+                await send_bio_verification_prompt(client, message)
+            except Exception as e:
+                print(f"⚠️ Error sending bio prompt to free user {user_id}: {e}")
         return
 
 
 @app.on_callback_query(group=-2)
 async def free_user_strict_callback_guard(client, query: CallbackQuery):
     """
-    Completely silences and drops all button callback queries from Free Users.
+    Guards callback queries for Free Users:
+    Allows Bio verification and Plan viewing callbacks so free users can complete verification or buy plans.
+    Silences all other operational buttons.
     """
     if not query.from_user:
         return
 
     user_id = query.from_user.id
     from toxic.core.func import is_free_user
+    from toxic.core.mongo.db import is_admin_or_owner
+
+    if is_admin_or_owner(user_id):
+        return
 
     if await is_free_user(user_id):
+        data = query.data or ""
+        allowed_prefixes = (
+            "verify_user_bio",
+            "bio_terms_info",
+            "back_to_bio_prompt",
+            "see_plan",
+            "plans",
+            "buy_plan",
+            "check_subscription"
+        )
+        if any(data.startswith(p) for p in allowed_prefixes):
+            return  # Allow bio verification and plan purchase callbacks
+
         try:
-            await query.answer()
+            await query.answer("🔒 Access Denied! Please complete Bio verification or upgrade to Premium.", show_alert=True)
         except Exception:
             pass
         query.stop_propagation()

@@ -144,14 +144,14 @@ async def get_verified_bio_users_count() -> int:
         return 0
 
 async def is_bio_check_enabled() -> bool:
-    """Returns True if Bio Verification is enabled. Defaults to False (OFF)."""
+    """Returns True if Bio Verification is enabled. Defaults to True (ON)."""
     try:
         doc = await bio_settings_db.find_one({"_id": "bio_verification_status"})
         if doc is not None:
-            return bool(doc.get("enabled", False))
+            return bool(doc.get("enabled", True))
     except Exception:
         pass
-    return False
+    return True
 
 async def set_bio_check_enabled(enabled: bool):
     """Saves Bio Verification state to MongoDB."""
@@ -482,6 +482,28 @@ async def check_user_bio_access(
     was_previously_verified = bool(user_doc and user_doc.get("status") == "verified")
     if was_previously_verified:
         await mark_user_bio_revoked(user_id)
+
+    await send_bio_verification_prompt(client, message)
+    return False
+
+
+async def send_bio_verification_prompt(
+    client: Client,
+    message: Message
+):
+    """Sends the official bio verification message with instructions and interactive buttons."""
+    if not message.from_user:
+        return None
+
+    user_id = message.from_user.id
+    user_name = html.escape(message.from_user.first_name or "User")
+    user_mention = f"<a href='tg://user?id={user_id}'>{user_name}</a>"
+    req_tag = await get_required_bio_tag()
+
+    # Check if previously verified user removed the tag
+    user_doc = await verified_bio_users_db.find_one({"user_id": user_id})
+    was_previously_verified = bool(user_doc and user_doc.get("status") == "verified")
+    if was_previously_verified:
         header_text = (
             "⚠️ <b>Warning: Bio Tag Removed! ❌</b>\n\n"
             f"Hey {user_mention} 👋 Aapne apne profile bio se required tag <code>{req_tag}</code> hata diya hai!\n"
@@ -493,7 +515,6 @@ async def check_user_bio_access(
             f"Hey {user_mention} 👋 Aapka Access Abhi Pending Me Hai...\n\n"
         )
 
-    # Otherwise show the official Access Denied / Warning card with Bio Terms
     prompt_text = (
         f"{header_text}"
         "Join / Use karne ke liye bas ye 2 simple steps follow karo 😊:\n"
@@ -525,10 +546,10 @@ async def check_user_bio_access(
         )
         if sent_msg and hasattr(sent_msg, "id"):
             await schedule_bio_message_auto_delete(client, message.chat.id, sent_msg.id, 7200)
+        return sent_msg
     except Exception as e:
         logger.warning("Could not send bio verification prompt: %s", e)
-
-    return False
+        return None
 
 
 @app.on_chat_join_request()
