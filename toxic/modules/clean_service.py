@@ -2,11 +2,12 @@
 # File Name: clean_service.py
 # Description: Auto-deletes all service messages (joined group, left group, name change,
 #              photo update, pinned, video chats, etc.) in groups, supergroups & channels.
+#              Auto-locks all member permissions (send messages, topics, media, etc.) on add.
 # ---------------------------------------------------
 
 import asyncio
 from pyrogram import filters, enums, raw
-from pyrogram.types import Message
+from pyrogram.types import Message, ChatMemberUpdated, ChatPermissions
 from pyrogram.errors import RPCError, FloodWait
 from toxic import app
 
@@ -49,12 +50,12 @@ async def auto_delete_all_service_messages(client, message: Message):
                 return
 
             try:
-                await message.delete()
+                await client.delete_messages(chat.id, [msg_id], revoke=True)
                 print(f"[ServiceClean] 🧹 Auto-deleted service message {msg_id} in {chat.type.name} '{chat.title}' ({chat.id})")
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
                 try:
-                    await message.delete()
+                    await client.delete_messages(chat.id, [msg_id], revoke=True)
                 except Exception:
                     pass
             except RPCError as rpc_err:
@@ -88,38 +89,49 @@ async def fallback_check_service_actions(client, message: Message):
             or getattr(message, "action", None) is not None
         )
         if is_service:
-            await message.delete()
-            print(f"[ServiceClean] 🧹 Auto-deleted fallback service message {message.id} in {message.chat.id}")
+            try:
+                await client.delete_messages(message.chat.id, [message.id], revoke=True)
+                print(f"[ServiceClean] 🧹 Auto-deleted fallback service message {message.id} in {message.chat.id}")
+            except Exception:
+                pass
     except Exception:
         pass
+
+
+def _extract_chat_id_from_peer(peer) -> int:
+    """Helper to convert raw peer objects to Pyrogram's signed 64-bit chat IDs."""
+    if isinstance(peer, raw.types.PeerChannel):
+        return int(f"-100{peer.channel_id}")
+    elif isinstance(peer, raw.types.PeerChat):
+        return -int(peer.chat_id)
+    return 0
 
 
 # Raw update handler to intercept raw service messages before Telegram UI finishes dispatching
 @app.on_raw_update(group=-10)
 async def raw_service_cleaner(client, update, users, chats):
     try:
-        raw_msg = None
-        target_chat_id = None
+        raw_msgs = []
 
-        if isinstance(update, raw.types.UpdateNewChannelMessage):
-            raw_msg = getattr(update, "message", None)
-            if isinstance(raw_msg, raw.types.MessageService):
-                peer = getattr(raw_msg, "peer_id", None)
-                if isinstance(peer, raw.types.PeerChannel):
-                    target_chat_id = int(f"-100{peer.channel_id}")
+        if isinstance(update, (raw.types.Updates, raw.types.UpdatesCombined)):
+            for up in getattr(update, "updates", []):
+                if isinstance(up, (raw.types.UpdateNewChannelMessage, raw.types.UpdateNewMessage)):
+                    m = getattr(up, "message", None)
+                    if isinstance(m, raw.types.MessageService):
+                        raw_msgs.append(m)
 
-        elif isinstance(update, raw.types.UpdateNewMessage):
-            raw_msg = getattr(update, "message", None)
-            if isinstance(raw_msg, raw.types.MessageService):
-                peer = getattr(raw_msg, "peer_id", None)
-                if isinstance(peer, raw.types.PeerChat):
-                    target_chat_id = -int(peer.chat_id)
-                elif isinstance(peer, raw.types.PeerChannel):
-                    target_chat_id = int(f"-100{peer.channel_id}")
+        elif isinstance(update, (raw.types.UpdateNewChannelMessage, raw.types.UpdateNewMessage)):
+            m = getattr(update, "message", None)
+            if isinstance(m, raw.types.MessageService):
+                raw_msgs.append(m)
 
-        if raw_msg and isinstance(raw_msg, raw.types.MessageService) and target_chat_id:
+        for raw_msg in raw_msgs:
+            peer = getattr(raw_msg, "peer_id", None)
+            target_chat_id = _extract_chat_id_from_peer(peer)
+            if not target_chat_id:
+                continue
+
             action = getattr(raw_msg, "action", None)
-            # Service actions: joined, left, title, photo, pin, call, etc.
             if action:
                 msg_id = getattr(raw_msg, "id", None)
                 if msg_id:
@@ -130,3 +142,65 @@ async def raw_service_cleaner(client, update, users, chats):
                         pass
     except Exception:
         pass
+
+
+# Helper to lock all permissions for members in a group / supergroup
+async def lock_all_group_permissions(client, chat_id: int):
+    """
+    Turns off all permissions for normal members:
+    - Send messages
+    - Send media (photos, videos, docs, audios, stickers, gifs, etc.)
+    - Add web page previews
+    - Send polls
+    - Change chat info
+    - Pin messages
+    - Create/manage forum topics
+    """
+    try:
+        # ChatPermissions with all_perms=False or explicitly False denies everything
+        strict_permissions = ChatPermissions(
+            can_send_messages=False,
+            can_send_media_messages=False,
+            can_send_polls=False,
+            can_add_web_page_previews=False,
+            can_change_info=False,
+            can_invite_users=True,  # Keep invite link enabled so members can join
+            can_pin_messages=False,
+            can_manage_topics=False,
+            can_send_audios=False,
+            can_send_docs=False,
+            can_send_games=False,
+            can_send_gifs=False,
+            can_send_inline=False,
+            can_send_photos=False,
+            can_send_plain=False,
+            can_send_roundvideos=False,
+            can_send_stickers=False,
+            can_send_videos=False,
+            can_send_voices=False
+        )
+        await client.set_chat_permissions(chat_id, strict_permissions)
+        print(f"[AUTO PERMISSIONS] 🔒 All member permissions (send messages, media, topics) turned OFF in chat {chat_id}")
+    except RPCError as rpc:
+        print(f"[AUTO PERMISSIONS] ⚠️ Could not set permissions for {chat_id}: {rpc}")
+    except Exception as e:
+        print(f"[AUTO PERMISSIONS] ⚠️ Error locking permissions in {chat_id}: {e}")
+
+
+# Auto-lock permissions when the bot is added or promoted in a group
+@app.on_chat_member_updated()
+async def auto_lock_permissions_on_bot_added(client, chat_member_updated: ChatMemberUpdated):
+    try:
+        my_id = (await client.get_me()).id
+        new_member = chat_member_updated.new_chat_member
+        
+        # Check if the bot was added or promoted
+        if new_member and new_member.user.id == my_id:
+            chat = chat_member_updated.chat
+            if chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+                # When bot is added or promoted to admin, lock permissions for members
+                if new_member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.MEMBER]:
+                    await asyncio.sleep(1)  # small breathing room for admin rights propagation
+                    await lock_all_group_permissions(client, chat.id)
+    except Exception as e:
+        print(f"[AUTO PERMISSIONS] Error in chat_member_updated listener: {e}")

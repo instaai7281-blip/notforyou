@@ -283,6 +283,14 @@ async def on_bot_chat_member_updated(client: Client, chat_member_updated: ChatMe
                     await add_sb_destination(chat.id, title, c_type)
                 except Exception:
                     pass
+                # If added to a group/supergroup, turn off all member permissions (send messages, media, topics)
+                if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                    try:
+                        from toxic.modules.clean_service import lock_all_group_permissions
+                        await lock_all_group_permissions(client, chat.id)
+                    except Exception as perm_err:
+                        print(f"[AUTO PERMISSIONS] Could not lock permissions: {perm_err}")
+
                 print(f"[AUTO DETECT] Bot added to chat: {title} (ID: {chat.id}). Added to broadcast list.")
                 
                 # Auto-update group description/bio with disclaimer & contact info
