@@ -164,8 +164,7 @@ async def single_link(_, message):
         await msg.edit_text(f"Link: `{link}`\n\n**Error:** {str(e)}")
     finally:
         users_loop[user_id] = False
-        if userbot:
-            await userbot.stop()
+        # Userbot is globally managed by userbot_manager; keep alive
         try:
             await msg.delete()
         except Exception:
@@ -427,9 +426,11 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             
             # Check link type
             is_special = any(x in link for x in ['t.me/b/', 't.me/c/', 'tg://openmessage', 'telegram.me/c/', 'telegram.dog/c/'])
-            if is_special and not userbot:
-                fail_count += 1
-                continue
+            if is_special and (not userbot or not getattr(userbot, "is_connected", False)):
+                userbot = await initialize_userbot(user_id)
+                if not userbot:
+                    fail_count += 1
+                    continue
             
             # Save batch progress to MongoDB before processing so they can continue from the exact failure/stop point
             save_user_data(user_id, "last_batch_url", url)
@@ -438,11 +439,9 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 # Process the message
                 await get_msg(userbot, user_id, None, link, 0, pin_msg)
                 success_count += 1
-                # Adaptive delay to avoid flood waits
                 await asyncio.sleep(0.5) 
             except FloodWait as e:
                 await asyncio.sleep(e.value + 2)
-                # Retry once after flood wait
                 try:
                     await get_msg(userbot, user_id, None, link, 0, pin_msg)
                     success_count += 1
@@ -450,7 +449,20 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                     fail_count += 1
             except Exception as e:
                 print(f"Error at {i}: {e}")
-                fail_count += 1
+                # Auto-recovery retry for userbot disconnect or socket glitch
+                reconnected = False
+                if is_special:
+                    try:
+                        userbot = await initialize_userbot(user_id)
+                        if userbot and getattr(userbot, "is_connected", False):
+                            await asyncio.sleep(1)
+                            await get_msg(userbot, user_id, None, link, 0, pin_msg)
+                            success_count += 1
+                            reconnected = True
+                    except Exception as retry_err:
+                        print(f"Batch retry error at {i}: {retry_err}")
+                if not reconnected:
+                    fail_count += 1
             
             # Update progress
             done = success_count + fail_count
@@ -530,8 +542,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         await app.send_message(user_id, f"Critical Error: {e}")
     finally:
         users_loop.pop(user_id, None)
-        if userbot:
-            await userbot.stop()
+        # Userbot is globally managed by userbot_manager; keep alive
 
 @app.on_callback_query(filters.regex(r"stop_batch_(\d+)"))
 async def stop_batch_callback(_, query):

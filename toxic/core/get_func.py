@@ -972,6 +972,11 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                 raise e
         
         if not msg or msg.service or msg.empty:
+            if edit:
+                try:
+                    await edit.delete()
+                except Exception:
+                    pass
             return
 
         # Apply filter checks in get_msg!
@@ -1057,26 +1062,56 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         await edit.edit("**>Downloading...Darling 😘**")
 
         # Download media
+        last_download_error = None
+        temp_dir = os.path.join("downloads", str(sender))
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # Unique filename suffix prevents Windows file locking errors when same link is requested repeatedly
+        unique_file_name = f"{msg_id}_{int(time.time())}_{file_name}"
+        target_file_path = os.path.join(temp_dir, unique_file_name)
+
+        # Ensure userbot is connected; auto-recover if disconnected
+        if client != app and not getattr(client, "is_connected", False):
+            try:
+                from toxic.core.userbot_manager import get_or_create_userbot
+                fresh_ub = await get_or_create_userbot(sender)
+                if fresh_ub and getattr(fresh_ub, "is_connected", False):
+                    client = fresh_ub
+                    userbot = fresh_ub
+            except Exception as ub_err:
+                print(f"[DOWNLOAD] Reconnect userbot error: {ub_err}")
+
+        # Join the chat first to resolve username entity and prevent PeerIdInvalid / ChannelPrivate errors
+        if client and client != app and isinstance(chat, str) and not chat.startswith("-") and not chat.isdigit():
+            try:
+                await client.join_chat(chat)
+            except Exception:
+                pass
+
         try:
-            # unique directory for each user to prevent concurrency collisions
-            temp_dir = os.path.join("downloads", str(sender))
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # Join the chat first to resolve username entity and prevent PeerIdInvalid / ChannelPrivate errors
-            if client and client != app and isinstance(chat, str) and not chat.startswith("-") and not chat.isdigit():
-                try:
-                    await client.join_chat(chat)
-                except Exception:
-                    pass
-            
-            target_file_path = os.path.join(temp_dir, file_name)
             file = await client.download_media(
                 msg,
                 file_name=target_file_path,            
                 progress_args=("╔══━⚡️ Downloading ⚡️━══╗\n", edit, time.time()),
                 progress=progress_bar
             )
+        except FloodWait as fw:
+            last_download_error = f"FloodWait ({fw.value}s)"
+            print(f"[DOWNLOAD] FloodWait encountered: waiting {fw.value + 2}s...")
+            await asyncio.sleep(fw.value + 2)
+            try:
+                fresh_msg = await client.get_messages(chat, msg_id)
+                file = await client.download_media(
+                    fresh_msg or msg,
+                    file_name=target_file_path,
+                    progress_args=("╔══━⚡️ Retrying Download... ⚡️━══╗\n", edit, time.time()),
+                    progress=progress_bar
+                )
+            except Exception as fw_retry_err:
+                last_download_error = str(fw_retry_err)
+                file = None
         except FileReferenceExpired:
+            last_download_error = "FileReferenceExpired"
             print("[DOWNLOAD] FileReferenceExpired encountered! Refetching fresh message...")
             try:
                 if os.path.exists(target_file_path):
@@ -1094,10 +1129,33 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                     )
             except Exception as ex:
                 print(f"[DOWNLOAD] Refetch download failed: {ex}")
+                last_download_error = str(ex)
                 file = None
         except Exception as e:
-            print(f"Download error: {e}")
-            file = None
+            last_download_error = str(e)
+            print(f"Download initial error: {e}")
+            # Robust auto-recovery: reconnect client if needed, refetch fresh message, and retry
+            try:
+                if client != app and not getattr(client, "is_connected", False):
+                    from toxic.core.userbot_manager import get_or_create_userbot
+                    fresh_ub = await get_or_create_userbot(sender)
+                    if fresh_ub and getattr(fresh_ub, "is_connected", False):
+                        client = fresh_ub
+                        userbot = fresh_ub
+
+                alt_file_path = os.path.join(temp_dir, f"retry_{msg_id}_{int(time.time())}_{file_name}")
+                fresh_msg = await client.get_messages(chat, msg_id)
+                if fresh_msg and not fresh_msg.empty:
+                    file = await client.download_media(
+                        fresh_msg,
+                        file_name=alt_file_path,
+                        progress_args=("╔══━⚡️ Retrying Download... ⚡️━══╗\n", edit, time.time()),
+                        progress=progress_bar
+                    )
+            except Exception as retry_e:
+                print(f"[DOWNLOAD] Auto-recovery retry error: {retry_e}")
+                last_download_error = str(retry_e)
+                file = None
         
         # Check if file downloaded is 0-byte file
         if file and os.path.exists(file) and os.path.getsize(file) == 0:
@@ -1117,6 +1175,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                     )
             except Exception as ex:
                 print(f"[DOWNLOAD] 0 B Retry failed: {ex}")
+                last_download_error = str(ex)
                 file = None
 
         if not file or (os.path.exists(file) and os.path.getsize(file) == 0):
@@ -1124,7 +1183,8 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             if getattr(msg, "has_protected_content", False) and not userbot:
                  await edit.edit("❌ **Protected Download Failed**\n\nThis content is protected and the shared userbot couldn't access it. Please **login with your own account** using /login to bypass this restriction.")
             else:
-                 await edit.edit(f"❌ **Download failed** - The file might be corrupted or the session has expired.\n\n**Error:** `{str(client.__class__.__name__)} session issue`")
+                 err_detail = f": `{last_download_error}`" if last_download_error else ""
+                 await edit.edit(f"❌ **Download failed** - The file might be corrupted, restricted, or connection dropped.\n\n**Error:** {err_detail or 'Download stream terminated'}")
             return
 
         caption = await get_final_caption(msg, sender)
