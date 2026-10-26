@@ -1519,7 +1519,7 @@ async def resilient_send_media(
     return await client.send_document(chat_id=chat_id, document=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id)
 
 
-async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False, src_client=None):
+async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False, src_client=None, is_public: bool = False):
     """
     Transfers a single message using the bot-only pipeline:
       - All messages in target group are strictly sent by `app` (real bot).
@@ -1709,6 +1709,61 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client)
         except Exception:
             pass  # Fallback to download & upload via app
+
+    # ─────────────────────────────────────────────────────────────
+    # 2.5 FAST PATH: Server-Side Copy or Direct Forward for Public Channels
+    # If the channel is public, copies or forwards server-side in 50ms without downloading!
+    # ─────────────────────────────────────────────────────────────
+    is_src_public = is_public or bool(getattr(getattr(msg, "chat", None), "username", None)) or (isinstance(src_chat_id, str) and not str(src_chat_id).startswith("-100"))
+    if is_src_public:
+        try:
+            orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
+            final_caption = await clean_and_brand_caption(user_id, orig_cap)
+            caption_html = format_caption_to_html(final_caption) if final_caption else None
+
+            copied_msg = await app.copy_message(
+                chat_id=tgt_chat_id,
+                from_chat_id=src_chat_id,
+                message_id=msg.id,
+                caption=caption_html or final_caption,
+                parse_mode=ParseMode.HTML if caption_html else None,
+                reply_to_message_id=effective_tgt_topic_id
+            )
+            if copied_msg:
+                sent_id = getattr(copied_msg, 'id', None)
+                await _log_msg(copied_msg)
+                return True, "fast_copy", sent_id
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client, is_public=is_public)
+        except Exception as cp_err:
+            # Fallback to direct forward if copy_message is restricted
+            try:
+                fwd_res = await app.forward_messages(
+                    chat_id=tgt_chat_id,
+                    from_chat_id=src_chat_id,
+                    message_ids=msg.id,
+                    reply_to_message_id=effective_tgt_topic_id
+                )
+                if fwd_res:
+                    sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
+                    await _log_msg(fwd_res)
+                    return True, "fast_forward", sent_id
+            except Exception:
+                if userbot:
+                    try:
+                        fwd_res = await userbot.forward_messages(
+                            chat_id=tgt_chat_id,
+                            from_chat_id=src_chat_id,
+                            message_ids=msg.id,
+                            reply_to_message_id=effective_tgt_topic_id
+                        )
+                        if fwd_res:
+                            sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
+                            await _log_msg(fwd_res)
+                            return True, "fast_forward", sent_id
+                    except Exception:
+                        pass
 
     # ─────────────────────────────────────────────────────────────
     # 3. FULL PIPELINE: Download via userbot → Sanitize & Brand → Upload via `app`
@@ -5271,13 +5326,17 @@ async def run_channel_to_topics_mirror(
         status_msg = await app.send_message(user_id, init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
         active_mirrors[user_id]["status_msg"] = status_msg
 
-    # Fetch messages in chunks of 200
+    # Detect if public channel for lightning-fast fetching and forwarding
+    is_src_public = bool(getattr(src_chat, "username", None)) or (isinstance(src_chat_id, str) and not str(src_chat_id).startswith("-100"))
+
+    # Fetch messages in chunks: if public, try app FIRST to avoid userbot rate limits!
     msg_ids = list(range(effective_start + 1, effective_end + 1))
-    chunk_size = 200
+    chunk_size = 100
     chunks = [msg_ids[i:i + chunk_size] for i in range(0, len(msg_ids), chunk_size)]
     messages_to_copy = []
 
-    for fetch_client in [src_client, userbot, app]:
+    clients_order = [app, src_client, userbot] if is_src_public else [src_client, userbot, app]
+    for fetch_client in clients_order:
         if not fetch_client:
             continue
         temp_collected = []
@@ -5382,7 +5441,8 @@ async def run_channel_to_topics_mirror(
                     msg=msg,
                     user_id=user_id,
                     is_general_topic=is_gen,
-                    src_client=src_client
+                    src_client=src_client,
+                    is_public=is_src_public
                 )
                 if success or method in ("service_skipped", "skipped_filter"):
                     break
