@@ -802,13 +802,16 @@ async def get_all_target_forum_topics(userbot, app, tgt_chat_id):
     topics_by_id = {}
 
     clients_to_try = []
-    if app:
-        clients_to_try.append(app)
-    if userbot and userbot not in clients_to_try:
+    # Telegram strictly restricts messages.GetForumTopics to user accounts (bots get BOT_METHOD_INVALID)
+    if userbot:
         clients_to_try.append(userbot)
 
     for client in clients_to_try:
         try:
+            try:
+                await client.get_chat(tgt_chat_id)
+            except Exception:
+                pass
             peer = await client.resolve_peer(tgt_chat_id)
             offset_date = 0
             offset_id = 0
@@ -5120,12 +5123,12 @@ async def run_channel_to_topics_mirror(
     }
 
     # Fetch existing target topics for instant mapping and zero duplicate creation
-    existing_topics = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
-    topic_cache = {}
-    for t in existing_topics:
-        norm = normalize_topic_title(t["title"])
-        topic_cache[norm] = t["id"]
-        topic_cache[t["title"].strip().lower()] = t["id"]
+    target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+    topic_cache = dict(target_topics_by_title)
+    for tid, info in target_topics_by_id.items():
+        if isinstance(info, dict) and "title" in info:
+            topic_cache[info["title"].strip().lower()] = tid
+            topic_cache[normalize_topic_title(info["title"])] = tid
 
     # Saved checkpoint
     saved_checkpoint = await db.get_c2t_checkpoint(src_chat_id, tgt_chat_id)
@@ -5168,7 +5171,7 @@ async def run_channel_to_topics_mirror(
         f"📤 <b>Source Channel:</b> <code>{src_title}</code>\n"
         f"📥 <b>Target Forum:</b> <code>{tgt_title}</code>\n"
         f"📊 <b>Range:</b> #{effective_start + 1} ➔ #{effective_end}\n"
-        f"📁 <b>Pre-existing Topics:</b> <code>{len(existing_topics)}</code>\n"
+        f"📁 <b>Pre-existing Topics:</b> <code>{len(target_topics_by_id)}</code>\n"
         f"⚡ <b>Status:</b> <code>Fetching message batch...</code>"
     )
     if status_msg:
@@ -5275,6 +5278,8 @@ async def run_channel_to_topics_mirror(
                 topic_cache[norm_name] = tgt_topic_id
                 topic_cache[norm_styled] = tgt_topic_id
                 topic_cache[detected_topic_name.strip().lower()] = tgt_topic_id
+                _register_topic(topic_cache, target_topics_by_id, styled_title, tgt_topic_id)
+                _register_topic(topic_cache, target_topics_by_id, detected_topic_name, tgt_topic_id)
                 print(f"[C2T] ✅ Auto-created topic '{styled_title}' (ID: {tgt_topic_id})")
             else:
                 tgt_topic_id = 1
