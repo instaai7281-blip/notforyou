@@ -432,7 +432,8 @@ def get_topic_styling(title: str) -> tuple:
     # 1. Video / Lecture / Recorded
     video_keywords = (
         "lecture", "video", "recorded", "class", "live", "session",
-        "watch", "part", "ep", "episode", "batch", "stream", "zoom", "recording"
+        "watch", "part", "ep", "episode", "batch", "stream", "zoom", "recording",
+        "લેકચર", "લેકચર્સ", "વિડીયો", "ડેમો", "લાઈવ"
     )
     if any(k in search_text for k in video_keywords):
         emoji = "🎬"
@@ -445,7 +446,8 @@ def get_topic_styling(title: str) -> tuple:
     pdf_keywords = (
         "pdf", "notes", "editorial", "faculty", "material", "book",
         "handwritten", "assignment", "doc", "document", "sheet", "study",
-        "formula", "dpp", "handout", "thumbnail"
+        "formula", "dpp", "handout", "thumbnail",
+        "મટીરીયલ", "નોટ્સ", "પુસ્તક", "પીડીએફ"
     )
     if any(k in search_text for k in pdf_keywords):
         emoji = "📚"
@@ -458,7 +460,8 @@ def get_topic_styling(title: str) -> tuple:
     test_keywords = (
         "test", "practice", "question", "quiz", "exam", "mock",
         "paper", "mcq", "mentorship", "series", "solution", "quetion",
-        "quieetion", "qa", "pyq", "doubt"
+        "quieetion", "qa", "pyq", "doubt",
+        "ટેસ્ટ", "પરીક્ષા", "પ્રશ્નો"
     )
     if any(k in search_text for k in test_keywords):
         emoji = "📝"
@@ -2056,9 +2059,12 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
         
     buttons.append([
         InlineKeyboardButton("➕ Start Group Mirror", callback_data="tm_new"),
-        InlineKeyboardButton("🔗 Link Mirror (Topic ➔ Topic)", callback_data="tm_topiclink")
+        InlineKeyboardButton("🔗 Topic ➔ Topic", callback_data="tm_topiclink")
     ])
-    buttons.append([InlineKeyboardButton("🗑️ Clear All Saved Sessions", callback_data="tm_clear")])
+    buttons.append([
+        InlineKeyboardButton("⚡ Channel ➔ Topics", callback_data="tm_c2t"),
+        InlineKeyboardButton("🗑️ Clear All Sessions", callback_data="tm_clear")
+    ])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -4985,3 +4991,607 @@ async def on_group_member_update(_, event):
 
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHANNEL ➔ TOPICS MIRROR ENGINE
+# ═══════════════════════════════════════════════════════════════════
+
+def extract_topic_from_caption(text: str):
+    """
+    Extracts the topic name from message caption / text.
+    Handles lines like:
+      - Topic: Course Thumbnail
+      - **Topic:** પરિશ્રમ | DEMO LECTURE
+      - Topic: પરિશ્રમ બેચ ( PRE + MAINS ) લેકચર્સ → ભારતીય બંધારણ રાજ્યવ્યવસ્થા → આમુખ
+      - Folder: Economics
+      - Category: Static GK
+      - Subject: Current Affairs
+    """
+    if not text:
+        return None
+
+    # Strip HTML tags
+    clean_text = re.sub(r'</?[a-zA-Z0-9]+[^>]*>', '', str(text))
+    for line in clean_text.splitlines():
+        l_str = line.strip()
+        if not l_str:
+            continue
+        l_str = re.sub(r'^[>\-\*•\s]+', '', l_str).strip()
+        m = re.match(r'^(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\-→►>]\s*(.+)$', l_str, re.IGNORECASE)
+        if m:
+            val = m.group(1).strip()
+            val = re.sub(r'[\*_`~]+', '', val).strip()
+            val = val.strip("\"'` ")
+            if val:
+                # Telegram topic title max length is 128 chars.
+                if len(val) > 120:
+                    if '→' in val:
+                        crumbs = [c.strip() for c in val.split('→') if c.strip()]
+                        if crumbs and len(crumbs[-1]) <= 120:
+                            val = crumbs[-1]
+                    elif '->' in val:
+                        crumbs = [c.strip() for c in val.split('->') if c.strip()]
+                        if crumbs and len(crumbs[-1]) <= 120:
+                            val = crumbs[-1]
+                if len(val) > 128:
+                    val = val[:125] + '...'
+                return val.strip()
+    return None
+
+
+async def run_channel_to_topics_mirror(
+    user_id: int,
+    src_chat_id: int,
+    tgt_chat_id: int,
+    src_start_id: int = None,
+    src_end_id: int = None,
+    status_msg = None
+):
+    """
+    Sequentially processes messages from a flat source channel and routes each message into
+    target forum topics based on 'Topic: <topic>' parsed from each message's caption.
+    Auto-creates forum topics on-the-fly with smart category icons and distinct colors.
+    """
+    if await chk_mirror_user(user_id) != 0:
+        err_msg, kb = get_mirror_access_denied_card()
+        if status_msg:
+            try:
+                await status_msg.edit(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+        if status_msg:
+            try:
+                await status_msg.edit(err_active, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
+        return
+
+    userbot, is_temp_userbot = await get_working_userbot(user_id)
+    src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
+    if not src_client or not src_chat:
+        bot_me = await app.get_me()
+        bot_uname = bot_me.username or "this bot"
+        err_ub = (
+            f"❌ <b>Could not access source channel (`{src_chat_id}`):</b>\n<code>{resolve_err}</code>\n\n"
+            f"👉 <b>How to fix:</b>\n"
+            f"• Make sure the bot (@{bot_uname}) OR your logged-in userbot account is a member/admin in the source channel!\n"
+            f"• If private, add @{bot_uname} or login using <code>/login</code>."
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(err_ub, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, err_ub, parse_mode=ParseMode.HTML)
+        return
+
+    # Check target chat
+    try:
+        tgt_chat = await app.get_chat(tgt_chat_id)
+        tgt_title = getattr(tgt_chat, "title", str(tgt_chat_id))
+    except Exception:
+        if userbot:
+            try:
+                tgt_chat = await userbot.get_chat(tgt_chat_id)
+                tgt_title = getattr(tgt_chat, "title", str(tgt_chat_id))
+            except Exception:
+                tgt_title = str(tgt_chat_id)
+        else:
+            tgt_title = str(tgt_chat_id)
+
+    control_kb = get_mirror_keyboard(user_id)
+    active_mirrors[user_id] = {
+        "running": True,
+        "skip_topic": False,
+        "current_topic": "Initializing Channel-to-Topics...",
+        "src_chat_id": src_chat_id,
+        "tgt_chat_id": tgt_chat_id,
+        "status_msg": status_msg
+    }
+
+    # Fetch existing target topics for instant mapping and zero duplicate creation
+    existing_topics = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+    topic_cache = {}
+    for t in existing_topics:
+        norm = normalize_topic_title(t["title"])
+        topic_cache[norm] = t["id"]
+        topic_cache[t["title"].strip().lower()] = t["id"]
+
+    # Saved checkpoint
+    saved_checkpoint = await db.get_c2t_checkpoint(src_chat_id, tgt_chat_id)
+    if src_start_id and src_start_id > 0:
+        effective_start = max(0, src_start_id - 1)
+    elif saved_checkpoint > 0:
+        effective_start = saved_checkpoint
+    else:
+        effective_start = 0
+
+    # Determine end bound
+    effective_end = src_end_id
+    if not effective_end or effective_end <= 0:
+        try:
+            async for m in src_client.get_chat_history(src_chat_id, limit=1):
+                if m:
+                    effective_end = m.id
+        except Exception:
+            effective_end = effective_start + 4000
+
+    if not effective_end or effective_end <= effective_start:
+        up_to_date_text = (
+            f"ℹ️ <b>Channel-to-Topics Mirror is up to date!</b>\n\n"
+            f"• <b>Source:</b> <code>{src_title}</code>\n"
+            f"• <b>Target:</b> <code>{tgt_title}</code>\n"
+            f"• <b>Saved Checkpoint:</b> Post #{saved_checkpoint}"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(up_to_date_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, up_to_date_text, parse_mode=ParseMode.HTML)
+        active_mirrors.pop(user_id, None)
+        return
+
+    init_text = (
+        f"<blockquote><b>⚡️ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 𝗠𝗜𝗥𝗥𝗢𝗥</b></blockquote>\n\n"
+        f"📤 <b>Source Channel:</b> <code>{src_title}</code>\n"
+        f"📥 <b>Target Forum:</b> <code>{tgt_title}</code>\n"
+        f"📊 <b>Range:</b> #{effective_start + 1} ➔ #{effective_end}\n"
+        f"📁 <b>Pre-existing Topics:</b> <code>{len(existing_topics)}</code>\n"
+        f"⚡ <b>Status:</b> <code>Fetching message batch...</code>"
+    )
+    if status_msg:
+        try:
+            await status_msg.edit(init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+        except Exception:
+            pass
+    else:
+        status_msg = await app.send_message(user_id, init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+        active_mirrors[user_id]["status_msg"] = status_msg
+
+    # Fetch messages in chunks of 200
+    msg_ids = list(range(effective_start + 1, effective_end + 1))
+    chunk_size = 200
+    chunks = [msg_ids[i:i + chunk_size] for i in range(0, len(msg_ids), chunk_size)]
+    messages_to_copy = []
+
+    for fetch_client in [src_client, userbot, app]:
+        if not fetch_client:
+            continue
+        temp_collected = []
+        try:
+            for chk in chunks:
+                fetched_msgs = await fetch_client.get_messages(src_chat_id, message_ids=chk)
+                msg_list = fetched_msgs if isinstance(fetched_msgs, list) else [fetched_msgs]
+                for m in msg_list:
+                    if m and not getattr(m, "empty", False) and getattr(m, "id", None):
+                        temp_collected.append(m)
+            if temp_collected:
+                messages_to_copy = sorted(temp_collected, key=lambda x: x.id)
+                break
+        except Exception as fe:
+            print(f"[C2T] Fetch error with {fetch_client.__class__.__name__}: {fe}")
+
+    total_msgs = len(messages_to_copy)
+    if total_msgs == 0:
+        empty_text = (
+            f"ℹ️ <b>No messages found in range #{effective_start + 1} ➔ #{effective_end}!</b>\n"
+            f"Make sure the source channel has valid posts in this range."
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(empty_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        active_mirrors.pop(user_id, None)
+        return
+
+    # Iteration loop
+    copied_count = 0
+    failed_count = 0
+    skipped_count = 0
+    start_time = time.time()
+    last_edit_time = start_time
+    created_topics_count = 0
+
+    for idx, msg in enumerate(messages_to_copy, 1):
+        if not active_mirrors.get(user_id, {}).get("running", True):
+            await app.send_message(user_id, "🛑 <b>Channel-to-Topics Mirror stopped by user!</b>", parse_mode=ParseMode.HTML)
+            break
+
+        # Skip service / empty
+        if getattr(msg, "service", False) or getattr(msg, "empty", False) or getattr(msg, "action", None):
+            await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+            skipped_count += 1
+            continue
+
+        # Extract topic from caption / text
+        raw_cap = (msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else msg.caption) or (msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else msg.text) or ""
+        detected_topic_name = extract_topic_from_caption(raw_cap)
+        if not detected_topic_name:
+            detected_topic_name = "General Content"
+
+        norm_name = normalize_topic_title(detected_topic_name)
+        styled_title, icon_color, icon_emoji_id = get_topic_styling(detected_topic_name)
+        norm_styled = normalize_topic_title(styled_title)
+
+        # Topic lookup
+        tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
+
+        if not tgt_topic_id:
+            # Create the forum topic on the fly!
+            new_id = None
+            try:
+                create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": icon_color}
+                if icon_emoji_id:
+                    create_kwargs["icon_emoji_id"] = icon_emoji_id
+                created = await app.create_forum_topic(**create_kwargs)
+                new_id = extract_topic_id_from_result(created)
+            except Exception as app_cr_err:
+                if userbot:
+                    try:
+                        create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": icon_color}
+                        if icon_emoji_id:
+                            create_kwargs["icon_emoji_id"] = icon_emoji_id
+                        created = await userbot.create_forum_topic(**create_kwargs)
+                        new_id = extract_topic_id_from_result(created)
+                    except Exception as ub_cr_err:
+                        print(f"[C2T] Userbot topic creation failed: {ub_cr_err}")
+
+            if new_id:
+                tgt_topic_id = new_id
+                created_topics_count += 1
+                topic_cache[norm_name] = tgt_topic_id
+                topic_cache[norm_styled] = tgt_topic_id
+                topic_cache[detected_topic_name.strip().lower()] = tgt_topic_id
+                print(f"[C2T] ✅ Auto-created topic '{styled_title}' (ID: {tgt_topic_id})")
+            else:
+                tgt_topic_id = 1
+
+        active_mirrors[user_id]["current_topic"] = styled_title
+
+        # Transfer message using mirror pipeline
+        success = False
+        method = "failed"
+        sent_msg_id = None
+        for retry in range(1, 4):
+            try:
+                await ensure_userbot_connected(userbot)
+                is_gen = (tgt_topic_id == 1)
+                success, method, sent_msg_id = await transfer_single_message(
+                    userbot=userbot,
+                    app=app,
+                    src_chat_id=src_chat_id,
+                    tgt_chat_id=tgt_chat_id,
+                    tgt_topic_id=tgt_topic_id,
+                    msg=msg,
+                    user_id=user_id,
+                    is_general_topic=is_gen,
+                    src_client=src_client
+                )
+                if success or method in ("service_skipped", "skipped_filter"):
+                    break
+            except FloodWait as fw:
+                await asyncio.sleep(fw.value + 1)
+            except Exception as trans_err:
+                print(f"[C2T] Transfer msg {msg.id} attempt {retry}/3 failed: {trans_err}")
+                await asyncio.sleep(1.5)
+
+        if success:
+            copied_count += 1
+            await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+        elif method in ("service_skipped", "skipped_filter"):
+            skipped_count += 1
+            await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+        else:
+            failed_count += 1
+
+        # Live Progress update (every 4 seconds)
+        now = time.time()
+        if (now - last_edit_time) >= 4.0 or idx == total_msgs:
+            last_edit_time = now
+            pct = int((idx / total_msgs) * 100)
+            bar_len = 10
+            filled = int(bar_len * (idx / total_msgs))
+            bar = "▰" * filled + "▱" * (bar_len - filled)
+
+            elapsed = now - start_time
+            speed = idx / elapsed if elapsed > 0 else 0
+            rem_msgs = total_msgs - idx
+            eta_secs = int(rem_msgs / speed) if speed > 0 else 0
+            eta_str = str(datetime.timedelta(seconds=eta_secs))
+
+            progress_card = (
+                f"<blockquote><b>⚡️ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 𝗠𝗜𝗥𝗥𝗢𝗥...</b></blockquote>\n\n"
+                f"📁 <b>Topic:</b> <code>{styled_title}</code>\n"
+                f"📥 <b>Target Group:</b> <code>{tgt_title}</code>\n\n"
+                f"📊 <b>Progress:</b> [{bar}] {pct}%\n"
+                f"🔢 <b>Processed:</b> {idx}/{total_msgs} (Msg #{msg.id})\n"
+                f"✨ <b>Topics Created:</b> <code>{created_topics_count}</code>\n"
+                f"🚀 <b>Speed:</b> <code>{speed:.1f} msg/s</code>\n"
+                f"⏳ <b>ETA:</b> <code>{eta_str}</code>\n\n"
+                f"✅ Copied: {copied_count} | ⏩ Skipped: {skipped_count}\n"
+                f"❌ Failed: {failed_count}"
+            )
+            if status_msg:
+                try:
+                    await status_msg.edit(progress_card, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                except Exception:
+                    pass
+
+    active_mirrors.pop(user_id, None)
+
+    # Final summary card
+    final_card = (
+        f"<blockquote><b>🎉 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘𝗗!</b></blockquote>\n\n"
+        f"📤 <b>Source:</b> <code>{src_title}</code>\n"
+        f"📥 <b>Target:</b> <code>{tgt_title}</code>\n"
+        f"✨ <b>Topics Created:</b> <code>{created_topics_count}</code>\n\n"
+        f"✅ <b>Successfully Copied:</b> <code>{copied_count}</code>\n"
+        f"⏩ <b>Skipped:</b> <code>{skipped_count}</code>\n"
+        f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+        f"⏱ <b>Total Time:</b> <code>{str(datetime.timedelta(seconds=int(time.time() - start_time)))}</code>\n\n"
+        f"<i>All content has been organized into respective topics accurately!</i>"
+    )
+    if status_msg:
+        try:
+            await status_msg.edit(final_card, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    else:
+        await app.send_message(user_id, final_card, parse_mode=ParseMode.HTML)
+
+
+async def start_c2t_flow(user_id: int, message, is_callback: bool = False):
+    """Interactive wizard for Channel-to-Topics Mirroring."""
+    if await chk_mirror_user(user_id) != 0:
+        err_msg, kb = get_mirror_access_denied_card()
+        if is_callback:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+        if is_callback:
+            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(err_active, parse_mode=ParseMode.HTML)
+        return
+
+    # STEP 1: Source Channel Link
+    try:
+        prompt_1 = await app.ask(
+            user_id,
+            "📌 <b>CHANNEL ➔ TOPICS MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 1 of 3 — Source Channel Link</b>\n"
+            "<i>Jis channel me saare videos/files hain uska link bhejo.</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📣 Channel link: <code>https://t.me/c/1234567890/1</code>\n"
+            "• 🎯 Public channel: <code>https://t.me/channel_username/1</code>\n"
+            "• 🆔 Channel ID: <code>-1001234567890</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        err_text = "⏱ <b>Prompt timed out!</b>\nPlease send /c2t in private chat with bot."
+        if is_callback:
+            await app.send_message(user_id, err_text, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(err_text, parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_1.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    src_link = prompt_1.text.strip()
+    src_chat_id, _, src_post_id = parse_topic_and_post_link(src_link)
+    if not src_chat_id:
+        clean_in = src_link.strip()
+        if clean_in.startswith("-100") and clean_in[4:].isdigit():
+            src_chat_id = int(clean_in)
+        elif clean_in.isdigit():
+            src_chat_id = int("-100" + clean_in)
+        else:
+            await app.send_message(user_id, "❌ <b>Invalid Source Channel link!</b>\nExample: <code>https://t.me/c/1234567890/1</code>", parse_mode=ParseMode.HTML)
+            return
+
+    src_start_id = src_post_id or 1
+
+    # STEP 2: Range Limit
+    try:
+        prompt_2 = await app.ask(
+            user_id,
+            "📌 <b>CHANNEL ➔ TOPICS MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 2 of 3 — Range Limit</b>\n"
+            "<i>Kahan tak mirror karna hai? (Sab mirror karna ho to 0 bhejo)</i>\n\n"
+            "<b>Options:</b>\n"
+            "• 🏁 End post link: <code>https://t.me/c/1234567890/500</code>\n"
+            "• 🔢 Total count: <code>100</code>\n"
+            "• ♾️ All pending: <code>0</code> or <code>all</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        await app.send_message(user_id, "⏱ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_2.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    val2 = prompt_2.text.strip()
+    src_end_id = 0
+    if val2.isdigit():
+        cnt = int(val2)
+        if cnt > 0:
+            if src_start_id > 0 and cnt < 10000 and cnt < src_start_id:
+                src_end_id = src_start_id + cnt - 1
+            else:
+                src_end_id = cnt
+    else:
+        _, _, end_p = parse_topic_and_post_link(val2)
+        src_end_id = end_p or 0
+
+    # STEP 3: Target Forum Group
+    try:
+        prompt_3 = await app.ask(
+            user_id,
+            "📌 <b>CHANNEL ➔ TOPICS MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 3 of 3 — Target Forum Supergroup</b>\n"
+            "<i>Jis group me topics wise bhejna hai uska link ya ID bhejo (Bot Admin hona chahiye).</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📂 Group link: <code>https://t.me/c/9876543210</code>\n"
+            "• 🆔 Group ID: <code>-1009876543210</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        await app.send_message(user_id, "❌ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_3.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    tgt_link = prompt_3.text.strip()
+    tgt_chat_id, _, _ = parse_topic_and_post_link(tgt_link)
+    if not tgt_chat_id:
+        clean_tgt = tgt_link.strip()
+        if clean_tgt.startswith("-100") and clean_tgt[4:].isdigit():
+            tgt_chat_id = int(clean_tgt)
+        elif clean_tgt.isdigit():
+            tgt_chat_id = int("-100" + clean_tgt)
+        else:
+            await app.send_message(user_id, "❌ <b>Invalid Target Group link!</b>\nExample: <code>https://t.me/c/9876543210</code>", parse_mode=ParseMode.HTML)
+            return
+
+    start_str = f"#{src_start_id}" if src_start_id > 0 else "Beginning"
+    end_str = f"#{src_end_id}" if src_end_id > 0 else "End"
+
+    control_kb = get_mirror_keyboard(user_id)
+    status_msg = await app.send_message(
+        user_id,
+        f"🚀 <b>Channel ➔ Topics Mirror Starting...</b>\n\n"
+        f"📤 <b>Source:</b> <code>{src_chat_id}</code>\n"
+        f"📥 <b>Target:</b> <code>{tgt_chat_id}</code>\n"
+        f"📊 <b>Range:</b> {start_str} ➔ {end_str}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=control_kb
+    )
+
+    await run_channel_to_topics_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        tgt_chat_id=tgt_chat_id,
+        src_start_id=src_start_id if src_start_id > 0 else None,
+        src_end_id=src_end_id if src_end_id > 0 else None,
+        status_msg=status_msg
+    )
+
+
+@app.on_message(filters.command(["c2t", "channeltotopic", "channeltoforum", "c2topic"]))
+async def channel_to_topic_cmd(client, message):
+    if not message.from_user:
+        await message.reply("❌ **Error:** This command must be sent by a user.")
+        return
+    user_id = message.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        err_msg, kb = get_mirror_access_denied_card()
+        await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    # Check direct arguments: /c2t <src_link> <tgt_link> [start_id] [end_id_or_count]
+    args = message.text.split()[1:]
+    if len(args) >= 2:
+        src_link = args[0]
+        tgt_link = args[1]
+        src_chat_id, _, p_id = parse_topic_and_post_link(src_link)
+        tgt_chat_id, _, _ = parse_topic_and_post_link(tgt_link)
+        if not src_chat_id and (src_link.startswith("-100") or src_link.isdigit()):
+            src_chat_id = int(src_link if src_link.startswith("-100") else "-100" + src_link)
+        if not tgt_chat_id and (tgt_link.startswith("-100") or tgt_link.isdigit()):
+            tgt_chat_id = int(tgt_link if tgt_link.startswith("-100") else "-100" + tgt_link)
+
+        src_start = p_id or 1
+        src_end = None
+        if len(args) >= 3 and args[2].isdigit():
+            src_start = int(args[2])
+        if len(args) >= 4:
+            if args[3].isdigit():
+                val = int(args[3])
+                if val < 10000 and val < src_start:
+                    src_end = src_start + val - 1
+                else:
+                    src_end = val
+
+        if src_chat_id and tgt_chat_id:
+            control_kb = get_mirror_keyboard(user_id)
+            status_msg = await message.reply(
+                f"🚀 <b>Channel ➔ Topics Mirror Starting...</b>\n\n"
+                f"📤 <b>Source:</b> <code>{src_chat_id}</code>\n"
+                f"📥 <b>Target:</b> <code>{tgt_chat_id}</code>\n"
+                f"📊 <b>Start:</b> #{src_start}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=control_kb
+            )
+            await run_channel_to_topics_mirror(
+                user_id=user_id,
+                src_chat_id=src_chat_id,
+                tgt_chat_id=tgt_chat_id,
+                src_start_id=src_start,
+                src_end_id=src_end,
+                status_msg=status_msg
+            )
+            return
+
+    await start_c2t_flow(user_id, message, is_callback=False)
+
+
+@app.on_callback_query(filters.regex(r"^tm_c2t$"))
+async def c2t_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    await query.answer()
+    await start_c2t_flow(user_id, query.message, is_callback=True)

@@ -923,3 +923,43 @@ async def is_user_verified(user_id: int) -> bool:
     except Exception:
         return False
 
+
+
+# CHANNEL TO TOPIC CHECKPOINTS
+# Keyed by src_chat_id + tgt_chat_id
+c2t_db = mongo.user_data.c2t_checkpoints
+
+def _c2t_key(src_chat_id, tgt_chat_id) -> str:
+    return f"{src_chat_id}_{tgt_chat_id}"
+
+async def get_c2t_checkpoint(src_chat_id, tgt_chat_id) -> int:
+    """Returns the last copied message ID for channel-to-topics mirror."""
+    try:
+        doc = await c2t_db.find_one({"_id": _c2t_key(src_chat_id, tgt_chat_id)})
+        return doc.get("last_msg_id", 0) if doc else 0
+    except Exception:
+        return 0
+
+async def save_c2t_checkpoint(src_chat_id, tgt_chat_id, last_msg_id: int):
+    """Saves the last copied message ID for channel-to-topics mirror."""
+    try:
+        key = _c2t_key(src_chat_id, tgt_chat_id)
+        await c2t_db.update_one(
+            {"_id": key},
+            {"$set": {
+                "last_msg_id": int(last_msg_id),
+                "src_chat_id": src_chat_id,
+                "tgt_chat_id": tgt_chat_id,
+                "updated_at": datetime.datetime.now()
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[C2T_DB] save_checkpoint error: {e}")
+
+async def reset_c2t_checkpoint(src_chat_id, tgt_chat_id):
+    """Resets the channel-to-topics checkpoint."""
+    try:
+        await c2t_db.delete_one({"_id": _c2t_key(src_chat_id, tgt_chat_id)})
+    except Exception:
+        pass

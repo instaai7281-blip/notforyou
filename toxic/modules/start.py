@@ -135,7 +135,8 @@ async def start_cmd(client, message: Message):
         f"• <b>Ultra Fast Xtractor Pro:</b> Extract & sync content from private channels & groups!\n"
         f"• <b>Bulk Extraction (/batch):</b> Extract up to 5000 files in one single command!\n"
         f"• <b>Topic Mirror Forum Sync (/topicmirror):</b> Clone entire forum groups with auto-topic creation & 1-click update sync!\n"
-        f"• <b>Direct Topic Link Mirror (/topiclink):</b> Mirror from 1 topic link directly into another!\n"
+        f"• <b>Direct Topic Link Mirror (/topiclink):</b> Mirror from 1 topic link directly into another!\n"\
+        f"• <b>Channel to Topics (/c2t):</b> Auto-routes flat channel posts into organized forum topics by caption!\n"
         f"• <b>Custom Watermarking & Metadata:</b> PDF watermarks, video thumbnails, custom captions!</blockquote>\n\n"
         f"<i>Tap a button below or send a link to get started! ☕🚀</i>"
     )
@@ -703,7 +704,8 @@ async def guide_page_2(_, query: CallbackQuery):
         "<blockquote><b>🔎 LIVE SCAN & 1-CLICK SYNC (UPDATE MISSING CONTENT):</b>\n"
         "• <b>Scan & Compare (<code>/scan_mirror</code>):</b> Scans source & target groups, showing exact extracted vs remaining missing content per topic.\n"
         "• <b>1-Click Sync (<code>/sync_mirror</code>):</b> Automatically extracts missing posts without duplicating existing content!\n"
-        "• <b>Topic Link Mirror (<code>/topiclink</code>):</b> Mirror content from one specific source topic link directly to another target topic link!</blockquote>\n\n"
+        "• <b>Topic Link Mirror (<code>/topiclink</code>):</b> Mirror content from one specific source topic link directly to another target topic link!\n"\
+        "• <b>Channel ➔ Topics (<code>/c2t</code>):</b> Auto-detects topics from captions & routes channel media into organized forum topics!</blockquote>\n\n"
 
         "⚠️ <i>Note: Requires active Topic Mirror Plan. Contact Admin via /plans to enable access.</i>"
     )
