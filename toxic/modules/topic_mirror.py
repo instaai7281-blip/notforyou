@@ -409,6 +409,77 @@ def parse_topic_link(link: str):
 
 DIAMOND_EMOJI_ID = 5312389333909511107
 
+
+def get_topic_styling(title: str) -> tuple:
+    """
+    Analyzes the topic / folder name and returns (styled_title, icon_color, icon_emoji_id):
+    - Video / Lecture / Recorded -> 🎬 Red/Coral (0xFB6F5F)
+    - PDF / Notes / Materials / Faculty / Editorial -> 📚 Yellow (0xFFD67E)
+    - Test / Practice Questions / Quiz / Exam / Mock -> 📝 Green (0x8EEE98)
+    - Default / General -> 📁 Rotating through 6 distinct Telegram topic colors (no solid blue!)
+    """
+    if not title:
+        return "📁 Topic", 0x6FB9F0, None
+
+    clean_t = str(title).strip()
+    lower_t = clean_t.lower()
+
+    # Normalize text for keyword detection
+    from toxic.modules.topic_mirror import normalize_topic_title
+    norm_t = normalize_topic_title(lower_t)
+    search_text = f"{lower_t} {norm_t}"
+
+    # 1. Video / Lecture / Recorded
+    video_keywords = (
+        "lecture", "video", "recorded", "class", "live", "session",
+        "watch", "part", "ep", "episode", "batch", "stream", "zoom", "recording"
+    )
+    if any(k in search_text for k in video_keywords):
+        emoji = "🎬"
+        color = 0xFB6F5F  # Red / Coral
+        if not clean_t.startswith(("🎬", "🎥", "📹", "📺")):
+            clean_t = f"{emoji} {clean_t}"
+        return clean_t, color, None
+
+    # 2. PDF / Notes / Material / Editorial / Faculty Notes
+    pdf_keywords = (
+        "pdf", "notes", "editorial", "faculty", "material", "book",
+        "handwritten", "assignment", "doc", "document", "sheet", "study",
+        "formula", "dpp", "handout", "thumbnail"
+    )
+    if any(k in search_text for k in pdf_keywords):
+        emoji = "📚"
+        color = 0xFFD67E  # Yellow
+        if not clean_t.startswith(("📚", "📖", "📑", "📄", "📁")):
+            clean_t = f"{emoji} {clean_t}"
+        return clean_t, color, None
+
+    # 3. Test / Practice Questions / Quiz / Exam / Mock / Mentorship
+    test_keywords = (
+        "test", "practice", "question", "quiz", "exam", "mock",
+        "paper", "mcq", "mentorship", "series", "solution", "quetion",
+        "quieetion", "qa", "pyq", "doubt"
+    )
+    if any(k in search_text for k in test_keywords):
+        emoji = "📝"
+        color = 0x8EEE98  # Green
+        if not clean_t.startswith(("📝", "🧪", "🎓", "🏆", "💡")):
+            clean_t = f"{emoji} {clean_t}"
+        return clean_t, color, None
+
+    # 4. Default / General: Rotate through 6 distinct Telegram colors so not all are blue!
+    # Telegram 6 topic colors: Blue (0x6FB9F0), Yellow (0xFFD67E), Purple (0xCB86DB), Green (0x8EEE98), Pink (0xFF93B2), Red (0xFB6F5F)
+    colors = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
+    color_index = abs(hash(clean_t)) % len(colors)
+    color = colors[color_index]
+    
+    emoji = "📁"
+    if not clean_t.startswith(("📁", "📂", "📌", "✨")):
+        clean_t = f"{emoji} {clean_t}"
+
+    return clean_t, color, None
+
+
 def clean_topic_title(title: str) -> str:
     """
     Returns the original topic title with only leading whitespace stripped.
@@ -4289,24 +4360,32 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 continue
 
             # ────────────────────────────────────────────────────────────
-            # STEP 7: Create a new topic in target — EXACT original title
+            # STEP 7: Create a new topic in target — with smart icon & color
             # Only reached if topic confirmed absent in target everywhere
             # ────────────────────────────────────────────────────────────
-            src_icon_color = st.get("icon_color") or 0x6FB9F0
-            src_icon_emoji_id = st.get("icon_emoji_id") or None
+            styled_title, auto_color, auto_emoji_id = get_topic_styling(st_title)
+            src_icon_color = auto_color or st.get("icon_color") or 0x6FB9F0
+            src_icon_emoji_id = st.get("icon_emoji_id") or auto_emoji_id
             new_tgt_topic_id = None
 
-            # Attempt 1: Pyrogram high-level API with EXACT original title
+            # Attempt 1: Pyrogram high-level API with smart styled title and icon color
             try:
-                create_kwargs = {"chat_id": tgt_chat_id, "title": st_title, "icon_color": src_icon_color}
+                create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": src_icon_color}
                 if src_icon_emoji_id:
                     create_kwargs["icon_emoji_id"] = src_icon_emoji_id
                 created = await app.create_forum_topic(**create_kwargs)
                 new_tgt_topic_id = extract_topic_id_from_result(created)
                 if new_tgt_topic_id:
-                    print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Pyrogram API")
+                    print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Pyrogram API")
             except Exception as hl_err:
-                print(f"[TopicMirror] create_forum_topic notice for '{st_title}': {hl_err}")
+                if src_icon_emoji_id:
+                    try:
+                        created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=src_icon_color)
+                        new_tgt_topic_id = extract_topic_id_from_result(created)
+                    except Exception:
+                        pass
+                if not new_tgt_topic_id:
+                    print(f"[TopicMirror] create_forum_topic notice for '{styled_title}': {hl_err}")
 
             # Attempt 2: Raw RPC CreateForumTopic if Pyrogram failed
             if not new_tgt_topic_id:
@@ -4314,7 +4393,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     peer = await app.resolve_peer(tgt_chat_id)
                     rpc_kwargs = dict(
                         peer=peer,
-                        title=st_title,
+                        title=styled_title,
                         icon_color=src_icon_color,
                         random_id=random.randint(1000000, 9999999)
                     )
@@ -4323,26 +4402,26 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
                     new_tgt_topic_id = extract_topic_id_from_result(res)
                     if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via raw RPC")
+                        print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via raw RPC")
                 except Exception as rpc_create_err:
-                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{st_title}': {rpc_create_err}")
+                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{styled_title}': {rpc_create_err}")
 
             # Attempt 3: Userbot creation if Bot App failed
             if not new_tgt_topic_id and userbot:
                 try:
-                    create_kwargs = {"chat_id": tgt_chat_id, "title": st_title, "icon_color": src_icon_color}
+                    create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": src_icon_color}
                     if src_icon_emoji_id:
                         create_kwargs["icon_emoji_id"] = src_icon_emoji_id
                     created = await userbot.create_forum_topic(**create_kwargs)
                     new_tgt_topic_id = extract_topic_id_from_result(created)
                     if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Userbot API")
+                        print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot API")
                 except Exception as ub_err:
                     try:
                         peer = await userbot.resolve_peer(tgt_chat_id)
                         rpc_kwargs = dict(
                             peer=peer,
-                            title=st_title,
+                            title=styled_title,
                             icon_color=src_icon_color,
                             random_id=random.randint(1000000, 9999999)
                         )
@@ -4351,9 +4430,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         res = await userbot.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
                         new_tgt_topic_id = extract_topic_id_from_result(res)
                         if new_tgt_topic_id:
-                            print(f"[TopicMirror] ✅ Created '{st_title}' (ID: {new_tgt_topic_id}) via Userbot raw RPC")
+                            print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot raw RPC")
                     except Exception as ub_rpc_err:
-                        print(f"[TopicMirror] ⚠️ Userbot CreateForumTopic RPC failed for '{st_title}': {ub_rpc_err}")
+                        print(f"[TopicMirror] ⚠️ Userbot CreateForumTopic RPC failed for '{styled_title}': {ub_rpc_err}")
 
             # After creation, immediately register created topic ID without redundant full scan
             verified_id = new_tgt_topic_id
@@ -4361,7 +4440,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             if verified_id:
                 topic_map[st_id] = verified_id
                 _register_topic(target_topics_by_title, target_topics_by_id, st_title, verified_id)
-                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, verified_id, st_title)
+                _register_topic(target_topics_by_title, target_topics_by_id, styled_title, verified_id)
+                await db.save_mirror_topic_mapping(src_chat_id, tgt_chat_id, st_id, verified_id, styled_title)
                 print(f"[TopicMirror] 📌 Mapped '{st_title}' ({st_id}) → tgt ({verified_id})")
             else:
                 # Cannot create — skip this topic entirely (never fall back to General)
