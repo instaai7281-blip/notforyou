@@ -17,6 +17,7 @@ import math
 import asyncio
 import random
 import unicodedata
+import datetime
 from pyrogram import filters, Client, raw, types, enums
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate
@@ -5000,6 +5001,91 @@ async def on_group_member_update(_, event):
 # CHANNEL ➔ TOPICS MIRROR ENGINE
 # ═══════════════════════════════════════════════════════════════════
 
+
+async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title: str, icon_color: int = None, icon_emoji_id: int = None) -> int:
+    """
+    Safely creates a forum topic in tgt_chat_id with robust multi-stage fallback:
+    1. app.create_forum_topic with styled_title + icon_color (+ icon_emoji_id if provided)
+    2. app.create_forum_topic with styled_title + icon_color (without icon_emoji_id)
+    3. app.create_forum_topic with styled_title only
+    4. Raw RPC CreateForumTopic via app
+    5. Userbot create_forum_topic (if userbot has access)
+    """
+    new_id = None
+    
+    # 1. Attempt with app high-level Pyrogram API
+    try:
+        kwargs = {"chat_id": tgt_chat_id, "title": styled_title}
+        if icon_color:
+            kwargs["icon_color"] = icon_color
+        if icon_emoji_id:
+            kwargs["icon_emoji_id"] = icon_emoji_id
+        created = await app.create_forum_topic(**kwargs)
+        new_id = extract_topic_id_from_result(created)
+        if new_id:
+            return new_id
+    except Exception as e1:
+        if icon_emoji_id:
+            try:
+                created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=icon_color)
+                new_id = extract_topic_id_from_result(created)
+                if new_id:
+                    return new_id
+            except Exception:
+                pass
+        try:
+            created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
+            new_id = extract_topic_id_from_result(created)
+            if new_id:
+                return new_id
+        except Exception:
+            pass
+
+    # 2. Attempt with app Raw RPC CreateForumTopic
+    if not new_id:
+        try:
+            peer = await app.resolve_peer(tgt_chat_id)
+            rpc_kwargs = dict(
+                peer=peer,
+                title=styled_title,
+                icon_color=icon_color or 0x6FB9F0,
+                random_id=random.randint(1000000, 9999999)
+            )
+            if icon_emoji_id:
+                rpc_kwargs["icon_emoji_id"] = icon_emoji_id
+            res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+            new_id = extract_topic_id_from_result(res)
+            if new_id:
+                return new_id
+        except Exception:
+            try:
+                peer = await app.resolve_peer(tgt_chat_id)
+                res = await app.invoke(raw.functions.messages.CreateForumTopic(
+                    peer=peer,
+                    title=styled_title,
+                    icon_color=0x6FB9F0,
+                    random_id=random.randint(1000000, 9999999)
+                ))
+                new_id = extract_topic_id_from_result(res)
+                if new_id:
+                    return new_id
+            except Exception as rpc_err2:
+                print(f"[TopicMirror] Bot RPC CreateForumTopic notice: {rpc_err2}")
+
+    # 3. Attempt with userbot (only if userbot has met the chat)
+    if not new_id and userbot:
+        try:
+            await userbot.get_chat(tgt_chat_id)
+            created = await userbot.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=icon_color or 0x6FB9F0)
+            new_id = extract_topic_id_from_result(created)
+            if new_id:
+                return new_id
+        except Exception as ub_err:
+            print(f"[TopicMirror] Userbot CreateForumTopic notice: {ub_err}")
+
+    return new_id
+
+
 def extract_topic_from_caption(text: str):
     """
     Extracts the topic name from message caption / text.
@@ -5056,6 +5142,8 @@ async def run_channel_to_topics_mirror(
     target forum topics based on 'Topic: <topic>' parsed from each message's caption.
     Auto-creates forum topics on-the-fly with smart category icons and distinct colors.
     """
+    import datetime
+
     if await chk_mirror_user(user_id) != 0:
         err_msg, kb = get_mirror_access_denied_card()
         if status_msg:
@@ -5253,24 +5341,15 @@ async def run_channel_to_topics_mirror(
         tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
 
         if not tgt_topic_id:
-            # Create the forum topic on the fly!
-            new_id = None
-            try:
-                create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": icon_color}
-                if icon_emoji_id:
-                    create_kwargs["icon_emoji_id"] = icon_emoji_id
-                created = await app.create_forum_topic(**create_kwargs)
-                new_id = extract_topic_id_from_result(created)
-            except Exception as app_cr_err:
-                if userbot:
-                    try:
-                        create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": icon_color}
-                        if icon_emoji_id:
-                            create_kwargs["icon_emoji_id"] = icon_emoji_id
-                        created = await userbot.create_forum_topic(**create_kwargs)
-                        new_id = extract_topic_id_from_result(created)
-                    except Exception as ub_cr_err:
-                        print(f"[C2T] Userbot topic creation failed: {ub_cr_err}")
+            # Create the forum topic on the fly using robust multi-stage fallback!
+            new_id = await create_forum_topic_safely(
+                app=app,
+                userbot=userbot,
+                tgt_chat_id=tgt_chat_id,
+                styled_title=styled_title,
+                icon_color=icon_color,
+                icon_emoji_id=icon_emoji_id
+            )
 
             if new_id:
                 tgt_topic_id = new_id
