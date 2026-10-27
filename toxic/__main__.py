@@ -283,16 +283,27 @@ async def schedule_mirror_auto_updates():
 
                         # Run the mirror sync task
                         try:
-                            from toxic.modules.topic_mirror import run_topic_mirror
-                            asyncio.create_task(run_topic_mirror(
-                                user_id=user_id,
-                                src_chat_id=src_chat_id,
-                                tgt_chat_id=tgt_chat_id,
-                                mirror_all_topics=True,
-                                detected_topic_id=None,
-                                status_msg=notify_msg,
-                                is_auto_update=True
-                            ))
+                            sess_type = sess.get("session_type", "mirror")
+                            if sess_type == "c2t":
+                                from toxic.modules.topic_mirror import run_channel_to_topics_mirror
+                                asyncio.create_task(run_channel_to_topics_mirror(
+                                    user_id=user_id,
+                                    src_chat_id=src_chat_id,
+                                    tgt_chat_id=tgt_chat_id,
+                                    status_msg=notify_msg,
+                                    is_resume=True
+                                ))
+                            else:
+                                from toxic.modules.topic_mirror import run_topic_mirror
+                                asyncio.create_task(run_topic_mirror(
+                                    user_id=user_id,
+                                    src_chat_id=src_chat_id,
+                                    tgt_chat_id=tgt_chat_id,
+                                    mirror_all_topics=True,
+                                    detected_topic_id=None,
+                                    status_msg=notify_msg,
+                                    is_auto_update=True
+                                ))
                         except Exception as me:
                             print(f"[MirrorAutoScheduler] Mirror run error: {me}")
 
@@ -359,9 +370,10 @@ Status: Running Successfully...
     except Exception as e:
         print(f"Failed to start view_once listeners loader: {e}")
     try:
-        from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler
+        from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler, smart_broadcast_dedicated_deletion_worker
         asyncio.create_task(sync_all_broadcast_destinations())
         asyncio.create_task(smart_broadcast_background_scheduler())
+        asyncio.create_task(smart_broadcast_dedicated_deletion_worker())
         print("[STARTUP AUTO-DETECT] Auto-discovery & sync for bot groups/channels started in background.")
     except Exception as e:
         print(f"Failed to start smart broadcast scanner/scheduler: {e}")

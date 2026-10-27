@@ -1,15 +1,16 @@
 # ---------------------------------------------------
 # File Name: smart_broadcast.py
-# Description: Advanced Smart Auto-Broadcast & Channel Deletion Engine
+# Description: Advanced High-Speed Smart Auto-Broadcast & Real-Time Deletion Engine
 # Features:
+#   - Concurrent High-Speed Worker Pool (Blazing Fast parallel dispatch)
+#   - Independent Sub-Second Real-Time Deletion Worker (Never blocked by broadcast rounds)
+#   - Instant in-memory deletion timers for immediate deletion on time
 #   - 3-Tier Channel & Group Deletion Engine (High-Level + Raw RPC channels.DeleteMessages)
-#   - Dual-Client Execution (Bot App + Owner Userbot Fallback)
-#   - 🛑 Stop Next Broadcast Button (Instant Scheduler Deactivation)
-#   - 🗑️ Delete Last Broadcast Now Button (Instant Pre-Timer Cleanup)
-#   - 🧹 Force Delete All Broadcasts Button
-#   - Individual Target Switches (Groups, Channels, DMs)
-#   - Link Preview OFF / ON Toggle (Default: OFF)
-#   - Custom Time, Interval & Round Limits Access
+#   - Dual-Client Execution (Bot App + Connected Userbots)
+#   - Comprehensive Auto-Discovery across all userbots, MongoDB collections & dialogs
+#   - Zero False Deletions: Channels & Groups are NEVER purged on temporary MTProto errors
+#   - Bulk Addition Support for Channels & Groups (/addchannels, /addgroups)
+#   - Full Target Routing (Groups, Channels, DMs) & Real-Time Live UI Progress Tracker
 # ---------------------------------------------------
 
 import asyncio
@@ -89,6 +90,11 @@ async def add_sb_destination(chat_id: int, title: str, chat_type: str):
             else:
                 actual_type = "channel" if str(cid).startswith("-100") else "supergroup"
 
+        existing = await _dest_col.find_one({"chat_id": cid})
+        # If already known as a channel, don't overwrite with generic supergroup
+        if existing and existing.get("chat_type") == "channel" and actual_type in ("group", "supergroup"):
+            actual_type = "channel"
+
         await _dest_col.update_one(
             {"chat_id": cid},
             {"$set": {"chat_id": cid, "title": title, "chat_type": actual_type, "updated_at": datetime.datetime.now()}},
@@ -106,12 +112,16 @@ async def remove_sb_destination(chat_id: int):
 async def sync_all_broadcast_destinations():
     """
     Auto-discovers and syncs all destinations from:
-    1. All joined chats, channels, forward targets, mirror sessions from MongoDB (db.get_all_broadcast_chats)
-    2. Registered users in MongoDB (users_db.get_all_registered_users)
-    3. Active dialogs (groups & channels only) from Userbot & Bot App
-    Guarantees that personal userbot contacts are NOT added as private targets.
+    1. Active userbots (pro_clients, owner userbots, connected userbots) via get_dialogs()
+    2. All joined chats, channels, forward targets, mirror sessions from MongoDB (db.get_all_broadcast_chats)
+    3. Registered users in MongoDB (users_db.get_all_registered_users)
+    Guarantees:
+      - NEVER deletes stored channels or groups on temporary MTProto/peer_id errors.
+      - Discovers all channels & groups where bot or userbots are members/admins.
     """
     try:
+        print("[SmartBroadcast Sync] Starting comprehensive channels & groups discovery...")
+
         # Fix any corrupted chat_type records in MongoDB
         try:
             await _dest_col.update_many(
@@ -125,23 +135,62 @@ async def sync_all_broadcast_destinations():
         except Exception:
             pass
 
-        # 1. Try discovering dialogs directly from app if possible
+        from toxic.core.mongo.db import add_joined_chat, get_all_broadcast_chats, get_auth_channels, get_log_channel
+
+        # 1. Discover dialogs from all active userbots & owner userbots (Telethon & Pyrogram)
+        userbots_to_scan = []
         try:
-            async for dialog in app.get_dialogs():
-                chat = dialog.chat
-                if chat and chat.id < 0 and chat.type in (ChatType.CHANNEL, ChatType.SUPERGROUP, ChatType.GROUP):
-                    c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
-                    title = chat.title or chat.username or f"Chat {chat.id}"
-                    await add_sb_destination(chat.id, title, c_type)
-                    from toxic.core.mongo.db import add_joined_chat
-                    await add_joined_chat(chat.id, title, chat_type=c_type)
-                await asyncio.sleep(0.05)
+            from toxic.core.mongo.db import get_all_active_userbots
+            ubs = await get_all_active_userbots()
+            for ub in (ubs or []):
+                if ub and ub not in userbots_to_scan:
+                    userbots_to_scan.append(ub)
         except Exception:
             pass
 
-        # 2. Sync and accurately re-verify all groups and channels from db.get_all_broadcast_chats()
-        from toxic.core.mongo.db import get_all_broadcast_chats, add_joined_chat, get_auth_channels, get_log_channel, remove_joined_chat
-        all_chats = await get_all_broadcast_chats()
+        try:
+            from toxic import pro_clients
+            for pc in (pro_clients or []):
+                if pc and pc not in userbots_to_scan:
+                    userbots_to_scan.append(pc)
+        except Exception:
+            pass
+
+        try:
+            from toxic.core.userbot_manager import get_or_create_userbot
+            owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+            for oid in owner_list:
+                if not oid:
+                    continue
+                try:
+                    ub = await get_or_create_userbot(int(oid))
+                    if ub and ub not in userbots_to_scan:
+                        userbots_to_scan.append(ub)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        discovered_count = 0
+        for ub in userbots_to_scan:
+            try:
+                if not getattr(ub, "is_connected", False):
+                    try:
+                        await ub.start()
+                    except Exception:
+                        continue
+                async for dialog in ub.get_dialogs(limit=500):
+                    chat = dialog.chat
+                    if chat and chat.id < 0:
+                        c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+                        title = chat.title or chat.username or f"Chat {chat.id}"
+                        await add_sb_destination(chat.id, title, c_type)
+                        await add_joined_chat(chat.id, title, chat_type=c_type)
+                        discovered_count += 1
+            except Exception as e:
+                print(f"[SmartBroadcast Sync] Userbot scan notice: {e}")
+
+        # 2. Gather auth channels & log channels
         auth_channels_list = set()
         try:
             for ac in (await get_auth_channels() or []):
@@ -158,23 +207,35 @@ async def sync_all_broadcast_destinations():
         except Exception:
             pass
 
+        for ac_id in auth_channels_list:
+            await add_sb_destination(ac_id, f"Auth/Log Channel {ac_id}", "channel")
+            await add_joined_chat(ac_id, f"Auth/Log Channel {ac_id}", chat_type="channel")
+
+        # 3. Aggregate all chats stored across all MongoDB collections
+        all_chats = await get_all_broadcast_chats()
         for j in all_chats:
-            await asyncio.sleep(0.05)
             cid = j.get("chat_id")
             if not cid or cid >= 0:
                 continue
-
             try:
                 cid = int(cid)
             except Exception:
                 continue
 
             title = j.get("title", f"Chat {cid}")
-            c_type = None
+            c_type = j.get("chat_type")
 
             if cid in auth_channels_list:
                 c_type = "channel"
-            else:
+
+            # Check existing destination in _dest_col to preserve already identified channel type
+            if not c_type:
+                existing_doc = await _dest_col.find_one({"chat_id": cid})
+                if existing_doc and existing_doc.get("chat_type"):
+                    c_type = existing_doc["chat_type"]
+
+            # If still unknown, attempt resolving via bot WITHOUT DELETING on error
+            if not c_type:
                 try:
                     chat_obj = await app.get_chat(cid)
                     if chat_obj.type == ChatType.CHANNEL:
@@ -183,27 +244,14 @@ async def sync_all_broadcast_destinations():
                         c_type = "supergroup"
                     if chat_obj.title:
                         title = chat_obj.title
-                except Exception as e:
-                    err_s = str(e).lower()
-                    if any(k in err_s for k in ["chat_admin_required", "channel_private", "chat_write_forbidden", "bot was kicked", "chat not found", "peer_id_invalid", "channel_invalid"]):
-                        try:
-                            await remove_sb_destination(cid)
-                            await remove_joined_chat(cid)
-                        except Exception:
-                            pass
-                        continue
-                    # Fallback to existing chat_type or supergroup
-                    c_type = j.get("chat_type") or ("supergroup" if str(cid).startswith("-100") else "group")
-
-            if not c_type:
-                c_type = "supergroup" if str(cid).startswith("-100") else "group"
+                except Exception:
+                    # Keep safe fallback - NEVER delete from DB!
+                    c_type = "channel" if str(cid).startswith("-100") else "supergroup"
 
             await add_sb_destination(cid, title, c_type)
             await add_joined_chat(cid, title, chat_type=c_type)
 
-
-
-        # 2. Sync ONLY registered bot users from users_db.get_all_registered_users()
+        # 4. Sync registered users from users_db.get_all_registered_users()
         try:
             from toxic.core.mongo.users_db import get_all_registered_users
             users = await get_all_registered_users()
@@ -214,9 +262,9 @@ async def sync_all_broadcast_destinations():
                     if uid > 0:
                         registered_uids.add(uid)
                         await add_sb_destination(uid, f"User {uid}", "private")
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
 
-            # Clean up any non-registered private contacts from destinations collection
+            # Clean up only non-registered private contacts from destinations collection
             await _dest_col.delete_many({
                 "chat_type": "private",
                 "chat_id": {"$nin": list(registered_uids)}
@@ -224,9 +272,11 @@ async def sync_all_broadcast_destinations():
         except Exception as u_err:
             print(f"[SmartBroadcast Sync] User sync notice: {u_err}")
 
+        total_synced = await _dest_col.count_documents({})
+        print(f"[SmartBroadcast Sync] Synchronization finished cleanly. Total reachable destinations: {total_synced}")
+
     except Exception as err:
         print(f"[SmartBroadcast Sync] Sync error: {err}")
-
 
 _last_dest_sync_time = 0
 
@@ -269,7 +319,7 @@ async def get_sb_destinations(cfg: dict = None):
                     doc["chat_type"] = "private"
                     dest_list.append(doc)
             else:
-                # Group or Channel (cid < 0) — CAN NEVER be delivered when only DMs is enabled
+                # Group or Channel (cid < 0)
                 if ctype == "channel":
                     if enable_channels:
                         seen_cids.add(cid)
@@ -289,7 +339,6 @@ async def get_sb_destinations(cfg: dict = None):
     except Exception as e:
         print(f"[SmartBroadcast DB] Error fetching destinations: {e}")
     return dest_list
-
 
 async def add_sb_deletion(chat_id: int, message_id: int, delete_at: datetime.datetime, title: str = "Chat", round_num: int = 1):
     try:
@@ -319,11 +368,30 @@ async def remove_sb_deletion(deletion_id):
     except Exception as e:
         print(f"[SmartBroadcast DB] Error removing deletion entry: {e}")
 
+# ─── Instant Sub-Second In-Memory Deletion Task ───
+async def in_memory_auto_delete(chat_id: int, message_id: int, delay_seconds: int):
+    """
+    Executes precise message deletion the exact second the timer expires,
+    independent of whether broadcast sending is still ongoing.
+    """
+    try:
+        if delay_seconds <= 0:
+            return
+        await asyncio.sleep(delay_seconds)
+        del_ok, _ = await delete_single_sb_message(chat_id, message_id)
+        if del_ok:
+            await _del_col.delete_one({"chat_id": chat_id, "message_id": message_id})
+    except Exception as e:
+        print(f"[SmartBroadcast] In-memory auto-delete exception: {e}")
+
 # ─── 3-Tier Multi-Client Deletion Engine ───
 async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client=None):
     """
-    Deletes a single broadcast message in Channels, Groups, or DMs.
-    Tries Bot App (High-level + Raw RPC) and all active userbot sessions with robust fallbacks.
+    STRICT BOT-FIRST DELETION ENGINE:
+    Always uses the Bot (app) to delete its sent broadcast message first.
+    Admin or userbot accounts are strictly reserved as a fallback ONLY if the Bot
+    lacks permissions in that channel/group.
+    Private DMs (chat_id > 0) are exclusively handled by the Bot and never touch user accounts.
     """
     try:
         chat_id = int(chat_id)
@@ -331,81 +399,103 @@ async def delete_single_sb_message(chat_id: int, message_id: int, userbot_client
     except Exception:
         return False, "Invalid ID"
 
-    clients_to_try = [app]
-    if userbot_client and userbot_client not in clients_to_try:
-        clients_to_try.append(userbot_client)
+    # ──── STEP 1: STRICT BOT DELETION (Primary) ────
+    # 1A. Standard delete_messages via Bot with revoke=True
+    try:
+        res = await app.delete_messages(chat_id, message_id, revoke=True)
+        if res:
+            return True, "Bot High-Level Delete (Revoke)"
+    except FloodWait as fw:
+        await asyncio.sleep(fw.value + 1)
+        try:
+            res = await app.delete_messages(chat_id, message_id, revoke=True)
+            if res:
+                return True, "Bot High-Level Delete (Post-Wait)"
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # 1B. List-based delete_messages via Bot (Channels & Supergroups)
+    try:
+        res = await app.delete_messages(chat_id, [message_id])
+        if res:
+            return True, "Bot High-Level Delete (List)"
+    except Exception:
+        pass
+
+    # 1C. Raw MTProto RPC via Bot
+    if chat_id < 0:
+        try:
+            peer = await app.resolve_peer(chat_id)
+            if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
+                chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
+                await app.invoke(raw.functions.channels.DeleteMessages(
+                    channel=chan_input,
+                    id=[message_id]
+                ))
+                return True, "Bot Raw RPC Channel Delete"
+            elif isinstance(peer, (raw.types.InputPeerChat, raw.types.InputChat)):
+                await app.invoke(raw.functions.messages.DeleteMessages(
+                    id=[message_id],
+                    revoke=True
+                ))
+                return True, "Bot Raw RPC Group Delete"
+        except Exception:
+            pass
+    else:
+        # Private user DM - bot directly invokes messages.DeleteMessages
+        try:
+            await app.invoke(raw.functions.messages.DeleteMessages(
+                id=[message_id],
+                revoke=True
+            ))
+            return True, "Bot Raw RPC DM Delete"
+        except Exception:
+            pass
+
+    # For Private DMs (chat_id > 0), user accounts cannot delete bot messages, stop here
+    if chat_id > 0:
+        return False, "Bot DM delete failed"
+
+    # ──── STEP 2: FALLBACK TO USERBOT ONLY IF BOT FAILED (Groups/Channels Only) ────
+    fallback_clients = []
+    if userbot_client and getattr(userbot_client, "is_connected", False):
+        fallback_clients.append(userbot_client)
 
     try:
         from toxic.core.mongo.db import get_all_active_userbots
         active_ubs = await get_all_active_userbots()
-        for ub in active_ubs:
-            if ub and ub not in clients_to_try and getattr(ub, "is_connected", False):
-                clients_to_try.append(ub)
+        for ub in (active_ubs or []):
+            if ub and ub not in fallback_clients and getattr(ub, "is_connected", False):
+                fallback_clients.append(ub)
     except Exception:
         pass
 
-    for client in clients_to_try:
-        if not getattr(client, "is_connected", True):
-            continue
-
-        # Try 1: High-level delete_messages with list of message IDs (most reliable for channels & supergroups)
+    for ub in fallback_clients:
         try:
-            res = await client.delete_messages(chat_id, [message_id])
+            res = await ub.delete_messages(chat_id, [message_id])
             if res:
-                return True, "High-Level Delete (List)"
-        except FloodWait as fw:
-            await asyncio.sleep(fw.value + 1)
-            try:
-                res = await client.delete_messages(chat_id, [message_id])
-                if res:
-                    return True, "High-Level Delete (Post-Wait)"
-            except Exception:
-                pass
+                return True, "Fallback Userbot List Delete"
         except Exception:
             pass
 
-        # Try 2: High-level delete_messages with revoke=True (for DMs / private chats)
         try:
-            res = await client.delete_messages(chat_id, message_id, revoke=True)
-            if res:
-                return True, "High-Level Delete (Revoke)"
-        except Exception:
-            pass
-
-        # Try 3: Raw RPC channels.DeleteMessages (Direct MTProto call for Channels & Supergroups)
-        if chat_id < 0:
-            try:
-                peer = await client.resolve_peer(chat_id)
-                if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
-                    chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
-                    await client.invoke(raw.functions.channels.DeleteMessages(
-                        channel=chan_input,
-                        id=[message_id]
-                    ))
-                    return True, "Raw RPC Channel Delete"
-                elif isinstance(peer, (raw.types.InputPeerChat, raw.types.InputChat)):
-                    await client.invoke(raw.functions.messages.DeleteMessages(
-                        id=[message_id],
-                        revoke=True
-                    ))
-                    return True, "Raw RPC Chat Delete"
-            except Exception:
-                pass
-        else:
-            # Try 4: Raw RPC messages.DeleteMessages for Private User DMs
-            try:
-                await client.invoke(raw.functions.messages.DeleteMessages(
-                    id=[message_id],
-                    revoke=True
+            peer = await ub.resolve_peer(chat_id)
+            if isinstance(peer, (raw.types.InputPeerChannel, raw.types.InputChannel)):
+                chan_input = raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
+                await ub.invoke(raw.functions.channels.DeleteMessages(
+                    channel=chan_input,
+                    id=[message_id]
                 ))
-                return True, "Raw RPC DM Delete"
-            except Exception:
-                pass
+                return True, "Fallback Userbot Raw RPC Delete"
+        except Exception:
+            pass
 
     return False, "Failed"
 
 async def delete_all_active_sb_messages(filter_query: dict = None):
-    """Deletes active broadcast messages matching query (or ALL if query is None)."""
+    """Deletes active broadcast messages matching query using parallel workers."""
     deleted_ok = 0
     failed_chats = []
 
@@ -419,28 +509,40 @@ async def delete_all_active_sb_messages(filter_query: dict = None):
         pass
 
     query = filter_query if filter_query else {}
+    docs_to_delete = []
     try:
         async for doc in _del_col.find(query):
-            cid = doc["chat_id"]
-            mid = doc["message_id"]
-            title = doc.get("title", f"Chat `{cid}`")
+            docs_to_delete.append(doc)
+    except Exception as e:
+        print(f"[SmartBroadcast] Deletion query error: {e}")
 
+    if not docs_to_delete:
+        return 0, []
+
+    sem = asyncio.Semaphore(15)
+    lock = asyncio.Lock()
+
+    async def _worker_delete(doc):
+        nonlocal deleted_ok
+        cid = doc["chat_id"]
+        mid = doc["message_id"]
+        title = doc.get("title", f"Chat `{cid}`")
+
+        async with sem:
             success, _ = await delete_single_sb_message(cid, mid, userbot_client)
-            if success:
-                deleted_ok += 1
-                await _del_col.delete_one({"_id": doc["_id"]})
-            else:
-                retries = doc.get("retries", 0) + 1
-                if retries >= 3:
-                    failed_chats.append(f"• **{title}** (`{cid}`)")
+            async with lock:
+                if success:
+                    deleted_ok += 1
                     await _del_col.delete_one({"_id": doc["_id"]})
                 else:
-                    await _del_col.update_one({"_id": doc["_id"]}, {"$set": {"retries": retries}})
+                    retries = doc.get("retries", 0) + 1
+                    if retries >= 3:
+                        failed_chats.append(f"• **{title}** (`{cid}`)")
+                        await _del_col.delete_one({"_id": doc["_id"]})
+                    else:
+                        await _del_col.update_one({"_id": doc["_id"]}, {"$set": {"retries": retries}})
 
-            await asyncio.sleep(0.05)
-    except Exception as e:
-        print(f"[SmartBroadcast] Deletion error: {e}")
-
+    await asyncio.gather(*(_worker_delete(d) for d in docs_to_delete))
     return deleted_ok, failed_chats
 
 # ─── Formatted Time Helpers ───
@@ -455,7 +557,86 @@ def format_time_duration(seconds: int) -> str:
     hours = seconds // 3600
     return f"{hours} Hours ⏳"
 
-# ─── Execution Engine: Send Broadcast Round ───
+# ─── Dedicated Independent Deletion Background Worker ───
+async def smart_broadcast_dedicated_deletion_worker():
+    """
+    Independent 24/7 background worker for message auto-deletions.
+    Runs every 2 seconds completely decoupled from broadcast sending.
+    """
+    while True:
+        try:
+            pending_dels = await get_pending_sb_deletions()
+            if pending_dels:
+                userbot_client = None
+                owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+                del_success_count = 0
+                del_fail_list = []
+
+                # Fetch active userbot safely without stopping it
+                try:
+                    from toxic.core.userbot_manager import get_active_userbot_sync
+                    for oid in owner_list:
+                        if oid:
+                            userbot_client = get_active_userbot_sync(int(oid))
+                            if userbot_client and getattr(userbot_client, "is_connected", False):
+                                break
+                except Exception:
+                    pass
+
+                sem = asyncio.Semaphore(15)
+                lock = asyncio.Lock()
+
+                async def _proc_del(item):
+                    nonlocal del_success_count
+                    c_id = item["chat_id"]
+                    m_id = item["message_id"]
+                    c_title = item.get("title", f"Chat `{c_id}`")
+
+                    async with sem:
+                        del_success, del_method = await delete_single_sb_message(c_id, m_id, userbot_client)
+                        async with lock:
+                            if del_success:
+                                del_success_count += 1
+                                await remove_sb_deletion(item["_id"])
+                            else:
+                                retries = item.get("retries", 0) + 1
+                                if retries >= 3:
+                                    del_fail_list.append(f"• **{c_title}** (`{c_id}`)")
+                                    await remove_sb_deletion(item["_id"])
+                                else:
+                                    next_try = datetime.datetime.now() + datetime.timedelta(seconds=15)
+                                    await _del_col.update_one(
+                                        {"_id": item["_id"]},
+                                        {"$set": {"retries": retries, "delete_at": next_try}}
+                                    )
+
+                await asyncio.gather(*(_proc_del(item) for item in pending_dels))
+
+                if del_fail_list:
+                    fail_summary = "\n".join(del_fail_list[:10])
+                    if len(del_fail_list) > 10:
+                        fail_summary += f"\n... and {len(del_fail_list) - 10} more."
+
+                    del_report = (
+                        f"⚠️ **[AUTO-DELETE SCHEDULED REPORT]** ⚠️\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"✅ **Deleted Successfully:** `{del_success_count}` chats\n"
+                        f"❌ **Failed to Delete:** `{len(del_fail_list)}` chats\n\n"
+                        f"📌 **Failed Deletion Details:**\n"
+                        f"{fail_summary}\n\n"
+                        f"👉 *Click the button below to force delete manually:*",
+                    )
+                    for oid in owner_list:
+                        try:
+                            await app.send_message(int(oid), del_report[0], reply_markup=get_sb_report_keyboard())
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[SmartBroadcast Deletion Worker Error]: {e}")
+
+        await asyncio.sleep(2)
+
+# ─── High-Speed Concurrent Broadcast Execution Engine ───
 async def execute_smart_broadcast_round(manual: bool = False, status_msg: Message = None):
     cfg = await get_sb_config()
     delete_seconds = cfg.get("delete_after_seconds", 0)
@@ -474,7 +655,7 @@ async def execute_smart_broadcast_round(manual: bool = False, status_msg: Messag
     total_dests = len(destinations)
     if status_msg:
         try:
-            await status_msg.edit_text(f"🚀 **Starting Broadcast to `{total_dests}` chats...**")
+            await status_msg.edit_text(f"🚀 **Starting High-Speed Broadcast to `{total_dests}` chats...**")
         except Exception:
             pass
 
@@ -488,119 +669,147 @@ async def execute_smart_broadcast_round(manual: bool = False, status_msg: Messag
 
     clients_pool = [app] + [ub for ub in active_userbots if getattr(ub, "is_connected", False)]
 
+    # 15 parallel workers for high-speed delivery without exceeding Telegram flood thresholds
+    sem = asyncio.Semaphore(15)
+    lock = asyncio.Lock()
+
     sent_count = 0
     failed_count = 0
+    processed_count = 0
     failed_details = []
-    last_ui_update = time.time()
+    last_ui_update = 0
+    current_chat_title = ["Starting..."]
 
-    for i, item in enumerate(destinations, 1):
+    async def _send_worker(item):
+        nonlocal sent_count, failed_count, processed_count, last_ui_update
         cid = item["chat_id"]
         title = item.get("title", f"Chat `{cid}`")
         sent_msg = None
         sent_success = False
-
-        # If it's a private user DM, only use bot app
-        clients_to_try = [app] if cid > 0 else clients_pool
-
         last_err_text = "Could not send broadcast"
-        for client in clients_to_try:
-            if not getattr(client, "is_connected", True):
-                continue
-            try:
-                if src_chat_id and src_msg_id:
-                    if fast_forward:
-                        try:
-                            sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
-                        except Exception:
-                            try:
-                                sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
-                            except Exception:
-                                # Fallback for forum supergroups (General topic)
-                                sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id, message_thread_id=1)
-                    else:
-                        try:
-                            sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
-                        except Exception:
+
+        async with sem:
+            current_chat_title[0] = title
+            clients_to_try = [app] if cid > 0 else clients_pool
+
+            for client in clients_to_try:
+                if not getattr(client, "is_connected", True):
+                    continue
+                try:
+                    if src_chat_id and src_msg_id:
+                        if fast_forward:
                             try:
                                 sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
                             except Exception:
+                                try:
+                                    sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
+                                except Exception:
+                                    sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id, message_thread_id=1)
+                        else:
+                            try:
                                 sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
-                elif msg_text:
-                    html_text = format_caption_to_html(msg_text) if 'format_caption_to_html' in globals() else msg_text
-                    try:
-                        sent_msg = await client.send_message(
-                            cid, 
-                            html_text or msg_text, 
-                            disable_web_page_preview=disable_preview
-                        )
-                    except Exception as send_err:
-                        # Fallback for forum supergroups (send to General topic)
+                            except Exception:
+                                try:
+                                    sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
+                                except Exception:
+                                    sent_msg = await client.forward_messages(chat_id=cid, from_chat_id=src_chat_id, message_ids=src_msg_id)
+                    elif msg_text:
+                        html_text = None
+                        try:
+                            from toxic.core.func import format_caption_to_html
+                            html_text = format_caption_to_html(msg_text)
+                        except Exception:
+                            pass
                         try:
                             sent_msg = await client.send_message(
-                                cid,
-                                html_text or msg_text,
-                                disable_web_page_preview=disable_preview,
-                                message_thread_id=1
+                                cid, 
+                                html_text or msg_text, 
+                                disable_web_page_preview=disable_preview
                             )
                         except Exception:
-                            sent_msg = await client.send_message(
-                                cid,
-                                html_text or msg_text,
-                                disable_web_page_preview=disable_preview,
-                                reply_to_message_id=1
-                            )
+                            try:
+                                sent_msg = await client.send_message(
+                                    cid,
+                                    html_text or msg_text,
+                                    disable_web_page_preview=disable_preview,
+                                    message_thread_id=1
+                                )
+                            except Exception:
+                                sent_msg = await client.send_message(
+                                    cid,
+                                    html_text or msg_text,
+                                    disable_web_page_preview=disable_preview,
+                                    reply_to_message_id=1
+                                )
 
-                msg_id = extract_message_id(sent_msg)
-                if msg_id:
+                    msg_id = extract_message_id(sent_msg)
+                    if msg_id:
+                        sent_success = True
+                        if delete_seconds > 0:
+                            del_at = datetime.datetime.now() + datetime.timedelta(seconds=delete_seconds)
+                            await add_sb_deletion(cid, msg_id, del_at, title=title, round_num=run_count)
+                            # Instant in-memory deletion task for exact second precision
+                            asyncio.create_task(in_memory_auto_delete(cid, msg_id, delete_seconds))
+                        break
+
+                except FloodWait as fw:
+                    await asyncio.sleep(fw.value + 1)
+                    try:
+                        if src_chat_id and src_msg_id:
+                            sent_msg = await client.copy_message(chat_id=cid, from_chat_id=src_chat_id, message_id=src_msg_id)
+                        elif msg_text:
+                            sent_msg = await client.send_message(cid, msg_text, disable_web_page_preview=disable_preview)
+                        msg_id = extract_message_id(sent_msg)
+                        if msg_id:
+                            sent_success = True
+                            if delete_seconds > 0:
+                                del_at = datetime.datetime.now() + datetime.timedelta(seconds=delete_seconds)
+                                await add_sb_deletion(cid, msg_id, del_at, title=title, round_num=run_count)
+                                asyncio.create_task(in_memory_auto_delete(cid, msg_id, delete_seconds))
+                            break
+                    except Exception as retry_err:
+                        last_err_text = str(retry_err)
+                except Exception as err:
+                    last_err_text = str(err)
+                    continue
+
+            async with lock:
+                processed_count += 1
+                if sent_success:
                     sent_count += 1
-                    sent_success = True
-                    if delete_seconds > 0:
-                        del_at = datetime.datetime.now() + datetime.timedelta(seconds=delete_seconds)
-                        await add_sb_deletion(cid, msg_id, del_at, title=title, round_num=run_count)
-                    break
-            except FloodWait as fw:
-                await asyncio.sleep(fw.value + 1)
-            except Exception as err:
-                last_err_text = str(err)
-                continue
+                else:
+                    failed_count += 1
+                    err_lower = last_err_text.lower()
+                    # Only remove if definitively a deactivated/blocked private user
+                    if cid > 0 and any(k in err_lower for k in ["user_is_blocked", "user_deactivated", "input_user_deactivated", "bot was blocked"]):
+                        try:
+                            await remove_sb_destination(cid)
+                        except Exception:
+                            pass
+                    failed_details.append(f"• **{title}** (`{cid}`): {last_err_text}")
 
-        if not sent_success:
-            failed_count += 1
-            err_lower = last_err_text.lower()
-            is_perm = any(k in err_lower for k in [
-                "chat_write_forbidden", "channel_private", "chat_admin_required",
-                "user_not_participant", "peer_id_invalid", "channel_invalid",
-                "chat_invalid", "user_is_blocked", "user_deactivated", "input_user_deactivated",
-                "chat not found", "bot was kicked", "bot was blocked"
-            ])
-            if is_perm:
-                try:
-                    await remove_sb_destination(cid)
-                    from toxic.core.mongo.db import remove_joined_chat
-                    await remove_joined_chat(cid)
-                except Exception:
-                    pass
-            failed_details.append(f"• **{title}** (`{cid}`): {last_err_text}")
+                # Live progress updates to UI (throttled every 2 seconds or at completion)
+                now_t = time.time()
+                if status_msg and (now_t - last_ui_update >= 2.0 or processed_count == total_dests):
+                    last_ui_update = now_t
+                    percent = int((processed_count / total_dests) * 100)
+                    try:
+                        await status_msg.edit_text(
+                            f"⚡ **Smart Broadcast in Progress (High Speed)...**\n"
+                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                            f"• **Progress:** `{processed_count}/{total_dests}` chats ({percent}%)\n"
+                            f"• **Delivered:** `{sent_count}` ✅\n"
+                            f"• **Failed / Skipped:** `{failed_count}` ❌\n"
+                            f"• **Current Chat:** **{current_chat_title[0]}**\n\n"
+                            f"🚀 *High-speed parallel dispatch with real-time auto-delete active...*"
+                        )
+                    except Exception:
+                        pass
 
-        # Live Progress updates to the user message
-        now_t = time.time()
-        if status_msg and (i % 5 == 0 or i == total_dests or now_t - last_ui_update > 2.5):
-            last_ui_update = now_t
-            percent = int((i / total_dests) * 100)
-            try:
-                await status_msg.edit_text(
-                    f"📢 **Smart Broadcast in Progress...**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"• **Progress:** `{i}/{total_dests}` chats ({percent}%)\n"
-                    f"• **Delivered:** `{sent_count}` ✅\n"
-                    f"• **Failed / Skipped:** `{failed_count}` ❌\n"
-                    f"• **Current Chat:** **{title}**\n\n"
-                    f"⚡ *Live broadcasting to all enabled groups & channels...*"
-                )
-            except Exception:
-                pass
+            await asyncio.sleep(0.03)
 
-        await asyncio.sleep(0.12)
+    # Launch all workers in parallel
+    await asyncio.gather(*(_send_worker(item) for item in destinations))
 
     await update_sb_config({"last_broadcast_round": run_count})
     return sent_count, failed_count, failed_details, None
@@ -791,7 +1000,6 @@ async def render_smart_broadcast_menu(client: Client, message_or_query):
 SB_COMMANDS = ["smartbroadcast", "sbcast", "autobcast", "smartbcast", "sb", "autobroadcast", "abc"]
 SB_REGEX_PATTERN = r"^(?:/|!|\.|)(?:smartbroadcast|sbcast|autobcast|smartbcast|sb|autobroadcast|abc)(?:@\w+)?$"
 
-
 def get_sender_id(message: Message) -> int:
     if not message:
         return 0
@@ -816,7 +1024,7 @@ async def smart_broadcast_now_cmd(client: Client, message: Message):
         await message.reply_text(f"❌ **Access Denied:** Only the bot owner can access Smart Broadcast. (Your ID: `{user_id}`)")
         return
 
-    status_msg = await message.reply_text("🚀 **Launching Smart Broadcast to enabled destinations in background...**")
+    status_msg = await message.reply_text("🚀 **Launching High-Speed Smart Broadcast in background...**")
     sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True, status_msg=status_msg)
     if err:
         await status_msg.edit(f"❌ **Broadcast Failed:** {err}")
@@ -896,66 +1104,131 @@ async def sync_chats_cmd(client: Client, message: Message):
     user_id = get_sender_id(message)
     if not is_owner(user_id):
         return
-    st = await message.reply_text("🔄 **Scanning & syncing all active bot groups, channels & users...**")
+    st = await message.reply_text("🔄 **Scanning & syncing all active bot channels, groups & users across all sessions...**")
     await sync_all_broadcast_destinations()
     count = await _dest_col.count_documents({})
-    await st.edit_text(f"✅ **Sync Completed!**\n\n• Found `{count}` valid reachable destinations (groups, channels, registered DMs).")
+    g_count = await _dest_col.count_documents({"chat_id": {"$lt": 0}, "chat_type": {"$in": ["group", "supergroup"]}})
+    c_count = await _dest_col.count_documents({"chat_id": {"$lt": 0}, "chat_type": "channel"})
+    d_count = await _dest_col.count_documents({"chat_id": {"$gt": 0}})
+    await st.edit_text(
+        f"✅ **Sync Completed!**\n\n"
+        f"• **Channels:** `{c_count}` 📢\n"
+        f"• **Supergroups & Groups:** `{g_count}` 👥\n"
+        f"• **Registered Users (DMs):** `{d_count}` 👤\n"
+        f"• **Total Reachable:** `{count}` chats."
+    )
 
-@app.on_message(filters.command(["addchannel", "addchan"], prefixes=["/", "!", ".", ""]), group=-1)
+# Bulk & Single Channel Adder
+@app.on_message(filters.command(["addchannel", "addchan", "addchannels"], prefixes=["/", "!", ".", ""]), group=-1)
 async def add_channel_cmd(client: Client, message: Message):
     user_id = get_sender_id(message)
     if not is_owner(user_id):
         await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
         return
-    if len(message.command) < 2:
-        await message.reply_text("❌ **Usage:** `/addchannel <channel_id_or_username>`\n\nExample:\n• `/addchannel -1001234567890`\n• `/addchannel @mychannel`")
+
+    raw_targets = []
+    if len(message.command) > 1:
+        raw_targets.extend(message.command[1:])
+    elif message.reply_to_message and message.reply_to_message.text:
+        raw_targets.extend(message.reply_to_message.text.replace("\n", " ").replace(",", " ").split())
+
+    if not raw_targets:
+        await message.reply_text(
+            "❌ **Usage:** `/addchannels <id_or_username> [more_ids...]`\n\n"
+            "Examples:\n"
+            "• Single: `/addchannel -1001234567890`\n"
+            "• Bulk: `/addchannels -1001111111 -1002222222 @mychannel1 @mychannel2`\n"
+            "• Or reply `/addchannels` to a list of IDs/usernames!"
+        )
         return
-    
-    target_input = message.command[1].strip()
-    try:
-        chat = await client.get_chat(target_input)
-        cid = chat.id
-        title = chat.title or chat.username or "Channel"
-    except Exception:
-        try:
-            cid = int(target_input)
-            title = f"Channel {cid}"
-        except ValueError:
-            await message.reply_text("❌ **Error:** Could not resolve channel ID/username. Make sure bot is added as admin first!")
-            return
 
-    await add_sb_destination(cid, title, "channel")
+    added = 0
+    failed = []
     from toxic.core.mongo.db import add_joined_chat
-    await add_joined_chat(cid, title, chat_type="channel")
-    await message.reply_text(f"✅ **Channel successfully added!**\n\n• **Title:** {title}\n• **Chat ID:** `{cid}`\n• **Category:** `Channel 📢`")
 
-@app.on_message(filters.command(["addgroup", "addsupergroup"], prefixes=["/", "!", ".", ""]), group=-1)
+    for target_input in raw_targets:
+        target_input = target_input.strip()
+        if not target_input:
+            continue
+        cid = None
+        title = None
+        try:
+            chat = await client.get_chat(target_input)
+            cid = chat.id
+            title = chat.title or chat.username or f"Channel {cid}"
+        except Exception:
+            try:
+                cid = int(target_input)
+                title = f"Channel {cid}"
+            except ValueError:
+                failed.append(target_input)
+                continue
+
+        if cid:
+            await add_sb_destination(cid, title, "channel")
+            await add_joined_chat(cid, title, chat_type="channel")
+            added += 1
+
+    resp = f"✅ **Successfully added `{added}` channels to Smart Broadcast!**"
+    if failed:
+        resp += f"\n⚠️ **Failed to parse/resolve:** `{', '.join(failed[:10])}`"
+    await message.reply_text(resp)
+
+# Bulk & Single Group Adder
+@app.on_message(filters.command(["addgroup", "addsupergroup", "addgroups"], prefixes=["/", "!", ".", ""]), group=-1)
 async def add_group_cmd(client: Client, message: Message):
     user_id = get_sender_id(message)
     if not is_owner(user_id):
         await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
         return
-    if len(message.command) < 2:
-        await message.reply_text("❌ **Usage:** `/addgroup <group_id_or_username>`\n\nExample:\n• `/addgroup -1001234567890`\n• `/addgroup @mygroup`")
-        return
-    
-    target_input = message.command[1].strip()
-    try:
-        chat = await client.get_chat(target_input)
-        cid = chat.id
-        title = chat.title or chat.username or "Group"
-    except Exception:
-        try:
-            cid = int(target_input)
-            title = f"Group {cid}"
-        except ValueError:
-            await message.reply_text("❌ **Error:** Could not resolve group ID/username. Make sure bot is added as admin first!")
-            return
 
-    await add_sb_destination(cid, title, "supergroup")
+    raw_targets = []
+    if len(message.command) > 1:
+        raw_targets.extend(message.command[1:])
+    elif message.reply_to_message and message.reply_to_message.text:
+        raw_targets.extend(message.reply_to_message.text.replace("\n", " ").replace(",", " ").split())
+
+    if not raw_targets:
+        await message.reply_text(
+            "❌ **Usage:** `/addgroups <id_or_username> [more_ids...]`\n\n"
+            "Examples:\n"
+            "• Single: `/addgroup -1001234567890`\n"
+            "• Bulk: `/addgroups -1001111111 -1002222222 @mygroup1 @mygroup2`\n"
+            "• Or reply `/addgroups` to a list of IDs/usernames!"
+        )
+        return
+
+    added = 0
+    failed = []
     from toxic.core.mongo.db import add_joined_chat
-    await add_joined_chat(cid, title, chat_type="supergroup")
-    await message.reply_text(f"✅ **Group successfully added!**\n\n• **Title:** {title}\n• **Chat ID:** `{cid}`\n• **Category:** `Group 👥`")
+
+    for target_input in raw_targets:
+        target_input = target_input.strip()
+        if not target_input:
+            continue
+        cid = None
+        title = None
+        try:
+            chat = await client.get_chat(target_input)
+            cid = chat.id
+            title = chat.title or chat.username or f"Group {cid}"
+        except Exception:
+            try:
+                cid = int(target_input)
+                title = f"Group {cid}"
+            except ValueError:
+                failed.append(target_input)
+                continue
+
+        if cid:
+            await add_sb_destination(cid, title, "supergroup")
+            await add_joined_chat(cid, title, chat_type="supergroup")
+            added += 1
+
+    resp = f"✅ **Successfully added `{added}` groups to Smart Broadcast!**"
+    if failed:
+        resp += f"\n⚠️ **Failed to parse/resolve:** `{', '.join(failed[:10])}`"
+    await message.reply_text(resp)
 
 @app.on_message(filters.command(["delchannel", "delgroup", "delchat", "removesb"], prefixes=["/", "!", ".", ""]), group=-1)
 async def remove_sb_chat_cmd(client: Client, message: Message):
@@ -973,8 +1246,6 @@ async def remove_sb_chat_cmd(client: Client, message: Message):
         await message.reply_text(f"✅ **Chat `{cid}` removed from Smart Broadcast destinations!**")
     except ValueError:
         await message.reply_text("❌ Invalid chat ID! Must be a negative integer (e.g. `-100...`).")
-
-
 
 # ─── Interactive Callback Handler ───
 @app.on_callback_query(filters.regex(r"^sb_"))
@@ -1268,7 +1539,7 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
         return
 
     elif data == "sb_launch_now":
-        await callback_query.message.edit_text("🚀 **Launching Smart Broadcast to enabled destinations in background...**")
+        await callback_query.message.edit_text("🚀 **Launching High-Speed Smart Broadcast to enabled destinations in background...**")
         sent, failed, failed_details, err = await execute_smart_broadcast_round(manual=True, status_msg=callback_query.message)
         if err:
             await callback_query.message.reply_text(f"❌ **Broadcast Failed:** {err}")
@@ -1309,20 +1580,24 @@ async def smart_broadcast_callback(client: Client, callback_query: CallbackQuery
         await callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="sb_back")]]))
 
     elif data == "sb_sync_chats":
-        await callback_query.answer("🔄 Scanning & syncing all active bot groups, channels & users...")
+        await callback_query.answer("🔄 Scanning & syncing all active bot channels, groups & users across all sessions...")
         await sync_all_broadcast_destinations()
         count = await _dest_col.count_documents({})
-        await callback_query.answer(f"✅ Synced! Found {count} valid reachable destinations.", show_alert=True)
+        g_count = await _dest_col.count_documents({"chat_id": {"$lt": 0}, "chat_type": {"$in": ["group", "supergroup"]}})
+        c_count = await _dest_col.count_documents({"chat_id": {"$lt": 0}, "chat_type": "channel"})
+        await callback_query.answer(f"✅ Synced! Found {c_count} channels, {g_count} groups ({count} total).", show_alert=True)
         await render_smart_broadcast_menu(client, callback_query)
 
 # ─── Autonomous Presence Tracking Handlers ───
-@app.on_message(filters.group | filters.channel | filters.private, group=99)
+@app.on_message(filters.group | filters.channel, group=-2)
 async def smart_broadcast_auto_tracker(client: Client, message: Message):
     try:
         chat = message.chat
-        c_type = "private" if chat.type == ChatType.PRIVATE else ("channel" if chat.type == ChatType.CHANNEL else "group")
-        title = chat.title or chat.first_name or chat.username or "Chat"
+        c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+        title = chat.title or chat.first_name or chat.username or f"Chat {chat.id}"
         await add_sb_destination(chat.id, title, c_type)
+        from toxic.core.mongo.db import add_joined_chat
+        await add_joined_chat(chat.id, title, chat_type=c_type)
     except Exception:
         pass
 
@@ -1334,90 +1609,25 @@ async def smart_broadcast_member_tracker(client: Client, chat_member_updated: Ch
         if new_member and new_member.user.id == me.id:
             chat = chat_member_updated.chat
             status = new_member.status
-            c_type = "channel" if chat.type == ChatType.CHANNEL else "group"
+            c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
             if status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
-                await add_sb_destination(chat.id, chat.title or chat.username or "Chat", c_type)
-                print(f"[SmartBroadcast AutoTracker] Added bot destination: {chat.title} ({chat.id})")
+                title = chat.title or chat.username or f"Chat {chat.id}"
+                await add_sb_destination(chat.id, title, c_type)
+                from toxic.core.mongo.db import add_joined_chat
+                await add_joined_chat(chat.id, title, chat_type=c_type)
+                print(f"[SmartBroadcast AutoTracker] Added bot destination: {title} ({chat.id}) [{c_type}]")
             elif status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
                 await remove_sb_destination(chat.id)
+                from toxic.core.mongo.db import remove_joined_chat
+                await remove_joined_chat(chat.id)
                 print(f"[SmartBroadcast AutoTracker] Removed bot destination: {chat.title} ({chat.id})")
     except Exception as e:
         print(f"[SmartBroadcast AutoTracker] Error: {e}")
 
-# ─── Autonomous Background Scheduler Loop ───
+# ─── Autonomous Background Broadcast Scheduler Loop ───
 async def smart_broadcast_background_scheduler():
     while True:
         try:
-            # 1. Process pending message auto-deletions (Dual-Client Protection: Bot App + Userbot)
-            pending_dels = await get_pending_sb_deletions()
-            if pending_dels:
-                userbot_client = None
-                owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
-                del_success_count = 0
-                del_fail_list = []
-
-                for item in pending_dels:
-                    c_id = item["chat_id"]
-                    m_id = item["message_id"]
-                    c_title = item.get("title", f"Chat `{c_id}`")
-
-                    # Attempt deletion using dual clients
-                    if userbot_client is None:
-                        try:
-                            from toxic.modules.main import initialize_userbot
-                            for oid in owner_list:
-                                userbot_client = await initialize_userbot(int(oid))
-                                if userbot_client:
-                                    break
-                        except Exception:
-                            pass
-
-                    del_success, del_method = await delete_single_sb_message(c_id, m_id, userbot_client)
-                    if del_success:
-                        del_success_count += 1
-                        await remove_sb_deletion(item["_id"])
-                    else:
-                        retries = item.get("retries", 0) + 1
-                        if retries >= 3:
-                            del_fail_list.append(f"• **{c_title}** (`{c_id}`)")
-                            await remove_sb_deletion(item["_id"])
-                        else:
-                            next_try = datetime.datetime.now() + datetime.timedelta(seconds=20)
-                            await _del_col.update_one(
-                                {"_id": item["_id"]},
-                                {"$set": {"retries": retries, "delete_at": next_try}}
-                            )
-
-                    await asyncio.sleep(0.05)
-
-                if userbot_client:
-                    try:
-                        await userbot_client.stop()
-                    except Exception:
-                        pass
-
-                # Send Auto-Deletion Report to Owner if any deletions failed
-                if del_fail_list:
-                    fail_summary = "\n".join(del_fail_list[:10])
-                    if len(del_fail_list) > 10:
-                        fail_summary += f"\n... and {len(del_fail_list) - 10} more."
-
-                    del_report = (
-                        f"⚠️ **[AUTO-DELETE SCHEDULED REPORT]** ⚠️\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"✅ **Deleted Successfully:** `{del_success_count}` chats\n"
-                        f"❌ **Failed to Delete:** `{len(del_fail_list)}` chats\n\n"
-                        f"📌 **Failed Deletion Details:**\n"
-                        f"{fail_summary}\n\n"
-                        f"👉 *Click the button below to force delete manually:*",
-                    )
-                    for oid in owner_list:
-                        try:
-                            await app.send_message(int(oid), del_report[0], reply_markup=get_sb_report_keyboard())
-                        except Exception:
-                            pass
-
-            # 2. Check scheduled broadcasts
             cfg = await get_sb_config()
             if cfg and cfg.get("is_active"):
                 interval_m = cfg.get("interval_mins", 30)
@@ -1486,5 +1696,6 @@ async def smart_broadcast_background_scheduler():
 
         await asyncio.sleep(5)
 
-# Launch background scheduler task when module is loaded
+# Launch background scheduler task & dedicated real-time deletion worker on import
 asyncio.create_task(smart_broadcast_background_scheduler())
+asyncio.create_task(smart_broadcast_dedicated_deletion_worker())

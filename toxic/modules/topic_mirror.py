@@ -413,16 +413,24 @@ DIAMOND_EMOJI_ID = 5312389333909511107
 
 def get_topic_styling(title: str) -> tuple:
     """
-    Analyzes the topic / folder name and returns (styled_title, icon_color, icon_emoji_id):
-    - Video / Lecture / Recorded -> 🎬 Red/Coral (0xFB6F5F)
-    - PDF / Notes / Materials / Faculty / Editorial -> 📚 Yellow (0xFFD67E)
-    - Test / Practice Questions / Quiz / Exam / Mock -> 📝 Green (0x8EEE98)
-    - Default / General -> 📁 Rotating through 6 distinct Telegram topic colors (no solid blue!)
+    Analyzes the topic / folder name and returns (pure_title, icon_color, icon_emoji_id):
+    - Video / Lecture / Recorded -> 🎬 Red/Coral (0xFB6F5F), icon_emoji_id=5368653135101310687
+    - PDF / Notes / Materials / Faculty / Editorial -> 📚 Yellow (0xFFD67E), icon_emoji_id=5350481781306958339
+    - Test / Practice Questions / Quiz / Exam / Mock -> 📝 Green (0x8EEE98), icon_emoji_id=5373251851074415873
+    - Default / General -> 📁 Rotating topic color, icon_emoji_id=5357315181649076022
+    
+    IMPORTANT: pure_title contains ZERO prepended emojis!
+    The icon badge on the left is set via official Telegram icon_emoji_id so title names remain pure and clean.
     """
     if not title:
-        return "📁 Topic", 0x6FB9F0, None
+        return "Topic", 0x6FB9F0, 5357315181649076022
 
+    # Strip any preexisting leading emojis so topic title is 100% clean as in caption
     clean_t = str(title).strip()
+    clean_t = re.sub(r'^[📁📂📚📖📑📄🎬🎥📹📺📝🧪🎓🏆💡📌✨\s]+', '', clean_t).strip()
+    if not clean_t:
+        clean_t = str(title).strip() or "Topic"
+
     lower_t = clean_t.lower()
 
     # Normalize text for keyword detection
@@ -437,11 +445,9 @@ def get_topic_styling(title: str) -> tuple:
         "લેકચર", "લેકચર્સ", "વિડીયો", "ડેમો", "લાઈવ"
     )
     if any(k in search_text for k in video_keywords):
-        emoji = "🎬"
         color = 0xFB6F5F  # Red / Coral
-        if not clean_t.startswith(("🎬", "🎥", "📹", "📺")):
-            clean_t = f"{emoji} {clean_t}"
-        return clean_t, color, None
+        icon_emoji_id = 5368653135101310687  # 🎬 Official Telegram Topic Icon
+        return clean_t, color, icon_emoji_id
 
     # 2. PDF / Notes / Material / Editorial / Faculty Notes
     pdf_keywords = (
@@ -451,11 +457,9 @@ def get_topic_styling(title: str) -> tuple:
         "મટીરીયલ", "નોટ્સ", "પુસ્તક", "પીડીએફ"
     )
     if any(k in search_text for k in pdf_keywords):
-        emoji = "📚"
         color = 0xFFD67E  # Yellow
-        if not clean_t.startswith(("📚", "📖", "📑", "📄", "📁")):
-            clean_t = f"{emoji} {clean_t}"
-        return clean_t, color, None
+        icon_emoji_id = 5350481781306958339  # 📚 Official Telegram Topic Icon
+        return clean_t, color, icon_emoji_id
 
     # 3. Test / Practice Questions / Quiz / Exam / Mock / Mentorship
     test_keywords = (
@@ -465,35 +469,29 @@ def get_topic_styling(title: str) -> tuple:
         "ટેસ્ટ", "પરીક્ષા", "પ્રશ્નો"
     )
     if any(k in search_text for k in test_keywords):
-        emoji = "📝"
         color = 0x8EEE98  # Green
-        if not clean_t.startswith(("📝", "🧪", "🎓", "🏆", "💡")):
-            clean_t = f"{emoji} {clean_t}"
-        return clean_t, color, None
+        icon_emoji_id = 5373251851074415873  # 📝 Official Telegram Topic Icon
+        return clean_t, color, icon_emoji_id
 
     # 4. Default / General: Rotate through 6 distinct Telegram colors so not all are blue!
-    # Telegram 6 topic colors: Blue (0x6FB9F0), Yellow (0xFFD67E), Purple (0xCB86DB), Green (0x8EEE98), Pink (0xFF93B2), Red (0xFB6F5F)
     colors = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
     color_index = abs(hash(clean_t)) % len(colors)
     color = colors[color_index]
-    
-    emoji = "📁"
-    if not clean_t.startswith(("📁", "📂", "📌", "✨")):
-        clean_t = f"{emoji} {clean_t}"
+    icon_emoji_id = 5357315181649076022  # 📁 Official Telegram Topic Icon
 
-    return clean_t, color, None
+    return clean_t, color, icon_emoji_id
 
 
 def clean_topic_title(title: str) -> str:
     """
-    Returns the original topic title with only leading whitespace stripped.
-    Topic names must be preserved EXACTLY as they are in Telegram so that
-    matching between source and target topics is never broken by title mutations.
-    Only strips leading/trailing plain whitespace — no emoji, no punctuation removal.
+    Returns the original topic title with only leading whitespace and stray emojis stripped.
+    Keeps topic names clean and pure text so matching and continuation is 100% stable.
     """
     if not title:
         return "Topic"
-    return str(title).strip() or "Topic"
+    t = str(title).strip()
+    t = re.sub(r'^[📁📂📚📖📑📄🎬🎥📹📺📝🧪🎓🏆💡📌✨\s]+', '', t).strip()
+    return t or str(title).strip() or "Topic"
 
 format_topic_title_with_diamond = clean_topic_title
 
@@ -2114,7 +2112,10 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
         if len(tgt_t) > 13:
             tgt_t = tgt_t[:11] + ".."
             
-        buttons.append([InlineKeyboardButton(f"📁 {src_t} ➔ {tgt_t}", callback_data=f"tm_opt_{src_id}_{tgt_id}")])
+        is_c2t = (s.get("session_type") == "c2t")
+        prefix = "⚡" if is_c2t else "📁"
+        tag = "[C2T] " if is_c2t else ""
+        buttons.append([InlineKeyboardButton(f"{prefix} {tag}{src_t} ➔ {tgt_t}", callback_data=f"tm_opt_{src_id}_{tgt_id}")])
         
     buttons.append([
         InlineKeyboardButton("➕ Start Group Mirror", callback_data="tm_new"),
@@ -2185,6 +2186,54 @@ async def scan_and_compare_session(user_id: int, src_chat_id: int, tgt_chat_id: 
 
         saved_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
         saved_topics = saved_session.get("topics", {}) if saved_session else {}
+
+        # 1.1 Dedicated C2T Scan: If session is Channel ➔ Topics
+        if saved_session and saved_session.get("session_type") == "c2t":
+            saved_checkpoint = saved_session.get("last_msg_id", 0)
+            c2t_ckpt = await db.get_c2t_checkpoint(src_chat_id, tgt_chat_id)
+            effective_ckpt = max(saved_checkpoint, c2t_ckpt)
+
+            latest_id = effective_ckpt
+            try:
+                async for m in src_client.get_chat_history(src_chat_id, limit=1):
+                    if m and m.id:
+                        latest_id = m.id
+            except Exception:
+                pass
+
+            total_pending = max(0, latest_id - effective_ckpt)
+            total_channel_msgs = latest_id
+            synced_msgs = min(effective_ckpt, latest_id)
+
+            sync_pct = int((synced_msgs / total_channel_msgs) * 100) if total_channel_msgs > 0 else 100
+            bar_blocks = int(sync_pct // 10)
+            progress_bar = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
+
+            # Discover Target Forum Topics
+            target_topics_by_title, target_topics_by_id = await get_all_target_forum_topics(userbot, app, tgt_chat_id)
+
+            topic_lines = []
+            for t_norm, t_info in list(saved_topics.items())[:25]:
+                t_title = t_info.get("title", t_norm) if isinstance(t_info, dict) else t_norm
+                t_tid = t_info.get("tgt_topic_id") if isinstance(t_info, dict) else None
+                topic_lines.append(f"• **{t_title}**: Target Topic ID `{t_tid}`")
+
+            topics_breakdown = "\n".join(topic_lines) if topic_lines else "• *Topics will be auto-created and synced on next run.*"
+
+            report = (
+                f"<blockquote><b>⚡️ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 — 𝗟𝗜𝗩𝗘 𝗦𝗖𝗔𝗡 𝗥𝗘𝗣𝗢𝗥𝗧</b></blockquote>\n\n"
+                f"📤 <b>Source Channel:</b> <code>{src_title}</code>\n"
+                f"📥 <b>Target Forum:</b> <code>{tgt_title}</code>\n\n"
+                f"<blockquote><b>📊 PROGRESS & METRICS</b>\n"
+                f"• ✉️ <b>Total Channel Posts:</b> <code>#{total_channel_msgs}</code>\n"
+                f"• ✅ <b>Synced in Target Topics:</b> <code>#{synced_msgs}</code>\n"
+                f"• ⏳ <b>Pending New Posts:</b> <code>{total_pending}</code>\n"
+                f"• 📁 <b>Mapped Forum Topics:</b> <code>{len(saved_topics)}</code>\n"
+                f"• 📊 <b>Overall Progress:</b> {progress_bar} <code>{sync_pct}%</code></blockquote>\n\n"
+                f"<blockquote><b>📂 AUTO-CREATED TOPICS PREVIEW:</b>\n"
+                f"{topics_breakdown}</blockquote>"
+            )
+            return report, [], total_pending
 
         # 2. Stage 1 Scan: Discover Source Topics & Target Topics
         source_topics = await get_all_source_forum_topics(src_client, src_chat_id, fallback_client=userbot if src_client != userbot else app)
@@ -2402,6 +2451,17 @@ async def sync_session_callback(_, query: CallbackQuery):
 
     if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
         await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+        return
+
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    if session and session.get("session_type") == "c2t":
+        await query.answer("⚡ Starting Channel ➔ Topics Sync...")
+        await run_channel_to_topics_mirror(
+            user_id=user_id,
+            src_chat_id=src_chat_id,
+            tgt_chat_id=tgt_chat_id,
+            status_msg=query.message
+        )
         return
 
     await query.answer("🔄 Starting Sync & Update process...")
@@ -3191,6 +3251,17 @@ async def resume_session_callback(_, query: CallbackQuery):
         await query.answer("⚠️ A mirror task is already running!", show_alert=True)
         return
         
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    if session and session.get("session_type") == "c2t":
+        await query.answer("🚀 Resuming Channel ➔ Topics Mirror...")
+        await run_channel_to_topics_mirror(
+            user_id=user_id,
+            src_chat_id=src_chat_id,
+            tgt_chat_id=tgt_chat_id,
+            status_msg=query.message
+        )
+        return
+
     await query.answer("🚀 Resuming mirror session...")
     await run_topic_mirror(
         user_id=user_id,
@@ -5273,8 +5344,32 @@ async def run_channel_to_topics_mirror(
             topic_cache[info["title"].strip().lower()] = tid
             topic_cache[normalize_topic_title(info["title"])] = tid
 
+    # Save C2T session metadata in mirror_db so it appears in Mirror Hub with all buttons
+    from toxic.core.mongo.db import mirror_db
+    try:
+        await db.save_mirror_session_info(user_id, src_chat_id, tgt_chat_id, src_title, tgt_title)
+        await mirror_db.update_one(
+            {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+            {
+                "$set": {
+                    "session_type": "c2t",
+                    "user_id": user_id,
+                    "src_chat_id": src_chat_id,
+                    "tgt_chat_id": tgt_chat_id,
+                    "src_title": src_title,
+                    "tgt_title": tgt_title,
+                    "updated_at": datetime.datetime.now()
+                }
+            },
+            upsert=True
+        )
+    except Exception as sess_init_err:
+        print(f"[C2T] Session init notice: {sess_init_err}")
+
     # Saved checkpoint
-    saved_checkpoint = await db.get_c2t_checkpoint(src_chat_id, tgt_chat_id)
+    saved_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    c2t_ckpt = await db.get_c2t_checkpoint(src_chat_id, tgt_chat_id)
+    saved_checkpoint = max(c2t_ckpt, (saved_session.get("last_msg_id", 0) if saved_session else 0))
     if src_start_id and src_start_id > 0:
         effective_start = max(0, src_start_id - 1)
     elif saved_checkpoint > 0:
@@ -5374,6 +5469,7 @@ async def run_channel_to_topics_mirror(
     start_time = time.time()
     last_edit_time = start_time
     created_topics_count = 0
+    updated_topic_icons = set()
 
     for idx, msg in enumerate(messages_to_copy, 1):
         if not active_mirrors.get(user_id, {}).get("running", True):
@@ -5398,6 +5494,29 @@ async def run_channel_to_topics_mirror(
 
         # Topic lookup
         tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
+
+        # If topic already exists, ensure its left icon badge displays the real custom emoji
+        # and strip any old prepended emojis from its title on Telegram
+        if tgt_topic_id and tgt_topic_id > 1 and tgt_topic_id not in updated_topic_icons:
+            updated_topic_icons.add(tgt_topic_id)
+            try:
+                await app.edit_forum_topic(
+                    chat_id=tgt_chat_id,
+                    topic_id=tgt_topic_id,
+                    title=styled_title,
+                    icon_emoji_id=icon_emoji_id
+                )
+            except Exception:
+                try:
+                    peer = await app.resolve_peer(tgt_chat_id)
+                    await app.invoke(raw.functions.messages.EditForumTopic(
+                        peer=peer,
+                        topic_id=tgt_topic_id,
+                        title=styled_title,
+                        icon_emoji_id=icon_emoji_id
+                    ))
+                except Exception:
+                    pass
 
         if not tgt_topic_id:
             # Create the forum topic on the fly using robust multi-stage fallback!
@@ -5455,6 +5574,23 @@ async def run_channel_to_topics_mirror(
         if success:
             copied_count += 1
             await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+            try:
+                await mirror_db.update_one(
+                    {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+                    {
+                        "$set": {
+                            "last_msg_id": msg.id,
+                            f"topics.{norm_name}": {
+                                "title": detected_topic_name,
+                                "tgt_topic_id": tgt_topic_id,
+                                "last_msg_id": msg.id
+                            },
+                            "updated_at": datetime.datetime.now()
+                        }
+                    }
+                )
+            except Exception:
+                pass
         elif method in ("service_skipped", "skipped_filter"):
             skipped_count += 1
             await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
