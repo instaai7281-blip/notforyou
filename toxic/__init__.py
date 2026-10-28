@@ -59,6 +59,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+# Silence internal MTProto connection and ping noise from flooding the console
+logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.auth").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.dispatcher").setLevel(logging.WARNING)
+logging.getLogger("telethon").setLevel(logging.WARNING)
+
 botStartTime = time.time()
 
 app = Client(

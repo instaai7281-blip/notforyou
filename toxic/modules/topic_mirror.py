@@ -1779,6 +1779,47 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 except Exception:
                     pass
 
+        # ─────────────────────────────────────────────────────────────
+        # 2.8 FAST PM RELAY: Userbot forwards to Bot PM → Bot server-side copies to Topic
+        # Completely bypasses 700MB downloading & upload.GetFile FloodWait!
+        # Works for private channels that userbot has access to, unless strictly protected.
+        # ─────────────────────────────────────────────────────────────
+        if userbot and not getattr(msg.chat, "has_protected_content", False):
+            try:
+                bot_user = await app.get_me()
+                relayed = await userbot.forward_messages(
+                    chat_id=bot_user.id,
+                    from_chat_id=src_chat_id,
+                    message_ids=msg.id
+                )
+                relay_msg = relayed[0] if isinstance(relayed, list) else relayed
+                if relay_msg and getattr(relay_msg, "id", None):
+                    try:
+                        copied_msg = await app.copy_message(
+                            chat_id=tgt_chat_id,
+                            from_chat_id=bot_user.id,
+                            message_id=relay_msg.id,
+                            caption=caption_html or final_caption,
+                            parse_mode=ParseMode.HTML if caption_html else None,
+                            message_thread_id=effective_tgt_topic_id,
+                            reply_to_message_id=effective_tgt_topic_id
+                        )
+                        if copied_msg:
+                            sent_id = getattr(copied_msg, "id", None)
+                            try:
+                                await app.delete_messages(bot_user.id, relay_msg.id)
+                            except Exception:
+                                pass
+                            await _log_msg(copied_msg)
+                            return True, "fast_relay_copy", sent_id
+                    except Exception:
+                        try:
+                            await app.delete_messages(bot_user.id, relay_msg.id)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
     # ─────────────────────────────────────────────────────────────
     # 3. FULL PIPELINE: Download via userbot → Sanitize & Brand → Upload via `app`
     # Full pipeline: download, thumbnail, watermark, caption clean, upload
