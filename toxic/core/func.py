@@ -407,7 +407,12 @@ def optimize_thumbnail(image_path):
         return abs_path
     except Exception as e:
         print(f"[ERROR] Failed to optimize thumbnail {image_path}: {e}")
-        return os.path.abspath(image_path) if image_path else None
+        try:
+            if image_path and os.path.exists(image_path):
+                os.remove(image_path)
+        except Exception:
+            pass
+        return None
 
 # REPLACE screenshot() function in toxic/core/func.py (Line 221-257)
 

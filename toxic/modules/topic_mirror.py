@@ -1258,7 +1258,7 @@ def extract_topic_id_from_result(created) -> int:
     return None
 
 
-async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=None, disable_web_page_preview=True, reply_markup=None):
+async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=None, disable_web_page_preview=True, reply_markup=None, message_thread_id=None):
     """
     Safely sends text messages to Telegram, automatically splitting them if they exceed 3900 characters.
     Prevents [400 MESSAGE_TOO_LONG] from ever breaking message transfers or reports.
@@ -1267,6 +1267,7 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
         return None
 
     str_text = str(text)
+    eff_thread = message_thread_id if message_thread_id is not None else reply_to_message_id
     if len(str_text) <= 3900:
         try:
             return await client.send_message(
@@ -1274,6 +1275,7 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
                 text=str_text,
                 parse_mode=parse_mode,
                 reply_to_message_id=reply_to_message_id,
+                message_thread_id=eff_thread,
                 disable_web_page_preview=disable_web_page_preview,
                 reply_markup=reply_markup
             )
@@ -1317,6 +1319,7 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
                 text=chunk,
                 parse_mode=parse_mode,
                 reply_to_message_id=reply_to_message_id,
+                message_thread_id=eff_thread,
                 disable_web_page_preview=disable_web_page_preview,
                 reply_markup=markup
             )
@@ -1362,6 +1365,7 @@ async def resilient_send_media(
     caption: str = None,
     thumb: str = None,
     reply_to_message_id: int = None,
+    message_thread_id: int = None,
     duration: int = None,
     width: int = None,
     height: int = None,
@@ -1380,6 +1384,7 @@ async def resilient_send_media(
     curr_thumb = thumb if (thumb and os.path.isfile(thumb) and os.path.getsize(thumb) > 0) else None
     curr_caption = caption
     curr_parse_mode = ParseMode.HTML if caption else None
+    eff_thread = message_thread_id if message_thread_id is not None else reply_to_message_id
 
     # Step 1: Video upload
     if media_type == "video":
@@ -1398,7 +1403,8 @@ async def resilient_send_media(
                             reply_to_message_id=reply_to_message_id,
                             parse_mode=curr_parse_mode,
                             supports_streaming=True,
-                            has_spoiler=has_spoiler
+                            has_spoiler=has_spoiler,
+                            message_thread_id=eff_thread
                         )
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
@@ -1406,6 +1412,12 @@ async def resilient_send_media(
             except Exception as vid_err:
                 err_str = str(vid_err).upper()
                 print(f"[TopicMirror] send_video attempt {attempt} error: {vid_err}")
+                if "CHANNEL_PRIVATE" in err_str:
+                    try:
+                        await client.get_chat(chat_id)
+                        await asyncio.sleep(1)
+                    except Exception:
+                        pass
                 if curr_thumb and any(k in err_str for k in ("THUMB", "PHOTO", "DIMENSION", "INVALID", "MEDIA", "IMAGE")):
                     curr_thumb = None
                     continue
@@ -1431,6 +1443,7 @@ async def resilient_send_media(
                             caption=curr_caption,
                             thumb=curr_thumb,
                             reply_to_message_id=reply_to_message_id,
+                            message_thread_id=eff_thread,
                             parse_mode=curr_parse_mode
                         )
                     except FloodWait as fw:
@@ -1459,6 +1472,7 @@ async def resilient_send_media(
                         caption=curr_caption,
                         reply_to_message_id=reply_to_message_id,
                         parse_mode=curr_parse_mode,
+                        message_thread_id=eff_thread,
                         has_spoiler=has_spoiler
                     )
                 except FloodWait as fw:
@@ -1488,6 +1502,7 @@ async def resilient_send_media(
                             title=title,
                             thumb=curr_thumb,
                             reply_to_message_id=reply_to_message_id,
+                            message_thread_id=eff_thread,
                             parse_mode=curr_parse_mode
                         )
                     except FloodWait as fw:
@@ -1712,56 +1727,57 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
     # 2.5 FAST PATH: Server-Side Copy or Direct Forward for Public Channels
     # If the channel is public, copies or forwards server-side in 50ms without downloading!
     # ─────────────────────────────────────────────────────────────
-    is_src_public = is_public or bool(getattr(getattr(msg, "chat", None), "username", None)) or (isinstance(src_chat_id, str) and not str(src_chat_id).startswith("-100"))
-    if is_src_public:
-        try:
-            orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
-            final_caption = await clean_and_brand_caption(user_id, orig_cap)
-            caption_html = format_caption_to_html(final_caption) if final_caption else None
+    # 2.5 FAST PATH: Server-Side Copy or Direct Forward
+    # Attempts ultra-fast 50ms server-side transfer directly into target topic thread
+    try:
+        orig_cap = msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else (msg.caption or "")
+        final_caption = await clean_and_brand_caption(user_id, orig_cap)
+        caption_html = format_caption_to_html(final_caption) if final_caption else None
 
-            copied_msg = await app.copy_message(
+        copied_msg = await app.copy_message(
+            chat_id=tgt_chat_id,
+            from_chat_id=src_chat_id,
+            message_id=msg.id,
+            caption=caption_html or final_caption,
+            parse_mode=ParseMode.HTML if caption_html else None,
+            message_thread_id=effective_tgt_topic_id,
+            reply_to_message_id=effective_tgt_topic_id
+        )
+        if copied_msg:
+            sent_id = getattr(copied_msg, 'id', None)
+            await _log_msg(copied_msg)
+            return True, "fast_copy", sent_id
+    except FloodWait as fw:
+        await asyncio.sleep(fw.value + 1)
+        return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client, is_public=is_public)
+    except Exception as cp_err:
+        # Fallback to direct forward if copy_message is restricted
+        try:
+            fwd_res = await app.forward_messages(
                 chat_id=tgt_chat_id,
                 from_chat_id=src_chat_id,
-                message_id=msg.id,
-                caption=caption_html or final_caption,
-                parse_mode=ParseMode.HTML if caption_html else None,
-                reply_to_message_id=effective_tgt_topic_id
+                message_ids=msg.id,
+                message_thread_id=effective_tgt_topic_id
             )
-            if copied_msg:
-                sent_id = getattr(copied_msg, 'id', None)
-                await _log_msg(copied_msg)
-                return True, "fast_copy", sent_id
-        except FloodWait as fw:
-            await asyncio.sleep(fw.value + 1)
-            return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client, is_public=is_public)
-        except Exception as cp_err:
-            # Fallback to direct forward if copy_message is restricted
-            try:
-                fwd_res = await app.forward_messages(
-                    chat_id=tgt_chat_id,
-                    from_chat_id=src_chat_id,
-                    message_ids=msg.id,
-                    reply_to_message_id=effective_tgt_topic_id
-                )
-                if fwd_res:
-                    sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
-                    await _log_msg(fwd_res)
-                    return True, "fast_forward", sent_id
-            except Exception:
-                if userbot:
-                    try:
-                        fwd_res = await userbot.forward_messages(
-                            chat_id=tgt_chat_id,
-                            from_chat_id=src_chat_id,
-                            message_ids=msg.id,
-                            reply_to_message_id=effective_tgt_topic_id
-                        )
-                        if fwd_res:
-                            sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
-                            await _log_msg(fwd_res)
-                            return True, "fast_forward", sent_id
-                    except Exception:
-                        pass
+            if fwd_res:
+                sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
+                await _log_msg(fwd_res)
+                return True, "fast_forward", sent_id
+        except Exception:
+            if userbot:
+                try:
+                    fwd_res = await userbot.forward_messages(
+                        chat_id=tgt_chat_id,
+                        from_chat_id=src_chat_id,
+                        message_ids=msg.id,
+                        message_thread_id=effective_tgt_topic_id
+                    )
+                    if fwd_res:
+                        sent_id = fwd_res[0].id if isinstance(fwd_res, list) else getattr(fwd_res, 'id', None)
+                        await _log_msg(fwd_res)
+                        return True, "fast_forward", sent_id
+                except Exception:
+                    pass
 
     # ─────────────────────────────────────────────────────────────
     # 3. FULL PIPELINE: Download via userbot → Sanitize & Brand → Upload via `app`
@@ -1838,34 +1854,39 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         thumb_path = thumbnail(user_id)
         file_extension = str(temp_file).split('.')[-1].lower()
 
-        # If no custom thumbnail, try downloading original thumbnail from source message
+        # If no custom thumbnail, try downloading original thumbnail from source message safely
         if not thumb_path:
+            target_thumb_obj = None
             if msg.video and getattr(msg.video, 'thumbs', None) and len(msg.video.thumbs) > 0:
-                try:
-                    thumb_path = await dl_client.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                    auto_thumb_file = thumb_path
-                except Exception:
-                    if alt_client:
-                        try:
-                            thumb_path = await alt_client.download_media(msg.video.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                            auto_thumb_file = thumb_path
-                        except Exception:
-                            thumb_path = None
-                    else:
-                        thumb_path = None
+                target_thumb_obj = msg.video.thumbs[0]
             elif msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
-                try:
-                    thumb_path = await dl_client.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                    auto_thumb_file = thumb_path
-                except Exception:
-                    if alt_client:
-                        try:
-                            thumb_path = await alt_client.download_media(msg.document.thumbs[0].file_id, file_name=f"{temp_dir}/orig_thumb_{msg.id}.jpg")
-                            auto_thumb_file = thumb_path
-                        except Exception:
-                            thumb_path = None
-                    else:
-                        thumb_path = None
+                target_thumb_obj = msg.document.thumbs[0]
+
+            if target_thumb_obj:
+                thumb_target_path = f"{temp_dir}/orig_thumb_{msg.id}.jpg"
+                for cl in [dl_client, alt_client]:
+                    if not cl:
+                        continue
+                    try:
+                        # Pass the thumbnail object or re-fetch to avoid expired file references
+                        res_th = await cl.download_media(target_thumb_obj, file_name=thumb_target_path)
+                        if res_th and os.path.exists(res_th) and os.path.getsize(res_th) > 0:
+                            thumb_path = res_th
+                            auto_thumb_file = res_th
+                            break
+                        else:
+                            if res_th and os.path.exists(res_th):
+                                try:
+                                    os.remove(res_th)
+                                except Exception:
+                                    pass
+                    except Exception as th_err:
+                        print(f"[Transfer] Thumb download notice: {th_err}")
+                if not thumb_path and os.path.exists(thumb_target_path):
+                    try:
+                        os.remove(thumb_target_path)
+                    except Exception:
+                        pass
 
         sent_media = None
         file_size = os.path.getsize(temp_file)
@@ -1926,6 +1947,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 caption=caption_html,
                 thumb=thumb_path,
                 reply_to_message_id=effective_tgt_topic_id,
+                message_thread_id=effective_tgt_topic_id,
                 duration=duration if duration > 0 else None,
                 width=width if width > 0 else None,
                 height=height if height > 0 else None,
@@ -1970,7 +1992,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 file_path=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=effective_tgt_topic_id
+                reply_to_message_id=effective_tgt_topic_id,
+                message_thread_id=effective_tgt_topic_id
             )
         elif msg.photo:
             has_spoiler = get_user_spoiler_preference(user_id)
@@ -1981,6 +2004,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 file_path=temp_file,
                 caption=caption_html,
                 reply_to_message_id=effective_tgt_topic_id,
+                message_thread_id=effective_tgt_topic_id,
                 has_spoiler=has_spoiler
             )
         elif msg.audio:
@@ -2009,6 +2033,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 caption=caption_html,
                 thumb=thumb_path,
                 reply_to_message_id=effective_tgt_topic_id,
+                message_thread_id=effective_tgt_topic_id,
                 duration=msg.audio.duration or 0,
                 performer=clean_performer,
                 title=clean_title
@@ -2049,7 +2074,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 file_path=temp_file,
                 caption=caption_html,
                 thumb=thumb_path,
-                reply_to_message_id=effective_tgt_topic_id
+                reply_to_message_id=effective_tgt_topic_id,
+                message_thread_id=effective_tgt_topic_id
             )
 
         # Send copy of uploaded media to LOG_GROUP
@@ -5215,10 +5241,11 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
 def extract_topic_from_caption(text: str):
     """
     Extracts the topic name from message caption / text.
-    Handles lines like:
+    Handles both single-line and multi-line patterns where topic name wraps:
       - Topic: Course Thumbnail
-      - **Topic:** પરિશ્રમ | DEMO LECTURE
-      - Topic: પરિશ્રમ બેચ ( PRE + MAINS ) લેકચર્સ → ભારતીય બંધારણ રાજ્યવ્યવસ્થા → આમુખ
+      - **Topic:** Demo Lecture
+      - Topic: Home ‘n Demo
+        Lectures
       - Folder: Economics
       - Category: Static GK
       - Subject: Current Affairs
@@ -5226,34 +5253,44 @@ def extract_topic_from_caption(text: str):
     if not text:
         return None
 
-    # Strip HTML tags
     clean_text = re.sub(r'</?[a-zA-Z0-9]+[^>]*>', '', str(text))
+
+    # 1. Multi-line block matching: Topic: ... until next field (Batch:, Title:, Date:, Index:, etc.) or double newline
+    block_pattern = r'(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\->\u27a4\u2022]\s*(.+?)(?=\n\s*(?:[A-Za-z0-9_\u0a80-\u0aff\(\)]+\s*[:\->\u27a4\u2022]|\n\n|\Z))'
+    m_block = re.search(block_pattern, clean_text, re.IGNORECASE | re.DOTALL)
+    if m_block:
+        raw_val = m_block.group(1).strip()
+        val = re.sub(r'\s+', ' ', raw_val).strip()
+        val = re.sub(r'[\*_`~]+', '', val).strip()
+        val = val.strip("\"'` ")
+        if val:
+            if len(val) > 120:
+                for sep in ['›', '?', '->']:
+                    if sep in val:
+                        crumbs = [c.strip() for c in val.split(sep) if c.strip()]
+                        if crumbs and len(crumbs[-1]) <= 120:
+                            val = crumbs[-1]
+                            break
+            if len(val) > 128:
+                val = val[:125] + '...'
+            return val.strip()
+
+    # 2. Fallback to single line match
     for line in clean_text.splitlines():
         l_str = line.strip()
         if not l_str:
             continue
-        l_str = re.sub(r'^[>\-\*•\s]+', '', l_str).strip()
-        m = re.match(r'^(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\-→►>]\s*(.+)$', l_str, re.IGNORECASE)
+        l_str = re.sub(r'^[>\-\*\s]+', '', l_str).strip()
+        m = re.match(r'^(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\->\u27a4\u2022]\s*(.+)$', l_str, re.IGNORECASE)
         if m:
             val = m.group(1).strip()
             val = re.sub(r'[\*_`~]+', '', val).strip()
             val = val.strip("\"'` ")
             if val:
-                # Telegram topic title max length is 128 chars.
-                if len(val) > 120:
-                    if '→' in val:
-                        crumbs = [c.strip() for c in val.split('→') if c.strip()]
-                        if crumbs and len(crumbs[-1]) <= 120:
-                            val = crumbs[-1]
-                    elif '->' in val:
-                        crumbs = [c.strip() for c in val.split('->') if c.strip()]
-                        if crumbs and len(crumbs[-1]) <= 120:
-                            val = crumbs[-1]
                 if len(val) > 128:
                     val = val[:125] + '...'
                 return val.strip()
     return None
-
 
 async def run_channel_to_topics_mirror(
     user_id: int,
@@ -5488,12 +5525,16 @@ async def run_channel_to_topics_mirror(
         if not detected_topic_name:
             detected_topic_name = "General Content"
 
-        norm_name = normalize_topic_title(detected_topic_name)
         styled_title, icon_color, icon_emoji_id = get_topic_styling(detected_topic_name)
+        norm_name = normalize_topic_title(detected_topic_name)
         norm_styled = normalize_topic_title(styled_title)
 
-        # Topic lookup
-        tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
+        # Robust topic lookup: matches exact raw, normalized variants, or alphanumeric
+        tgt_topic_id = match_existing_target_topic(detected_topic_name, topic_cache)
+        if not tgt_topic_id:
+            tgt_topic_id = match_existing_target_topic(styled_title, topic_cache)
+        if not tgt_topic_id:
+            tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
 
         # If topic already exists, ensure its left icon badge displays the real custom emoji
         # and strip any old prepended emojis from its title on Telegram
