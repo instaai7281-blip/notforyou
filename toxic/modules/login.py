@@ -227,7 +227,7 @@ async def start_login_flow(client, user_id: int, message_or_query):
 
     sending_msg = await app.send_message(user_id, "📲 <b>Connecting to Telegram servers & sending OTP...</b>", parse_mode=ParseMode.HTML)
     
-    ub_client = Client(f"session_{user_id}", api_id, api_hash, max_concurrent_transmissions=16)
+    ub_client = Client(f"session_{user_id}", api_id, api_hash, max_concurrent_transmissions=4, sleep_threshold=60)
 
     try:
         await ub_client.connect()
