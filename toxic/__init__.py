@@ -59,6 +59,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+# Patch Pyrogram downloader chunk size to 512KB to eliminate upload.GetFile FloodWait
+try:
+    from toxic.core.fast_pyro import patch_pyrogram_downloader
+    patch_pyrogram_downloader()
+except Exception as p_err:
+    print(f'[FastPyro] Patch error: {p_err}')
+
 # Silence internal MTProto connection and ping noise from flooding the console
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)

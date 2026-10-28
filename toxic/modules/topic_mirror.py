@@ -5516,6 +5516,7 @@ async def run_channel_to_topics_mirror(
         try:
             for chk in chunks:
                 fetched_msgs = await fetch_client.get_messages(src_chat_id, message_ids=chk)
+                await asyncio.sleep(0.3)
                 msg_list = fetched_msgs if isinstance(fetched_msgs, list) else [fetched_msgs]
                 for m in msg_list:
                     if m and not getattr(m, "empty", False) and getattr(m, "id", None):
