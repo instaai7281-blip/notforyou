@@ -12,7 +12,7 @@ import unicodedata
 import asyncio
 from datetime import datetime, timedelta
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import (
     Message,
     CallbackQuery,
@@ -561,13 +561,9 @@ async def handle_chat_join_request(
     chat_id = request.chat.id
     chat_title = request.chat.title or "Channel/Group"
 
-    # If Bio Verification is OFF, auto-approve join request immediately!
+    # If Bio Verification is OFF, do NOT auto-approve requests! Keep them pending.
     if not await is_bio_check_enabled():
-        try:
-            await client.approve_chat_join_request(chat_id, user_id)
-            logger.info("Auto-approved user %s in chat %s (Bio verification is OFF)", user_id, chat_id)
-        except Exception as e:
-            logger.error("Failed to auto-approve user %s: %s", user_id, e)
+        logger.info("Join request from user %s in chat %s received but Bio Verification is OFF. Leaving request pending.", user_id, chat_id)
         return
 
     safe_user_name = html.escape(request.from_user.first_name or "User")
@@ -692,7 +688,8 @@ async def verify_user_bio_callback(
 
     req_tag = await get_required_bio_tag()
     if not await is_bio_check_enabled():
-        await callback_query.answer("🔓 Bio verification is currently OFF! Access granted. 🎉", show_alert=True)
+        await callback_query.answer("⚠️ Bio verification abhi OFF hai. Admin verification on hone par hi requests process hongi.", show_alert=True)
+        return
     else:
         bio = await get_fresh_user_bio(client, user_id)
 
@@ -908,7 +905,8 @@ async def biocheck_command(client: Client, message: Message):
         f"<b>Current Status:</b> {status_icon}\n"
         f"<b>Required Tag:</b> <code>{req_tag}</code>\n"
         f"👥 <b>Verified Bio Users:</b> <code>{verified_count}</code> users\n\n"
-        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.\n"
+        "<i>When OFF, join requests are NOT auto-accepted (stay pending until ON or accepted manually).\n"
+        "When ON, only users with the required tag in their bio will be approved.\n"
         "Admins can toggle ON/OFF or change the verification tag directly from this panel or using /setbiotag.</i>"
     )
     buttons = InlineKeyboardMarkup([
@@ -1027,7 +1025,8 @@ async def toggle_bio_status_callback(client: Client, callback_query: CallbackQue
         f"<b>Current Status:</b> {status_icon}\n"
         f"<b>Required Tag:</b> <code>{req_tag}</code>\n"
         f"👥 <b>Verified Bio Users:</b> <code>{verified_count}</code> users\n\n"
-        "<i>When OFF, users are never blocked or prompted for bio verification, and all join requests are auto-approved instantly.\n"
+        "<i>When OFF, join requests are NOT auto-accepted (stay pending until ON or accepted manually).\n"
+        "When ON, only users with the required tag in their bio will be approved.\n"
         "Admins can toggle ON/OFF or change the verification tag directly from this panel or using /setbiotag.</i>"
     )
     buttons = InlineKeyboardMarkup([
@@ -1043,5 +1042,136 @@ async def toggle_bio_status_callback(client: Client, callback_query: CallbackQue
         await callback_query.message.edit_text(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
     except Exception:
         pass
+
+
+@app.on_message(filters.command(["acceptall", "approveall", "acceptrequests", "approverequests"]))
+async def accept_all_channel_requests_command(client: Client, message: Message):
+    """
+    Accepts all pending join requests in a specific channel or group:
+    Usage:
+      - Send `/acceptall` inside the target channel/group.
+      - OR in private chat: `/acceptall <channel_id or @username or invite_link>`
+    Only Owner and Bot Admins can execute this command.
+    """
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin_or_owner(user_id) and user_id not in get_owner_ids():
+        return await message.reply_text("⛔ <b>Admin Only:</b> Only bot admins or owner can use this command.", parse_mode=ParseMode.HTML)
+
+    target_chat_input = None
+    if len(message.command) > 1:
+        target_chat_input = message.text.split(None, 1)[1].strip()
+    elif message.chat and message.chat.type in (enums.ChatType.CHANNEL, enums.ChatType.SUPERGROUP, enums.ChatType.GROUP):
+        target_chat_input = message.chat.id
+
+    if not target_chat_input:
+        return await message.reply_text(
+            "📌 <b><u>Usage of /acceptall</u></b>\n\n"
+            "• <b>Direct in Channel/Group:</b> Send <code>/acceptall</code> directly in that channel/group.\n"
+            "• <b>In Private Chat:</b> Send <code>/acceptall &lt;chat_id or @username&gt;</code>\n\n"
+            "<i>Example:</i> <code>/acceptall -1001234567890</code> or <code>/acceptall @MyChannel</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+    status_msg = await message.reply_text("⏳ <b>Processing join requests...</b> Please wait.", parse_mode=ParseMode.HTML)
+
+    try:
+        # Resolve target chat
+        try:
+            target_chat_id = int(target_chat_input)
+        except ValueError:
+            target_chat_id = target_chat_input
+
+        target_chat = await client.get_chat(target_chat_id)
+        target_cid = target_chat.id
+        target_title = target_chat.title or str(target_cid)
+
+        # 1. First try Telegram's native HideAllChatJoinRequests RPC (approves all in 1 shot)
+        approved_via_rpc = False
+        try:
+            peer = await client.resolve_peer(target_cid)
+            from pyrogram.raw.functions.messages import HideAllChatJoinRequests
+            await client.invoke(HideAllChatJoinRequests(peer=peer, approved=True))
+            approved_via_rpc = True
+            logger.info("Successfully executed HideAllChatJoinRequests for %s", target_cid)
+        except Exception as rpc_e:
+            logger.warning("HideAllChatJoinRequests RPC attempt failed for %s: %s. Falling back to DB & loop method.", target_cid, rpc_e)
+
+        # 2. Approve all pending requests recorded in DB for this chat
+        db_approved_count = 0
+        try:
+            db_reqs = await join_req_db.find({"chat_id": target_cid}).to_list(5000)
+            for req in db_reqs:
+                uid = req.get("user_id")
+                if uid:
+                    try:
+                        await client.approve_chat_join_request(target_cid, uid)
+                        db_approved_count += 1
+                        await asyncio.sleep(0.05)
+                    except Exception:
+                        pass
+            await join_req_db.delete_many({"chat_id": target_cid})
+        except Exception as db_e:
+            logger.warning("DB approve cleanup warning: %s", db_e)
+
+        # 3. If RPC failed and DB count is low, try crawling pending importers if available
+        crawled_count = 0
+        if not approved_via_rpc:
+            try:
+                from pyrogram.raw.functions.messages import GetChatInviteImporters
+                peer = await client.resolve_peer(target_cid)
+                offset_date = 0
+                offset_user = functions.types.InputUserEmpty()
+                while True:
+                    res = await client.invoke(
+                        GetChatInviteImporters(
+                            peer=peer,
+                            requested=True,
+                            limit=100,
+                            offset_date=offset_date,
+                            offset_user=offset_user
+                        )
+                    )
+                    importers = getattr(res, "importers", [])
+                    if not importers:
+                        break
+                    for imp in importers:
+                        user_raw_id = getattr(imp, "user_id", None)
+                        if user_raw_id:
+                            try:
+                                await client.approve_chat_join_request(target_cid, user_raw_id)
+                                crawled_count += 1
+                                await asyncio.sleep(0.05)
+                            except Exception:
+                                pass
+                    last_imp = importers[-1]
+                    offset_date = getattr(last_imp, "date", 0)
+                    last_uid = getattr(last_imp, "user_id", None)
+                    offset_user = await client.resolve_peer(last_uid) if last_uid else functions.types.InputUserEmpty()
+                    if len(importers) < 100:
+                        break
+            except Exception as crawl_e:
+                logger.debug("GetChatInviteImporters notice: %s", crawl_e)
+
+        total_accepted = db_approved_count + crawled_count
+        summary_extra = f" (Processed <code>{total_accepted}</code> requests from queue)" if total_accepted > 0 else ""
+        if approved_via_rpc:
+            result_text = (
+                f"✅ <b>All Join Requests Approved!</b>\n\n"
+                f"📢 <b>Channel/Group:</b> <code>{target_title}</code> (<code>{target_cid}</code>)\n"
+                f"⚡ <b>Status:</b> All pending join requests successfully accepted via Telegram Instant API!{summary_extra}"
+            )
+        else:
+            result_text = (
+                f"✅ <b>Join Requests Processing Complete!</b>\n\n"
+                f"📢 <b>Channel/Group:</b> <code>{target_title}</code> (<code>{target_cid}</code>)\n"
+                f"👥 <b>Total Approved:</b> <code>{total_accepted}</code> pending requests."
+            )
+
+        await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        logger.error("Error in acceptall command: %s", e)
+        await status_msg.edit_text(f"❌ <b>Error:</b> <code>{e}</code>\n\n<i>Make sure the bot is an Admin with 'Invite Users via Link' & 'Add Members' rights in this channel.</i>", parse_mode=ParseMode.HTML)
+
 
 

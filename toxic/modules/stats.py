@@ -359,3 +359,111 @@ async def revoke_p_user_callback(client, query: CallbackQuery):
 
     await query.answer("🗑️ Premium revoked!", show_alert=True)
     await show_premium_users_page(client, query.message.chat.id, page, query.message)
+
+
+# ─── Total Community & Channel Member Counter Command (/community) ───
+@app.on_message(filters.command(["community", "totalmembers", "channelsmembers", "allmembers", "membercount"]) & admin_filter)
+async def community_count_command(client, message: Message):
+    """
+    Counts total combined members across all channels and groups where the bot is added,
+    calculating the total size of the network/community.
+    Admin/Owner only.
+    """
+    status_msg = await message.reply_text("🔍 **Scanning all channels and groups to count total community members...**\n<i>Please wait a few seconds...</i>", parse_mode=ParseMode.HTML)
+    
+    from toxic.core.mongo.db import get_all_broadcast_chats, joined_chats_db
+    from toxic.core.mongo.users_db import get_all_registered_users
+    import asyncio
+
+    # Discover chats from DB and active bot dialogs
+    seen_chat_ids = set()
+    chat_list = []
+
+    # 1. From database records
+    try:
+        all_db_chats = await get_all_broadcast_chats()
+        for c in all_db_chats:
+            cid = c.get("chat_id")
+            if cid and cid < 0 and cid not in seen_chat_ids:
+                seen_chat_ids.add(cid)
+                chat_list.append((cid, c.get("title", f"Chat {cid}"), c.get("chat_type")))
+    except Exception as e:
+        print(f"[CommunityCount] Error loading from DB: {e}")
+
+    # 2. From active bot dialogs if available
+    try:
+        async for dialog in client.get_dialogs():
+            chat = dialog.chat
+            if chat and chat.id < 0 and chat.id not in seen_chat_ids:
+                seen_chat_ids.add(chat.id)
+                c_type = "channel" if chat.type == ChatType.CHANNEL else "supergroup"
+                chat_list.append((chat.id, chat.title or str(chat.id), c_type))
+            await asyncio.sleep(0.02)
+    except Exception:
+        pass
+
+    total_channels = 0
+    total_groups = 0
+    total_channel_members = 0
+    total_group_members = 0
+    breakdown_lines = []
+
+    for cid, title, c_type in chat_list:
+        try:
+            chat_obj = await client.get_chat(cid)
+            members = getattr(chat_obj, "members_count", 0) or 0
+            is_ch = chat_obj.type == ChatType.CHANNEL or c_type == "channel"
+            if is_ch:
+                total_channels += 1
+                total_channel_members += members
+            else:
+                total_groups += 1
+                total_group_members += members
+
+            breakdown_lines.append({
+                "id": cid,
+                "title": chat_obj.title or title,
+                "type": "Channel 📢" if is_ch else "Group 👥",
+                "members": members
+            })
+        except Exception:
+            # Bot might have been removed or lost access
+            continue
+        await asyncio.sleep(0.05)
+
+    # Registered Bot DM Users
+    total_bot_users = 0
+    try:
+        reg_users = await get_all_registered_users()
+        total_bot_users = len(reg_users)
+    except Exception:
+        pass
+
+    grand_total = total_channel_members + total_group_members
+
+    # Sort top 10 channels/groups by member count
+    breakdown_lines.sort(key=lambda x: x["members"], reverse=True)
+    top_chats_text = ""
+    for idx, c in enumerate(breakdown_lines[:15], 1):
+        top_chats_text += f"{idx}. <b>{c['title']}</b> ({c['type']}): <code>{c['members']:,}</code> members\n"
+
+    result_text = (
+        f"<blockquote>🌐 <b>COMMUNITY & NETWORK MEMBER STATS</b> 🌐</blockquote>\n\n"
+        f"👑 <b>Total Community Reach:</b> <code>{grand_total:,}</code> members\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 <b>Channels:</b> <code>{total_channels}</code> channels\n"
+        f"👥 <b>Channel Members:</b> <code>{total_channel_members:,}</code>\n\n"
+        f"🏢 <b>Groups / Supergroups:</b> <code>{total_groups}</code> groups\n"
+        f"👥 <b>Group Members:</b> <code>{total_group_members:,}</code>\n\n"
+        f"🤖 <b>Direct Bot Users (DMs):</b> <code>{total_bot_users:,}</code> users\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b><u>Top Channels & Groups Breakdown:</u></b>\n"
+        f"{top_chats_text or '<i>No channels or groups accessible.</i>'}\n"
+        f"<i>Note: Data is refreshed live via Telegram API.</i>"
+    )
+
+    try:
+        await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.reply_text(result_text, parse_mode=ParseMode.HTML)
+
