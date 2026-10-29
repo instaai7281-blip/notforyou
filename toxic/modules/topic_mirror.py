@@ -3810,19 +3810,43 @@ async def run_single_link_mirror(
         )
         try:
             target_thread_id = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
+            # 1. Send directly inside the specific target topic thread if applicable
             if target_thread_id:
+                try:
+                    await app.send_message(
+                        chat_id=tgt_chat_id,
+                        text=completion_msg,
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=target_thread_id
+                    )
+                    print(f"[SingleLinkMirror] Sent completion msg to topic thread {target_thread_id}")
+                except Exception as t_err:
+                    print(f"[SingleLinkMirror] Topic thread completion send error: {t_err}")
+
+            # 2. Also send ALWAYS into General Topic (Main forum feed) so user never misses completion
+            sent_to_general = False
+            try:
                 await app.send_message(
                     chat_id=tgt_chat_id,
                     text=completion_msg,
                     parse_mode=ParseMode.HTML,
-                    reply_to_message_id=target_thread_id
+                    reply_to_message_id=1
                 )
-            else:
-                await app.send_message(
-                    chat_id=tgt_chat_id,
-                    text=completion_msg,
-                    parse_mode=ParseMode.HTML
-                )
+                sent_to_general = True
+                print(f"[SingleLinkMirror] Sent completion msg to General Topic in {tgt_chat_id}")
+            except Exception:
+                pass
+
+            if not sent_to_general and not target_thread_id:
+                try:
+                    await app.send_message(
+                        chat_id=tgt_chat_id,
+                        text=completion_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                    print(f"[SingleLinkMirror] Sent completion msg directly to chat {tgt_chat_id}")
+                except Exception:
+                    pass
         except Exception as send_err:
             print(f"[SingleLinkMirror] Failed sending completion msg to target: {send_err}")
 
