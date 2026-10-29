@@ -91,7 +91,8 @@ async def free_user_strict_callback_guard(client, query: CallbackQuery):
             "see_plan",
             "plans",
             "buy_plan",
-            "check_subscription"
+            "check_subscription",
+            "prem_"
         )
         if any(data.startswith(p) for p in allowed_prefixes):
             return  # Allow bio verification and plan purchase callbacks

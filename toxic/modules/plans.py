@@ -1545,3 +1545,169 @@ async def free_access_callback_handler(client, query: CallbackQuery):
         await query.answer(f"📢 Announcing promo to {len(users)} users in background!", show_alert=True)
         return
     
+
+
+# ─────────────────────────────────────────────────────────────
+# 💎 PREMIUM CENTER (EXACT STYLING AS REQUESTED BY LO)
+# ─────────────────────────────────────────────────────────────
+
+def get_premium_center_markup():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Save restrict Bot", callback_data="prem_saver_bot"),
+            InlineKeyboardButton("Topic Mirror Bot", callback_data="prem_mirror_bot")
+        ],
+        [
+            InlineKeyboardButton("❓ Help", callback_data="prem_help_steps")
+        ]
+    ])
+
+def format_stylized_name(name: str) -> str:
+    """Format user name with stylish unicode glyphs matching LO's screenshot"""
+    if not name:
+        return "Tⱺxic"
+    # subtle aesthetic touch: replace standard 'o' with 'ⱺ'
+    styled = name.replace("o", "ⱺ").replace("O", "ⱺ")
+    return f"{styled} ✯"
+
+@app.on_message(filters.command(["premium", "premiumcenter", "store", "buy"]))
+async def premium_center_cmd(client: Client, message):
+    user = message.from_user
+    raw_name = user.first_name if user and user.first_name else "Tⱺxic"
+    styled_name = format_stylized_name(raw_name)
+
+    text = (
+        "💎 <b>PREMIUM CENTER</b>\n\n"
+        f"👋 <b>WELCOME,</b> 🖤 <b>{styled_name}</b>\n\n"
+        "⚡ <b>PURCHASE PREMIUM FOR ANY SUPPORTED BOT.</b>\n\n"
+        "💎 <b>AUTOMATIC ACTIVATION • 🚫 NO SCREENSHOT</b>\n\n"
+        "❓ <b>TAP HELP FOR PAYMENT STEPS.</b>"
+    )
+
+    await message.reply_text(
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_premium_center_markup(),
+        disable_web_page_preview=True
+    )
+
+
+@app.on_callback_query(filters.regex(r"^prem_main_menu$"))
+async def prem_main_menu_cb(client: Client, query: CallbackQuery):
+    user = query.from_user
+    raw_name = user.first_name if user and user.first_name else "Tⱺxic"
+    styled_name = format_stylized_name(raw_name)
+
+    text = (
+        "💎 <b>PREMIUM CENTER</b>\n\n"
+        f"👋 <b>WELCOME,</b> 🖤 <b>{styled_name}</b>\n\n"
+        "⚡ <b>PURCHASE PREMIUM FOR ANY SUPPORTED BOT.</b>\n\n"
+        "💎 <b>AUTOMATIC ACTIVATION • 🚫 NO SCREENSHOT</b>\n\n"
+        "❓ <b>TAP HELP FOR PAYMENT STEPS.</b>"
+    )
+    try:
+        await query.message.edit_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_premium_center_markup(),
+            disable_web_page_preview=True
+        )
+    except Exception:
+        await query.message.reply_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_premium_center_markup(),
+            disable_web_page_preview=True
+        )
+    await query.answer()
+
+
+@app.on_callback_query(filters.regex(r"^prem_saver_bot$"))
+async def prem_saver_bot_cb(client: Client, query: CallbackQuery):
+    text = (
+        "📥 <b>SAVE RESTRICT CONTENT (SRC) BOT PLAN</b>\n\n"
+        "<blockquote>⚡ <b>FEATURES INCLUDED:</b>\n"
+        "• Download & Forward Restricted Private Channel Media\n"
+        "• Server-Side Zero Bandwidth Copy Mode (Ultra-Fast 50ms)\n"
+        "• Bulk Batch Processing (Up to 5,000 files in 1 command)\n"
+        "• Custom Thumbnails, PDF Watermarks & Clean Captions\n"
+        "• Bypass Telegram Copy Protection & Forward Lock</blockquote>\n\n"
+        "<b>💰 PRICING:</b>\n"
+        "• <b>1 Month:</b> <code>₹149</code> / <code>$2.00 USD</code>\n"
+        "• <b>3 Months:</b> <code>₹299</code> / <code>$4.00 USD</code>\n\n"
+        "<i>Instant automatic activation upon payment confirmation! 🚀</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💳 Buy 1 Month (₹149)", url="https://t.me/CrazyxDeveloper_Bot"),
+            InlineKeyboardButton("💎 Buy 3 Months (₹299)", url="https://t.me/CrazyxDeveloper_Bot")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Premium Center", callback_data="prem_main_menu")
+        ]
+    ])
+    try:
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    await query.answer()
+
+
+@app.on_callback_query(filters.regex(r"^prem_mirror_bot$"))
+async def prem_mirror_bot_cb(client: Client, query: CallbackQuery):
+    text = (
+        "👑 <b>TOPIC MIRROR & FORUM CLONE PRO PLAN</b>\n\n"
+        "<blockquote>🌟 <b>EXCLUSIVE VIP CAPABILITIES:</b>\n"
+        "• 1-Click Complete Supergroup Forum Clone (All Topics & Icons)\n"
+        "• Channel-to-Topics (<code>/c2t</code>) Auto Caption Route Engine\n"
+        "• 1-Click Live Scan & Sync Missing Content (<code>/sync_mirror</code>)\n"
+        "• Daily Scheduled Auto-Update & Real-Time Sync\n"
+        "• Includes FULL Save Restrict (SRC) Plan automatically!</blockquote>\n\n"
+        "<b>💰 PRICING:</b>\n"
+        "• <b>1 Month:</b> <code>₹299</code> / <code>$4.00 USD</code>\n"
+        "• <b>3 Months:</b> <code>₹599</code> / <code>$8.00 USD</code>\n\n"
+        "<i>Unlock unlimited supergroup cloning at maximum server speed! ⚡</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👑 Buy 1 Month (₹299)", url="https://t.me/CrazyxDeveloper_Bot"),
+            InlineKeyboardButton("🌟 Buy 3 Months (₹599)", url="https://t.me/CrazyxDeveloper_Bot")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Premium Center", callback_data="prem_main_menu")
+        ]
+    ])
+    try:
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    await query.answer()
+
+
+@app.on_callback_query(filters.regex(r"^prem_help_steps$"))
+async def prem_help_steps_cb(client: Client, query: CallbackQuery):
+    text = (
+        "❓ <b>PAYMENT & ACTIVATION STEPS</b>\n\n"
+        "<blockquote><b>1️⃣ CHOOSE YOUR BOT & DURATION:</b>\n"
+        "Select either Save Restrict Bot or Topic Mirror Bot above.\n\n"
+        "<b>2️⃣ PAYMENT METHODS SUPPORTED:</b>\n"
+        "• 🇮🇳 <b>UPI:</b> PhonePe / GooglePay / Paytm / QR\n"
+        "• 🌐 <b>Crypto:</b> USDT (BEP20 / TRC20 / TON)\n"
+        "• 🎁 <b>Amazon / Flipkart Gift Cards</b>\n\n"
+        "<b>3️⃣ INSTANT ACTIVATION:</b>\n"
+        "Send your User ID (<code>/id</code>) to our Admin bot. Your premium access unlocks automatically in under 2 minutes!</blockquote>\n\n"
+        "👉 <b>Admin Support:</b> @CrazyxDeveloper_Bot"
+    )
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 Chat with Admin", url="https://t.me/CrazyxDeveloper_Bot")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Premium Center", callback_data="prem_main_menu")
+        ]
+    ])
+    try:
+        await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb, disable_web_page_preview=True)
+    await query.answer()
