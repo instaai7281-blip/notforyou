@@ -28,6 +28,17 @@ SERVICE_FILTER = (
 
 @app.on_message(SERVICE_FILTER, group=-10)
 async def auto_delete_all_service_messages(client, message: Message):
+    # CRITICAL: NEVER delete Forum Topic creation, edit, or status messages!
+    # In Telegram, deleting a topic's creation service message destroys/deletes the entire forum topic!
+    if (
+        getattr(message, "forum_topic_created", None)
+        or getattr(message, "forum_topic_edited", None)
+        or getattr(message, "forum_topic_closed", None)
+        or getattr(message, "forum_topic_reopened", None)
+        or getattr(message, "general_forum_topic_hidden", None)
+        or getattr(message, "general_forum_topic_unhidden", None)
+    ):
+        return
     """
     Auto-deletes all service messages in groups and supergroups:
     - User joined the group (via invite link, added by admin/user, or request)
@@ -79,6 +90,15 @@ async def auto_delete_all_service_messages(client, message: Message):
 @app.on_message(filters.group | filters.channel, group=-9)
 async def fallback_check_service_actions(client, message: Message):
     try:
+        if (
+            getattr(message, "forum_topic_created", None)
+            or getattr(message, "forum_topic_edited", None)
+            or getattr(message, "forum_topic_closed", None)
+            or getattr(message, "forum_topic_reopened", None)
+            or getattr(message, "general_forum_topic_hidden", None)
+            or getattr(message, "general_forum_topic_unhidden", None)
+        ):
+            return
         is_service = (
             getattr(message, "service", False)
             or getattr(message, "new_chat_members", None)
@@ -141,6 +161,9 @@ async def raw_service_cleaner(client, update, users, chats):
                 continue
 
             action = getattr(raw_msg, "action", None)
+            # NEVER delete Forum Topic actions (TopicCreate, TopicEdit)
+            if isinstance(action, (raw.types.MessageActionTopicCreate, raw.types.MessageActionTopicEdit)):
+                continue
             if action:
                 msg_id = getattr(raw_msg, "id", None)
                 if msg_id:
@@ -197,8 +220,10 @@ async def lock_all_group_permissions(client, chat_id: int):
 
 
 # Auto-lock permissions when the bot is added or promoted in a group
-@app.on_chat_member_updated()
-async def auto_lock_permissions_on_bot_added(client, chat_member_updated: ChatMemberUpdated):
+# NOTE: Disabled auto-locking of chat permissions because setting can_manage_topics=False
+# was preventing users and bots from creating/managing forum topics!
+# @app.on_chat_member_updated()
+async def auto_lock_permissions_on_bot_added_disabled(client, chat_member_updated: ChatMemberUpdated):
     try:
         my_id = (await client.get_me()).id
         new_member = chat_member_updated.new_chat_member
@@ -298,6 +323,15 @@ async def clean_all_existing_service_messages(client: Client, message: Message):
             # If in a forum topic, only match messages in that topic
             m_topic = getattr(m, "message_thread_id", None)
             if topic_id and m_topic != topic_id:
+                continue
+
+            # Skip any forum topic message
+            if (
+                getattr(m, "forum_topic_created", None)
+                or getattr(m, "forum_topic_edited", None)
+                or getattr(m, "forum_topic_closed", None)
+                or getattr(m, "forum_topic_reopened", None)
+            ):
                 continue
 
             is_service = (

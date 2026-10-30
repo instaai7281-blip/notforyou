@@ -2192,6 +2192,16 @@ def build_mirror_hub_keyboard(user_id: int, saved_sessions: list) -> InlineKeybo
         InlineKeyboardButton("⚡ Channel ➔ Topics", callback_data="tm_c2t"),
         InlineKeyboardButton("🗑️ Clear All Sessions", callback_data="tm_clear")
     ])
+    # Extract unique target groups
+    unique_tgts = set()
+    for s in saved_sessions:
+        t_id = s.get("tgt_chat_id")
+        if t_id:
+            unique_tgts.add(t_id)
+    if unique_tgts:
+        buttons.append([
+            InlineKeyboardButton(f"📢 Broadcast to Target Groups ({len(unique_tgts)})", callback_data="tm_bcast_targets")
+        ])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -5982,3 +5992,207 @@ async def c2t_callback(_, query: CallbackQuery):
         return
     await query.answer()
     await start_c2t_flow(user_id, query.message, is_callback=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 📢 TARGET GROUPS BROADCASTER (VIP ONLY)
+# Broadcasts a custom message/media/link ONLY to saved target groups
+# ═══════════════════════════════════════════════════════════════════
+
+@app.on_callback_query(filters.regex(r"^tm_bcast_targets$"))
+async def target_groups_broadcast_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+    await query.answer()
+
+    saved_sessions = await db.get_user_mirror_sessions(user_id)
+    if not saved_sessions:
+        await query.answer("⚠️ No saved mirror sessions found!", show_alert=True)
+        return
+
+    # Extract unique targets preserving chat title
+    unique_targets = {}
+    for s in saved_sessions:
+        t_id = s.get("tgt_chat_id")
+        if t_id:
+            title = (s.get("tgt_title") or f"{t_id}").strip()
+            unique_targets[t_id] = title
+
+    if not unique_targets:
+        await query.answer("⚠️ No valid target groups found in your saved sessions!", show_alert=True)
+        return
+
+    # Build list of targets
+    targets_preview = "\n".join([f"• <b>{title}</b> (<code>{cid}</code>)" for cid, title in list(unique_targets.items())[:15]])
+    if len(unique_targets) > 15:
+        targets_preview += f"\n• <i>...and {len(unique_targets) - 15} more groups</i>"
+
+    prompt_text = (
+        f"📢 <b>TARGET GROUPS BROADCASTER</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Found <b>{len(unique_targets)}</b> unique target premium group(s):\n\n"
+        f"{targets_preview}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📥 <b>Send or forward the message you want to broadcast now:</b>\n"
+        f"• You can send <b>Text with Links</b> (e.g. VIP Paid Group link)\n"
+        f"• Or send <b>Photos, Videos, or Documents</b> with captions\n\n"
+        f"👉 <i>Send <code>/cancel</code> to abort.</i>"
+    )
+
+    try:
+        msg_resp = await client.ask(
+            chat_id=user_id,
+            text=prompt_text,
+            parse_mode=ParseMode.HTML,
+            timeout=300
+        )
+    except asyncio.TimeoutError:
+        await app.send_message(user_id, "⌛ <b>Broadcast session timed out.</b> Try again anytime from the hub.")
+        return
+    except Exception as e:
+        print(f"[TargetBcast] Ask error: {e}")
+        return
+
+    if not msg_resp or (msg_resp.text and msg_resp.text.strip().lower() in ["/cancel", "cancel", "abort"]):
+        await app.send_message(user_id, "❌ <b>Broadcast cancelled.</b>")
+        return
+
+    # Confirmation Prompt
+    confirm_text = (
+        f"⚠️ <b>CONFIRM BROADCAST TO TARGET GROUPS</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Target Groups:</b> <code>{len(unique_targets)}</code>\n"
+        f"• <b>Type:</b> <i>{msg_resp.media.name if getattr(msg_resp, 'media', None) else 'Text Message'}</i>\n\n"
+        f"This will send your message directly into each saved target supergroup!\n"
+        f"Are you sure you want to proceed?"
+    )
+    
+    # Store broadcast payload in active_mirrors temporarily
+    bcast_key = f"bcast_{user_id}_{int(time.time())}"
+    active_mirrors[bcast_key] = {
+        "msg_id": msg_resp.id,
+        "from_chat_id": user_id,
+        "targets": unique_targets
+    }
+
+    confirm_kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🚀 Send Broadcast Now", callback_data=f"tm_do_bcast_{bcast_key}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="tm_hub")
+        ]
+    ])
+    await app.send_message(user_id, confirm_text, parse_mode=ParseMode.HTML, reply_markup=confirm_kb)
+
+
+@app.on_callback_query(filters.regex(r"^tm_do_bcast_(.+)$"))
+async def execute_target_groups_broadcast(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    match = re.search(r"^tm_do_bcast_(.+)$", query.data)
+    if not match:
+        await query.answer("❌ Invalid broadcast session.", show_alert=True)
+        return
+
+    bcast_key = match.group(1)
+    bcast_data = active_mirrors.pop(bcast_key, None)
+    if not bcast_data:
+        await query.answer("⚠️ Broadcast session expired or already executed!", show_alert=True)
+        return
+
+    await query.answer("🚀 Starting broadcast...", show_alert=False)
+    status_msg = await query.message.edit_text("⏳ <b>Broadcasting to saved target groups in progress...</b>", parse_mode=ParseMode.HTML)
+
+    msg_id = bcast_data["msg_id"]
+    from_chat_id = bcast_data["from_chat_id"]
+    targets = bcast_data["targets"]
+
+    success_count = 0
+    failed_count = 0
+    failed_details = []
+
+    total_targets = len(targets)
+    idx = 0
+
+    for tgt_id, title in targets.items():
+        idx += 1
+        try:
+            # Send/copy message directly into target chat (uses General topic if forum)
+            copied = await client.copy_message(
+                chat_id=tgt_id,
+                from_chat_id=from_chat_id,
+                message_id=msg_id
+            )
+            if copied:
+                success_count += 1
+            else:
+                failed_count += 1
+                failed_details.append(f"• {title}: No response")
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            try:
+                copied = await client.copy_message(
+                    chat_id=tgt_id,
+                    from_chat_id=from_chat_id,
+                    message_id=msg_id
+                )
+                if copied:
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                failed_count += 1
+                failed_details.append(f"• {title}: {e}")
+        except Exception as e:
+            # Fallback to userbot if bot lacks write permission in this group
+            ub_sent = False
+            try:
+                from toxic.core.userbot_manager import _active_userbots
+                for ub in _active_userbots.values():
+                    if ub and getattr(ub, "is_connected", False):
+                        await ub.copy_message(
+                            chat_id=tgt_id,
+                            from_chat_id=from_chat_id,
+                            message_id=msg_id
+                        )
+                        ub_sent = True
+                        success_count += 1
+                        break
+            except Exception:
+                pass
+
+            if not ub_sent:
+                failed_count += 1
+                failed_details.append(f"• {title}: {str(e)[:40]}")
+
+        # Update progress every 3 groups or at the end
+        if idx % 3 == 0 or idx == total_targets:
+            try:
+                prog_text = (
+                    f"📢 <b>TARGET GROUPS BROADCASTING...</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 <b>Progress:</b> <code>{idx}/{total_targets}</code>\n"
+                    f"✅ <b>Sent:</b> <code>{success_count}</code>\n"
+                    f"❌ <b>Failed:</b> <code>{failed_count}</code>"
+                )
+                await status_msg.edit_text(prog_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        await asyncio.sleep(0.5)
+
+    # Final summary report
+    summary_text = (
+        f"✅ <b>TARGET GROUPS BROADCAST COMPLETED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 <b>Total Targets:</b> <code>{total_targets}</code>\n"
+        f"✅ <b>Successfully Delivered:</b> <code>{success_count}</code>\n"
+        f"❌ <b>Failed / Inaccessible:</b> <code>{failed_count}</code>"
+    )
+    if failed_details:
+        summary_text += "\n\n<b>Failed Groups:</b>\n" + "\n".join(failed_details[:8])
+
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Topic Hub", callback_data="tm_hub")]])
+    try:
+        await status_msg.edit_text(summary_text, parse_mode=ParseMode.HTML, reply_markup=back_kb)
+    except Exception:
+        await app.send_message(user_id, summary_text, parse_mode=ParseMode.HTML, reply_markup=back_kb)
