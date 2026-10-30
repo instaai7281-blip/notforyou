@@ -150,12 +150,21 @@ def clean_text_advanced(text, user_tag, delete_words=None, replacements=None):
     if user_tag:
         text = re.sub(r'@\w+', user_tag, text)
     
+    # Clean WhatsApp links and channels
+    text = re.sub(r'(?im)^[^\n]*(?:whatsapp|wa\.me)[^\n]*$', '', text)
+    text = re.sub(r'(?i)https?://(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://api\.whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)[ \t\-_—>➤➢•*|~:👇👉]*whatsapp[\s\-_]*(?:link|channel|group|community)?[\s_:➤>–\-👇👉]*', '', text)
+
     # Stylize brackets
     text = re.sub(r'[({[]', '〘', text)
     text = re.sub(r'[)}\]]', '〙', text)
     
-    # Rebrand extraction markers
-    text = re.sub(r'(?i)(Extracted|Downloaded|Download|Uploaded|Upload|Forwarded)[\s_]*By[\s_:➤>–\-]*[^\n]*', '', text)
+    # Rebrand extraction markers (with any leading emojis or spaces)
+    text = re.sub(r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded)[\s_]*By[\s_:➤>–\-]*[^\n]*', '', text)
     
     if delete_words:
         for word in delete_words:
@@ -249,6 +258,15 @@ def clean_text_message(text, sender=None):
     # Remove HTML tags
     text = re.sub(r'<[^>]+>', '', text)
     
+    # Clean WhatsApp links and channels
+    text = re.sub(r'(?im)^[^\n]*(?:whatsapp|wa\.me)[^\n]*$', '', text)
+    text = re.sub(r'(?i)https?://(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://api\.whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)[ \t\-_—>➤➢•*|~:👇👉]*whatsapp[\s\-_]*(?:link|channel|group|community)?[\s_:➤>–\-👇👉]*', '', text)
+
     # Remove ALL URLs except YouTube
     text = strip_links_except_youtube(text)
     
@@ -266,7 +284,7 @@ def clean_text_message(text, sender=None):
         r"(?i)[*_]*let'?s\s*help[*_]*",
         r'✧\s*𝚃𝙷𝙴\s*𝚂𝚃𝚄𝙳𝚈\s*𝚅𝙰𝚄𝙻𝚃\s*✧\s*🏝️?',
         r'(?i)toxic',
-        r'(?i)(Extracted|Downloaded|Download|Uploaded|Upload|Forwarded)[\s_]*By[\s_:➤>–\-]*[^\n]*',
+        r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded)[\s_]*By[\s_:➤>–\-]*[^\n]*',
         r'(?i)powered\s*by[^\n]*',
         r'(?i)via\s*@\w+',
         r'(?i)bot:\s*@\w+',
@@ -1877,15 +1895,30 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
     # Remove ALL @mentions
     original_caption = re.sub(r'@\w+', '', original_caption)
 
+    # Remove ALL WhatsApp links, channels, groups & promotional lines
+    original_caption = re.sub(r'(?im)^[^\n]*(?:whatsapp|wa\.me)[^\n]*$', '', original_caption)
+    original_caption = re.sub(r'(?i)https?://(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', original_caption)
+    original_caption = re.sub(r'(?i)(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', original_caption)
+    original_caption = re.sub(r'(?i)https?://wa\.me/[^\s]+', '', original_caption)
+    original_caption = re.sub(r'(?i)wa\.me/[^\s]+', '', original_caption)
+    original_caption = re.sub(r'(?i)https?://api\.whatsapp\.com/[^\s]+', '', original_caption)
+    original_caption = re.sub(r'(?i)[ \t\-_—>➤➢•*|~:👇👉]*whatsapp[\s\-_]*(?:link|channel|group|community)?[\s_:➤>–\-👇👉]*', '', original_caption)
+
     # Remove ALL URLs except YouTube
     original_caption = strip_links_except_youtube(original_caption)
 
-    # Replace "Extracted/Downloaded/Uploaded By" patterns
+    # Replace "Extracted/Downloaded/Uploaded By" patterns (with any leading emojis or spaces)
     original_caption = re.sub(
-        r'(?i)(📩|⏫)?\s*(Extracted|Downloaded|Download|Uploaded|Upload|Forwarded)[\s_]*By[\s_:➤>–\-]*[^\n]*',
+        r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*By[\s_:➤>–\-]*[^\n]*$',
         '',
         original_caption
     )
+
+    # Clean leftover promo and trailing divider lines
+    original_caption = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:💫📥⏫📩⭐️⭐⚝✨🌟🖤🦋\s]*$', '', original_caption)
+    original_caption = original_caption.rstrip()
+    while re.search(r'(\n[ \t•·*═\-_—~─━]+)+$', original_caption):
+        original_caption = re.sub(r'(\n[ \t•·*═\-_—~─━]+)+$', '', original_caption).strip()
 
     # Remove markdown artifacts
     original_caption = re.sub(r'\*{3,}', '', original_caption)

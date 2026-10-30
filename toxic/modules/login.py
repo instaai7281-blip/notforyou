@@ -57,8 +57,10 @@ async def delete_session_files(user_id: int) -> bool:
         pass
 
     try:
-        from toxic.core.mongo.db import db as user_data_db
-        await user_data_db.update_one({"_id": user_id}, {"$unset": {"session": "", "sessions": ""}})
+        from toxic.core.userbot_manager import get_current_bot_username
+        from toxic.core.mongo.db import remove_user_session
+        bot_uname = get_current_bot_username()
+        await remove_user_session(user_id, bot_name=bot_uname)
     except Exception:
         pass
 
@@ -132,17 +134,24 @@ async def generate_session(client, message: Message):
     if joined == 1:
         return
 
-    # Check if user is already logged in (checks dedicated or shared session across bots)
-    session_string = await db.get_user_session(user_id)
+    # Check if user is already logged in for THIS specific bot
+    try:
+        from toxic.core.userbot_manager import get_current_bot_username
+        bot_uname = get_current_bot_username()
+    except Exception:
+        bot_uname = "default_bot"
+
+    session_string = await db.get_user_session(user_id, bot_name=bot_uname, allow_fallback=False)
 
     if session_string:
         status_card = (
             "📱 <b>USERBOT ACCOUNT CONTROL PANEL</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+            f"🤖 <b>Bot:</b> <code>@{bot_uname}</code>\n"
             "⚡ <b>Session Status:</b> <code>CONNECTED & ACTIVE ✅</code>\n"
-            "🛡️ <b>Database Security:</b> <code>Encrypted Session String</code>\n\n"
-            "ℹ️ <i>Your Userbot session is active and ready to access private/restricted source channels for cloning!</i>\n\n"
+            "🛡️ <b>Database Security:</b> <code>Dedicated Bot Session</code>\n\n"
+            "ℹ️ <i>Your Userbot session is active and dedicated for this bot. You can use separate Telegram accounts on each bot!</i>\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "Use the control buttons below to manage your account session:"
         )
@@ -153,7 +162,25 @@ async def generate_session(client, message: Message):
         )
         return
 
-    # If not logged in, proceed to login flow directly
+    # If not logged in on this bot, check if another bot has a session to show helpful notice
+    other_bot_session = await db.get_user_session(user_id, bot_name=bot_uname, allow_fallback=True)
+    if other_bot_session:
+        notice_card = (
+            f"📱 <b>USERBOT SETUP FOR @{bot_uname}</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "ℹ️ <b>Multi-Bot Account Support:</b>\n"
+            "Aapka dusre bot me already ek account logged in hai.\n"
+            "Is bot (@" + bot_uname + ") me aap <b>koi bhi alag number</b> se login kar sakte hain!\n\n"
+            "👉 Niche <b>📲 Start Userbot Login</b> par click karke is bot ke liye alag account number connect karein:"
+        )
+        await message.reply_text(
+            notice_card,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_login_status_keyboard(is_logged_in=False)
+        )
+        return
+
+    # If completely not logged in anywhere, proceed to login flow directly
     await start_login_flow(client, user_id, message)
 
 

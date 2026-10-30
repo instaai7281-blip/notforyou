@@ -259,13 +259,24 @@ async def clean_and_brand_caption(user_id: int, original_caption: str) -> str:
     ]
     for tag in other_tags:
         text = text.replace(tag, '')
+    text = re.sub(re.escape(branding_tag), '', text, flags=re.IGNORECASE)
+    text = re.sub(r'(?i)[*_]*stolen[\s_]*happiness[*_]*', '', text)
 
-    # 6. Remove any extraction/download lines including leading arrows/bullets
-    extraction_pattern = r'(?im)^[ \t\-_—>➤➢•*|~:]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*By[\s_:➤>–\-]*[^\n]*$'
+    # 6. Remove all WhatsApp links, channels, groups & promotional lines
+    text = re.sub(r'(?im)^[^\n]*(?:whatsapp|wa\.me)[^\n]*$', '', text)
+    text = re.sub(r'(?i)https?://(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)(?:www\.)?(?:chat\.)?whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)wa\.me/[^\s]+', '', text)
+    text = re.sub(r'(?i)https?://api\.whatsapp\.com/[^\s]+', '', text)
+    text = re.sub(r'(?i)[ \t\-_—>➤➢•*|~:👇👉]*whatsapp[\s\-_]*(?:link|channel|group|community)?[\s_:➤>–\-👇👉]*', '', text)
+
+    # 7. Remove any extraction/download lines including leading emojis, arrows, or bullets
+    extraction_pattern = r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*By[\s_:➤>–\-]*[^\n]*$'
     text = re.sub(extraction_pattern, '', text)
     text = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:]*(?:powered\s*by|bot:|via\s*⚝)[^\n]*$', '', text)
 
-    # 7. Remove other unwanted promoter phrases
+    # 8. Remove other unwanted promoter phrases
     unwanted_phrases = [
         r'(?i)[*_]*team[\s_\-\.]*jnc[*_]*',
         r'(?i)[*_]*team[\s_\-\.]*sp[ay]+[*_]*',
@@ -276,10 +287,15 @@ async def clean_and_brand_caption(user_id: int, original_caption: str) -> str:
     for phrase in unwanted_phrases:
         text = re.sub(phrase, '', text)
 
-    # 8. Remove any trailing lines with arrows/bullets that only contain junk or leftover tags
-    text = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:]*(?:⚝|⛤|🖤|🦋|\s)*$', '', text)
+    # 9. Remove any trailing lines with arrows/bullets that only contain junk or leftover tags
+    text = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:💫📥⏫📩⭐️⭐⚝✨🌟🖤🦋\s]*$', '', text)
 
-    # 9. Apply user custom clean words & text replacements from database
+    # 10. Strip trailing divider lines at the bottom of content (e.g. •═════════════•)
+    text = text.rstrip()
+    while re.search(r'(\n[ \t•·*═\-_—~─━]+)+$', text):
+        text = re.sub(r'(\n[ \t•·*═\-_—~─━]+)+$', '', text).strip()
+
+    # 11. Apply user custom clean words & text replacements from database
     clean_words = user_data.get("clean_words") or []
     for word in clean_words:
         if word:
@@ -290,23 +306,21 @@ async def clean_and_brand_caption(user_id: int, original_caption: str) -> str:
     if to_replace and replace_txt:
         text = text.replace(to_replace, replace_txt)
 
-    # 10. Clean whitespace & multiple empty lines
+    # 12. Clean whitespace & multiple empty lines
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
 
-    # 11. Apply custom template caption if configured
+    # 13. Apply custom template caption or append clean branding tag
     custom_cap = user_data.get("caption")
     if custom_cap:
         text = f"{custom_cap}\n\n{text}".strip()
     else:
-        # Ensure branding tag is present at the bottom
-        if branding_tag not in text:
-            text = f"{text}\n\n> **{branding_tag}**".strip()
+        text = f"{text}\n\n> **{branding_tag}**".strip()
 
-    # 12. Clean any stray leading arrows before blockquote markers
+    # 14. Clean any stray leading arrows before blockquote markers
     text = re.sub(r'(?m)^[ \t\-_—>➤➢•*|~:]*>\s*', '> ', text)
     
-    # 13. Apply bold styling to all caption lines while preserving blockquotes
+    # 15. Apply bold styling to all caption lines while preserving blockquotes
     text = make_caption_bold(text)
     return text.strip()
 

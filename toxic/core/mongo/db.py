@@ -54,7 +54,7 @@ def get_current_bot_name() -> str:
         pass
     return "default_bot"
 
-async def get_user_session(user_id: int, bot_name: str = None):
+async def get_user_session(user_id: int, bot_name: str = None, allow_fallback: bool = True):
     """Retrieves session string. Seamlessly shares session across all bots or fallbacks cleanly."""
     if not bot_name:
         bot_name = get_current_bot_name()
@@ -65,11 +65,12 @@ async def get_user_session(user_id: int, bot_name: str = None):
     if isinstance(sessions, dict):
         if bot_name in sessions and sessions[bot_name]:
             return sessions[bot_name]
-        # Fallback to any valid session saved by another bot
-        for b_name, s_val in sessions.items():
-            if s_val:
-                return s_val
-    return data.get("session")
+        if allow_fallback:
+            # Fallback to any valid session saved by another bot
+            for b_name, s_val in sessions.items():
+                if s_val:
+                    return s_val
+    return data.get("session") if allow_fallback else None
 
 async def set_session(user_id, session, bot_name: str = None):
     """Saves session with dedicated per-bot partition and shared fallback so all bots can access it."""
