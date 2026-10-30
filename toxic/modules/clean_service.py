@@ -6,7 +6,7 @@
 # ---------------------------------------------------
 
 import asyncio
-from pyrogram import filters, enums, raw
+from pyrogram import Client, filters, enums, raw
 from pyrogram.types import Message, ChatMemberUpdated, ChatPermissions
 from pyrogram.errors import RPCError, FloodWait
 from toxic import app
