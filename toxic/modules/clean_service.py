@@ -245,7 +245,7 @@ async def auto_lock_permissions_on_bot_added_disabled(client, chat_member_update
 # ─────────────────────────────────────────────────────────────
 
 @app.on_message(filters.command(["del", "delete"]) & (filters.group | filters.channel))
-async def delete_single_replied_message(client: Client, message: Message):
+async def delete_single_replied_message(client, message: Message):
     """
     Reply to ANY message (especially stubborn service messages like 'joined via invite link')
     with /del or /delete to purge it instantly.
@@ -292,7 +292,7 @@ async def delete_single_replied_message(client: Client, message: Message):
 
 
 @app.on_message(filters.command(["cleanservice", "cleanservices", "cleansvc", "purgeservice"]) & (filters.group | filters.channel))
-async def clean_all_existing_service_messages(client: Client, message: Message):
+async def clean_all_existing_service_messages(client, message: Message):
     """
     Sweeps through recent messages in the group/topic and deletes ALL service messages:
     - User joined via invite link / added
