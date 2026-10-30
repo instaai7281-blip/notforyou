@@ -59,7 +59,16 @@ async def auto_delete_all_service_messages(client, message: Message):
                 except Exception:
                     pass
             except RPCError as rpc_err:
-                print(f"[ServiceClean] ⚠️ Could not delete service message {msg_id} in {chat.id}: {rpc_err}")
+                print(f"[ServiceClean] ⚠️ Could not delete service message {msg_id} in {chat.id} with bot: {rpc_err}. Trying userbot fallback...")
+                try:
+                    from toxic.core.userbot_manager import _active_userbots
+                    for ub in _active_userbots.values():
+                        if ub and getattr(ub, "is_connected", False):
+                            await ub.delete_messages(chat.id, [msg_id], revoke=True)
+                            print(f"[ServiceClean] 🧹 Userbot fallback deleted service message {msg_id} in {chat.id}")
+                            break
+                except Exception:
+                    pass
             except Exception as del_err:
                 print(f"[ServiceClean] ⚠️ Delete error for message {msg_id}: {del_err}")
     except Exception as e:
@@ -204,3 +213,141 @@ async def auto_lock_permissions_on_bot_added(client, chat_member_updated: ChatMe
                     await lock_all_group_permissions(client, chat.id)
     except Exception as e:
         print(f"[AUTO PERMISSIONS] Error in chat_member_updated listener: {e}")
+
+
+# ─────────────────────────────────────────────────────────────
+# 🧹 MANUAL CLEAN & PURGE COMMANDS FOR SERVICE MESSAGES
+# ─────────────────────────────────────────────────────────────
+
+@app.on_message(filters.command(["del", "delete"]) & (filters.group | filters.channel))
+async def delete_single_replied_message(client: Client, message: Message):
+    """
+    Reply to ANY message (especially stubborn service messages like 'joined via invite link')
+    with /del or /delete to purge it instantly.
+    """
+    try:
+        reply = message.reply_to_message
+        if not reply:
+            sent_hint = await message.reply("⚠️ **Please reply to the message you want to delete!**")
+            await asyncio.sleep(4)
+            try:
+                await client.delete_messages(message.chat.id, [message.id, sent_hint.id], revoke=True)
+            except Exception:
+                pass
+            return
+
+        chat_id = message.chat.id
+        msg_ids_to_del = [message.id, reply.id]
+
+        deleted = False
+        try:
+            await client.delete_messages(chat_id, msg_ids_to_del, revoke=True)
+            deleted = True
+        except RPCError as rpc:
+            # Try via active userbot if bot lacks admin rights
+            from toxic.core.userbot_manager import _active_userbots
+            for ub in _active_userbots.values():
+                if ub and getattr(ub, "is_connected", False):
+                    try:
+                        await ub.delete_messages(chat_id, msg_ids_to_del, revoke=True)
+                        deleted = True
+                        break
+                    except Exception:
+                        pass
+
+        if not deleted:
+            sent_err = await message.reply("❌ **Could not delete:** Make sure the bot is an Admin with 'Delete Messages' permission enabled!")
+            await asyncio.sleep(5)
+            try:
+                await client.delete_messages(chat_id, [message.id, sent_err.id], revoke=True)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[DelCommand] Error deleting message: {e}")
+
+
+@app.on_message(filters.command(["cleanservice", "cleanservices", "cleansvc", "purgeservice"]) & (filters.group | filters.channel))
+async def clean_all_existing_service_messages(client: Client, message: Message):
+    """
+    Sweeps through recent messages in the group/topic and deletes ALL service messages:
+    - User joined via invite link / added
+    - User left or removed
+    - Pinned messages
+    - Chat title/photo updates
+    - Video chat notifications
+    """
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else 0
+    from toxic.core.mongo.db import is_admin_or_owner
+    from toxic.modules.deleteall import _is_authorized_to_delete
+
+    authorized = await _is_authorized_to_delete(chat_id, message=message, user_id=user_id)
+    if not authorized:
+        await message.reply("❌ **Access Denied:** Only administrators can use this command!")
+        return
+
+    topic_id = getattr(message, "message_thread_id", None)
+    status_msg = await message.reply("🧹 **Scanning and sweeping service messages...**")
+
+    service_ids = []
+    try:
+        # Search recent 300 messages for service messages
+        async for m in client.get_chat_history(chat_id, limit=300):
+            if not m:
+                continue
+            # If in a forum topic, only match messages in that topic
+            m_topic = getattr(m, "message_thread_id", None)
+            if topic_id and m_topic != topic_id:
+                continue
+
+            is_service = (
+                getattr(m, "service", False)
+                or getattr(m, "new_chat_members", None)
+                or getattr(m, "left_chat_member", None)
+                or getattr(m, "new_chat_title", None)
+                or getattr(m, "new_chat_photo", None)
+                or getattr(m, "delete_chat_photo", None)
+                or getattr(m, "pinned_message", None)
+                or getattr(m, "video_chat_started", None)
+                or getattr(m, "video_chat_ended", None)
+                or getattr(m, "video_chat_members_invited", None)
+                or getattr(m, "action", None) is not None
+            )
+            if is_service:
+                service_ids.append(m.id)
+
+        if service_ids:
+            # Delete in chunks of 100
+            total_deleted = 0
+            for i in range(0, len(service_ids), 100):
+                chk = service_ids[i:i + 100]
+                try:
+                    await client.delete_messages(chat_id, chk, revoke=True)
+                    total_deleted += len(chk)
+                except Exception:
+                    # Userbot fallback
+                    from toxic.core.userbot_manager import _active_userbots
+                    for ub in _active_userbots.values():
+                        if ub and getattr(ub, "is_connected", False):
+                            try:
+                                await ub.delete_messages(chat_id, chk, revoke=True)
+                                total_deleted += len(chk)
+                                break
+                            except Exception:
+                                pass
+
+            await status_msg.edit(f"✅ **Cleaned {total_deleted} service messages successfully!** 🧹")
+        else:
+            await status_msg.edit("✨ **No service messages found to clean!**")
+
+        await asyncio.sleep(4)
+        try:
+            await client.delete_messages(chat_id, [message.id, status_msg.id], revoke=True)
+        except Exception:
+            pass
+    except Exception as err:
+        print(f"[CleanService] Sweep error: {err}")
+        try:
+            await status_msg.edit(f"⚠️ **Notice:** Make sure bot has 'Delete Messages' admin permission! ({err})")
+        except Exception:
+            pass
