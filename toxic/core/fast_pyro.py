@@ -234,7 +234,7 @@ def patch_pyrogram_downloader():
             finally:
                 await session.stop()
 
-    Client.get_file = optimized_get_file
+    # Client.get_file = optimized_get_file (native pyrofork active)
     print("[FastPyro] Patched Pyrogram get_file chunk_size to 512KB for zero-floodwait downloads.")
 
 

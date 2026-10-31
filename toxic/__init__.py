@@ -59,12 +59,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# Patch Pyrogram downloader chunk size to 512KB to eliminate upload.GetFile FloodWait
-try:
-    from toxic.core.fast_pyro import patch_pyrogram_downloader
-    patch_pyrogram_downloader()
-except Exception as p_err:
-    print(f'[FastPyro] Patch error: {p_err}')
+# Native Pyrofork high-speed C-engine active
 
 # Silence internal MTProto connection and ping noise from flooding the console
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
@@ -80,10 +75,10 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=24,
+    workers=300,
     parse_mode=ParseMode.MARKDOWN,
     sleep_threshold=120,
-    max_concurrent_transmissions=16
+    max_concurrent_transmissions=128
 )
 
 # Multi-client pool for balancing
@@ -91,7 +86,7 @@ pro_clients = []
 if STRINGS:
     for i, session in enumerate(STRINGS):
         # Setting no_updates=True prevents the client from crashing on unknown Story updates
-        pro_clients.append(Client(f"pro_client_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session, workers=16, sleep_threshold=120, no_updates=True, max_concurrent_transmissions=16))
+        pro_clients.append(Client(f"pro_client_{i}", api_id=API_ID, api_hash=API_HASH, session_string=session, workers=150, sleep_threshold=120, no_updates=True, max_concurrent_transmissions=128))
     pro = pro_clients[0] # Backward compatibility
 else:
     pro = None

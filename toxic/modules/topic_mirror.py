@@ -519,11 +519,10 @@ async def set_topic_diamond_icon(userbot, app, tgt_chat_id: int, tgt_topic_id: i
         return False
 
     clean_title = clean_topic_title(title)
-    clients_to_try = []
-    if app:
-        clients_to_try.append(app)
-    if userbot and userbot not in clients_to_try:
-        clients_to_try.append(userbot)
+    # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
+    clients_to_try = [userbot] if userbot else []
+    if not clients_to_try and app and tgt_topic_id in (None, 1):
+        clients_to_try = [app]
 
     for client in clients_to_try:
         try:
@@ -578,11 +577,10 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
     if not tgt_chat_id or not tgt_topic_id:
         return synced_ids
 
-    clients_to_try = []
-    if app:
-        clients_to_try.append(app)
-    if userbot and userbot not in clients_to_try:
-        clients_to_try.append(userbot)
+    # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
+    clients_to_try = [userbot] if userbot else []
+    if not clients_to_try and app and tgt_topic_id in (None, 1):
+        clients_to_try = [app]
 
     for client in clients_to_try:
         try:
@@ -773,11 +771,10 @@ async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query
     if not title_query or len(str(title_query).strip()) < 1:
         return None
     clean_q = clean_topic_title(title_query).strip()
-    clients_to_try = []
-    if app:
-        clients_to_try.append(app)
-    if userbot and userbot not in clients_to_try:
-        clients_to_try.append(userbot)
+    # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
+    clients_to_try = [userbot] if userbot else []
+    if not clients_to_try and app and tgt_topic_id in (None, 1):
+        clients_to_try = [app]
 
     query_terms = [t for t in [clean_q, title_query.strip(), clean_q[:20].strip(), title_query[:20].strip()] if t]
     for client in clients_to_try:
@@ -1624,6 +1621,10 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
             html_text = format_caption_to_html(final_text) if final_text else None
             text_to_send = html_text if html_text else (final_text or msg.text)
 
+            # Skip empty text after promo cleaning (prevents [400 MESSAGE_EMPTY] failure)
+            if not text_to_send or not text_to_send.strip():
+                return True, "service_skipped", None
+
             sent_txt = await send_split_messages(
                 client=app,
                 chat_id=tgt_chat_id,
@@ -1856,6 +1857,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 if dl_attempt > 1:
                     try:
                         fresh_msg = await dl_client.get_messages(src_chat_id, msg.id)
+                        if fresh_msg and getattr(fresh_msg, "empty", False):
+                            return True, "service_skipped", None
                         if fresh_msg and not getattr(fresh_msg, "empty", False):
                             curr_msg = fresh_msg
                     except Exception as ref_err:
