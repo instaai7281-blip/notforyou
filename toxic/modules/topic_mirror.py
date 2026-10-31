@@ -18,6 +18,8 @@ import asyncio
 import random
 import unicodedata
 import datetime
+import inspect
+from typing import Callable, Optional, Union, Dict, Any, List
 from pyrogram import filters, Client, raw, types, enums
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
@@ -1886,17 +1888,21 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         temp_dir = os.path.join("downloads", str(user_id))
         os.makedirs(temp_dir, exist_ok=True)
 
-        def _on_dl_prog(current, total):
+        async def _on_dl_prog(current, total):
             if progress_callback:
                 try:
-                    asyncio.create_task(progress_callback(current, total, "⬇️ Downloading"))
+                    res = progress_callback(current, total, "⬇️ Downloading")
+                    if inspect.iscoroutine(res):
+                        await res
                 except Exception:
                     pass
 
-        def _on_up_prog(current, total):
+        async def _on_up_prog(current, total):
             if progress_callback:
                 try:
-                    asyncio.create_task(progress_callback(current, total, "⬆️ Uploading"))
+                    res = progress_callback(current, total, "⬆️ Uploading")
+                    if inspect.iscoroutine(res):
+                        await res
                 except Exception:
                     pass
 

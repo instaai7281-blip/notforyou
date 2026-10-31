@@ -60,6 +60,11 @@ logging.basicConfig(
 )
 
 # Fast Pyrofork engine ready
+try:
+    from toxic.core.fast_pyro import patch_pyrogram_downloader
+    patch_pyrogram_downloader()
+except Exception as e:
+    print(f"Failed to patch Pyrogram chunk size: {e}")
 
 # Silence internal MTProto connection and ping noise from flooding the console
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
