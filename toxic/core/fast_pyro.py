@@ -3,15 +3,19 @@ import os
 import math
 import time
 import inspect
+import logging
 import functools
 from hashlib import sha256
 from typing import Union, Optional, Callable, BinaryIO, AsyncGenerator
 
 import pyrogram
 from pyrogram import Client, filters, raw, utils
-from pyrogram.file_id import FileId, FileType
+from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.session import Session, Auth
-from pyrogram.errors import FloodWait
+from pyrogram.crypto import aes
+from pyrogram.errors import FloodWait, CDNFileHashMismatch, VolumeLocNotFound
+
+log = logging.getLogger(__name__)
 
 _patched = False
 
@@ -20,9 +24,9 @@ def patch_pyrogram_downloader():
     Patches Pyrogram's internal `Client.get_file` to use 512KB (524288 bytes) chunks.
     
     Standard Telegram user accounts without Telegram Premium encounter a strict
-    14-15 second FloodWait on DC1/DC2/DC5 when requesting 1024KB (1MB) chunks via
+    14-16 second FloodWait on DC1/DC2/DC5 when requesting 1024KB (1MB) chunks via
     `upload.GetFile`. Using 512KB chunks bypasses this rate limiter completely and
-    allows full-speed sequential downloading without 14-second wait loops!
+    allows full-speed sequential downloading without 15-second wait loops!
     """
     global _patched
     if _patched:
@@ -62,9 +66,8 @@ def patch_pyrogram_downloader():
 
                 location = raw.types.InputPeerPhotoFileLocation(
                     peer=peer,
-                    volume_id=file_id.volume_id,
-                    local_id=file_id.local_id,
-                    big=file_id.thumbnail_source == raw.types.InputPeerPhotoFileLocation
+                    photo_id=file_id.media_id,
+                    big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG
                 )
             elif file_type == FileType.PHOTO:
                 location = raw.types.InputPhotoFileLocation(
@@ -83,7 +86,7 @@ def patch_pyrogram_downloader():
 
             current = 0
             total = abs(limit) or (1 << 31) - 1
-            # Standard user accounts avoid 14s FloodWait on 512KB (524288) chunk limit
+            # 512KB chunks bypass the Telegram non-premium 15-second DC floodwait rate limit!
             chunk_size = 512 * 1024
             offset_bytes = abs(offset) * chunk_size
 
@@ -179,33 +182,44 @@ def patch_pyrogram_downloader():
                             )
 
                             if isinstance(r2, raw.types.upload.CdnFileReuploadNeeded):
-                                await session.invoke(
-                                    raw.functions.upload.ReuploadCdnFile(
-                                        file_token=r.file_token,
-                                        request_token=r2.request_token
+                                try:
+                                    await session.invoke(
+                                        raw.functions.upload.ReuploadCdnFile(
+                                            file_token=r.file_token,
+                                            request_token=r2.request_token
+                                        )
                                     )
-                                )
-                                continue
+                                except VolumeLocNotFound:
+                                    break
+                                else:
+                                    continue
 
                             chunk = r2.bytes
-                            decrypted_chunk = session.aes.ctr256_decrypt(
+
+                            # https://core.telegram.org/cdn#decrypting-files
+                            decrypted_chunk = aes.ctr256_decrypt(
                                 chunk,
                                 r.encryption_key,
-                                bytearray(r.encryption_iv[:-4] + offset_bytes.to_bytes(4, "big"))
+                                bytearray(
+                                    r.encryption_iv[:-4]
+                                    + (offset_bytes // 16).to_bytes(4, "big")
+                                )
                             )
 
-                            cdn_file_hashes = await session.invoke(
+                            hashes = await session.invoke(
                                 raw.functions.upload.GetCdnFileHashes(
                                     file_token=r.file_token,
                                     offset=offset_bytes
                                 )
                             )
 
-                            for i, h in enumerate(cdn_file_hashes):
+                            # https://core.telegram.org/cdn#verifying-files
+                            for i, h in enumerate(hashes):
                                 cdn_chunk = decrypted_chunk[h.limit * i: h.limit * (i + 1)]
-                                assert (
-                                    h.hash == sha256(cdn_chunk).digest()
-                                ), "h.hash == sha256(cdn_chunk).digest()"
+                                CDNFileHashMismatch.check(
+                                    h.hash == sha256(cdn_chunk).digest(),
+                                    "h.hash == sha256(cdn_chunk).digest()"
+                                )
 
                             yield decrypted_chunk
 
@@ -215,9 +229,7 @@ def patch_pyrogram_downloader():
                             if progress:
                                 func = functools.partial(
                                     progress,
-                                    min(offset_bytes, file_size)
-                                    if file_size != 0
-                                    else offset_bytes,
+                                    min(offset_bytes, file_size) if file_size != 0 else offset_bytes,
                                     file_size,
                                     *progress_args
                                 )
@@ -229,14 +241,21 @@ def patch_pyrogram_downloader():
 
                             if len(chunk) < chunk_size or current >= total:
                                 break
+                    except Exception as e:
+                        raise e
                     finally:
                         await cdn_session.stop()
+            except pyrogram.StopTransmission:
+                raise
+            except pyrogram.errors.FloodWait:
+                raise
+            except Exception as e:
+                log.exception(e)
             finally:
                 await session.stop()
 
-    # Client.get_file = optimized_get_file (native pyrofork active)
+    Client.get_file = optimized_get_file
     print("[FastPyro] Patched Pyrogram get_file chunk_size to 512KB for zero-floodwait downloads.")
-
 
 
 async def download_chunk(client, dc_id, file_id, offset, limit):
