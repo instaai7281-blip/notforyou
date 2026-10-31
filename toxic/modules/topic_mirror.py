@@ -26,11 +26,43 @@ from toxic import app, get_client, pro_clients
 from config import API_ID, API_HASH, OWNER_ID, LOG_GROUP, THUMBNAIL_DIR
 from toxic.core.func import chk_user, chk_mirror_user, humanbytes, TimeFormatter, video_metadata, thumbnail, add_pdf_watermark, screenshot, optimize_thumbnail
 from toxic.core.mongo import db
-from toxic.core.fast_pyro import parallel_download_media
 from toxic.core.get_func import get_user_branding_tag, format_caption_to_html, clean_surrogates, get_user_spoiler_preference
 
 # In-memory tracking of active topic mirroring jobs
 active_mirrors = {}
+
+def is_any_mirror_running():
+    """Checks if any mirror task is currently active across the entire bot instance."""
+    for uid, state in active_mirrors.items():
+        if isinstance(state, dict) and state.get("running"):
+            return True, uid, state
+        elif state is True:
+            return True, uid, {}
+    return False, None, None
+
+def stop_all_active_mirrors():
+    """Cancels and stops all running mirror/extraction tasks across all users immediately."""
+    stopped_count = 0
+    for uid, state in list(active_mirrors.items()):
+        if isinstance(state, dict) and state.get("running"):
+            state["running"] = False
+            stopped_count += 1
+            status_msg = state.get("status_msg")
+            if status_msg:
+                try:
+                    asyncio.create_task(status_msg.edit(
+                        "<blockquote>🛑 <b>Topic Mirror Stopped by User</b></blockquote>\n\n"
+                        "✨ <b>Status:</b> All processes stopped successfully\n"
+                        "💾 <b>Progress:</b> Checkpoint safely saved in database!",
+                        parse_mode=ParseMode.HTML
+                    ))
+                except Exception:
+                    pass
+        elif state is True:
+            active_mirrors[uid] = False
+            stopped_count += 1
+    return stopped_count
+
 
 VIDEO_EXTENSIONS = ['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'mpg', 'mpeg', '3gp', 'ts', 'm4v', 'f4v', 'vob']
 
@@ -1885,7 +1917,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 print(f"[Transfer] Download attempt {dl_attempt}/3 failed with primary client for msg {msg.id}: {dl_err}")
                 if alt_client:
                     try:
-                        temp_file = await parallel_download_media(alt_client, curr_msg, file_name=f"{temp_dir}/")
+                        temp_file = await alt_client.download_media(curr_msg, file_name=f"{temp_dir}/")
                         if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
                             break
                     except Exception as alt_err:
@@ -2545,8 +2577,10 @@ async def sync_session_callback(_, query: CallbackQuery):
     src_chat_id = int(match.group(1))
     tgt_chat_id = int(match.group(2))
 
-    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
-        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+    is_running, r_uid, r_state = is_any_mirror_running()
+    if is_running:
+        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+        await query.answer(f"⚠️ Already a task is running ({cur_t})! Ek time par sirf 1 task chal sakta hai. /cancel se stop karein.", show_alert=True)
         return
 
     session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
@@ -2572,14 +2606,16 @@ async def sync_session_callback(_, query: CallbackQuery):
     )
 
 
-@app.on_message(filters.command(["cancel_mirror", "cancelmirror"]))
+@app.on_message(filters.command(["cancel", "cancel_mirror", "cancelmirror", "stop", "stop_mirror"]))
 async def cancel_mirror_cmd(_, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
-    if user_id in active_mirrors:
+    stopped_count = stop_all_active_mirrors()
+    if stopped_count > 0 or user_id in active_mirrors:
         state = active_mirrors.get(user_id)
         src_chat_id = None
         tgt_chat_id = None
         status_msg = None
+        stop_all_active_mirrors()
         if isinstance(state, dict):
             state["running"] = False
             src_chat_id = state.get("src_chat_id")
@@ -3427,6 +3463,26 @@ def get_mirror_access_denied_card():
 
 async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False):
     """Interactive flow to configure and launch a new topic mirror session."""
+    # Enforce Global Single Task Concurrency (Only 1 task per bot instance)
+    is_running, r_uid, r_state = is_any_mirror_running()
+    if is_running and r_uid != user_id:
+        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+        busy_card = (
+            "<blockquote>⚠️ <b>Bot Busy: Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
+            "Server par maximum speed aur stability ke liye ek time par **sirf 1 task** chal sakta hai!\n\n"
+            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n"
+            f"👤 <b>User:</b> <code>{r_uid}</code>\n\n"
+            "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar sabhi running tasks stop karein.</i>"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(busy_card, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, busy_card, parse_mode=ParseMode.HTML)
+        return
+
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg, kb = get_mirror_access_denied_card()
@@ -3538,8 +3594,10 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         return
 
 
-    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
-        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+    is_running, r_uid, r_state = is_any_mirror_running()
+    if is_running:
+        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+        err_active = f"⚠️ <b>Bot Busy:</b> Ek task already chal raha hai (<code>{cur_t}</code>)!\nSend <code>/cancel</code> to abort it first."
         if is_callback:
             await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
         else:

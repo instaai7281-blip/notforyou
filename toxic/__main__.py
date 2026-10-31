@@ -201,11 +201,8 @@ async def schedule_daily_plans_broadcast():
     return
 
 async def schedule_mirror_auto_updates():
-    """
-    Background task that checks all mirror sessions with active auto-schedules
-    every 25 seconds and triggers 1-Click Sync when the scheduled local time matches.
-    Timezone-aware: converts user's local time accurately with a 5-minute trigger window.
-    """
+    """Disabled: All tasks must be triggered manually by the user to avoid automatic boot runs."""
+    return
     import datetime
     from toxic.core.mongo.db import (
         get_all_scheduled_mirror_sessions,
@@ -362,7 +359,7 @@ Status: Running Successfully...
 
     asyncio.create_task(schedule_expiry_check())
     asyncio.create_task(schedule_broadcast_task())
-    asyncio.create_task(schedule_mirror_auto_updates())
+    # asyncio.create_task(schedule_mirror_auto_updates()) # Disabled: manual only
     asyncio.create_task(optimized_memory_cleanup())
     try:
         from toxic.modules.view_once import load_all_view_once_listeners
