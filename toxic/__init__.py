@@ -59,7 +59,12 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# Native Pyrofork high-speed C-engine active
+# Turbo Multi-Worker parallel media downloader
+try:
+    from toxic.core.fast_pyro import patch_pyrogram_downloader
+    patch_pyrogram_downloader()
+except Exception as e:
+    print(f"[FastPyro] Downloader patch failed: {e}")
 
 # Silence internal MTProto connection and ping noise from flooding the console
 logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)

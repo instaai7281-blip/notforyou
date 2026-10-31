@@ -26,6 +26,7 @@ from toxic import app, get_client, pro_clients
 from config import API_ID, API_HASH, OWNER_ID, LOG_GROUP, THUMBNAIL_DIR
 from toxic.core.func import chk_user, chk_mirror_user, humanbytes, TimeFormatter, video_metadata, thumbnail, add_pdf_watermark, screenshot, optimize_thumbnail
 from toxic.core.mongo import db
+from toxic.core.fast_pyro import parallel_download_media
 from toxic.core.get_func import get_user_branding_tag, format_caption_to_html, clean_surrogates, get_user_spoiler_preference
 
 # In-memory tracking of active topic mirroring jobs
@@ -1864,7 +1865,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     except Exception as ref_err:
                         print(f"[Transfer] Refetch fresh msg notice: {ref_err}")
 
-                temp_file = await dl_client.download_media(
+                temp_file = await parallel_download_media(
+                    dl_client,
                     curr_msg,
                     file_name=f"{temp_dir}/"
                 )
@@ -1883,7 +1885,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 print(f"[Transfer] Download attempt {dl_attempt}/3 failed with primary client for msg {msg.id}: {dl_err}")
                 if alt_client:
                     try:
-                        temp_file = await alt_client.download_media(curr_msg, file_name=f"{temp_dir}/")
+                        temp_file = await parallel_download_media(alt_client, curr_msg, file_name=f"{temp_dir}/")
                         if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
                             break
                     except Exception as alt_err:
