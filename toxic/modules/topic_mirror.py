@@ -1415,7 +1415,9 @@ async def resilient_send_media(
     height: int = None,
     performer: str = None,
     title: str = None,
-    has_spoiler: bool = False
+    has_spoiler: bool = False,
+    progress: Callable = None,
+    progress_args: tuple = ()
 ):
     """
     Sends media with multi-stage fallback to guarantee zero failures:
@@ -1448,7 +1450,9 @@ async def resilient_send_media(
                             parse_mode=curr_parse_mode,
                             supports_streaming=True,
                             has_spoiler=has_spoiler,
-                            message_thread_id=eff_thread
+                            message_thread_id=eff_thread,
+                            progress=progress,
+                            progress_args=progress_args
                         )
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
@@ -1488,7 +1492,9 @@ async def resilient_send_media(
                             thumb=curr_thumb,
                             reply_to_message_id=reply_to_message_id,
                             message_thread_id=eff_thread,
-                            parse_mode=curr_parse_mode
+                            parse_mode=curr_parse_mode,
+                            progress=progress,
+                            progress_args=progress_args
                         )
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
@@ -1576,7 +1582,7 @@ async def resilient_send_media(
     return await client.send_document(chat_id=chat_id, document=file_path, caption=curr_caption, reply_to_message_id=reply_to_message_id)
 
 
-async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False, src_client=None, is_public: bool = False):
+async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id: int, is_general_topic: bool = False, src_client=None, is_public: bool = False, progress_callback=None):
     """
     Transfers a single message using the bot-only pipeline:
       - All messages in target group are strictly sent by `app` (real bot).
@@ -1880,6 +1886,20 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         temp_dir = os.path.join("downloads", str(user_id))
         os.makedirs(temp_dir, exist_ok=True)
 
+        def _on_dl_prog(current, total):
+            if progress_callback:
+                try:
+                    asyncio.create_task(progress_callback(current, total, "⬇️ Downloading"))
+                except Exception:
+                    pass
+
+        def _on_up_prog(current, total):
+            if progress_callback:
+                try:
+                    asyncio.create_task(progress_callback(current, total, "⬆️ Uploading"))
+                except Exception:
+                    pass
+
         # Download media via src_client / userbot / app with automatic file_reference refresh & retry
         dl_client = src_client or userbot or app
         alt_client = app if dl_client != app else userbot
@@ -1899,7 +1919,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
                 temp_file = await dl_client.download_media(
                     curr_msg,
-                    file_name=f"{temp_dir}/"
+                    file_name=f"{temp_dir}/",
+                    progress=_on_dl_prog
                 )
                 if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
                     break
@@ -2054,7 +2075,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 duration=duration if duration > 0 else None,
                 width=width if width > 0 else None,
                 height=height if height > 0 else None,
-                has_spoiler=has_spoiler
+                has_spoiler=has_spoiler,
+                progress=_on_up_prog
             )
         elif msg.document or file_extension == 'pdf':
             # Apply PDF watermark if set in user settings
@@ -2096,7 +2118,8 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                 caption=caption_html,
                 thumb=thumb_path,
                 reply_to_message_id=effective_tgt_topic_id,
-                message_thread_id=effective_tgt_topic_id
+                message_thread_id=effective_tgt_topic_id,
+                progress=_on_up_prog
             )
         elif msg.photo:
             has_spoiler = get_user_spoiler_preference(user_id)
@@ -4948,6 +4971,50 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     method = "failed"
                     sent_msg_id = None
 
+                    # Define live per-file download/upload progress tracker
+                    last_prog_update = [0]
+                    prog_start = [time.time()]
+                    current_action = [""]
+
+                    async def file_progress_cb(current, total, action_label):
+                        now_t = time.time()
+                        if (now_t - last_prog_update[0] < 2.5) and (current < total) and (action_label == current_action[0]):
+                            return
+                        last_prog_update[0] = now_t
+                        if action_label != current_action[0]:
+                            current_action[0] = action_label
+                            prog_start[0] = now_t
+
+                        elapsed = max(0.1, now_t - prog_start[0])
+                        speed = current / elapsed if elapsed > 0 else 0
+                        rem_bytes = max(0, total - current)
+                        eta = rem_bytes / speed if speed > 0 else 0
+
+                        pct = int((current / total) * 100) if total > 0 else 0
+                        pct = min(100, max(0, pct))
+                        bar_blocks = pct // 10
+                        bar = "▰" * bar_blocks + "▱" * (10 - bar_blocks)
+
+                        speed_str = f"{humanbytes(speed)}/s" if speed > 1024 else f"{speed:.1f} B/s"
+                        eta_str = TimeFormatter(int(eta * 1000)) if eta > 0 else "00:00:00"
+
+                        cur_h = humanbytes(current)
+                        tot_h = humanbytes(total)
+
+                        file_status_card = (
+                            f"<blockquote><b>⚡️ 𝗫𝗧𝗥𝗔𝗖𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖𝗦...</b></blockquote>\n\n"
+                            f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
+                            f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+                            f"📊 <b>File Progress:</b> [{bar}] {pct}%\n"
+                            f"🔢 <b>Message:</b> <code>{idx}/{total_msgs_in_topic}</code>\n"
+                            f"📥 <b>Action:</b> {action_label} ({cur_h} / {tot_h})\n"
+                            f"🚀 <b>Speed:</b> <code>{speed_str}</code>\n"
+                            f"⏳ <b>ETA:</b> <code>{eta_str}</code>\n\n"
+                            f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
+                            f"❌ Failed: {overall_failed}"
+                        )
+                        await _update_status(file_status_card, reply_markup=control_kb)
+
                     for attempt in range(1, 6):
                         try:
                             await ensure_userbot_connected(userbot)
@@ -4961,7 +5028,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                                 msg=msg,
                                 user_id=user_id,
                                 is_general_topic=is_gen,
-                                src_client=src_client
+                                src_client=src_client,
+                                progress_callback=file_progress_cb
                             )
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break
