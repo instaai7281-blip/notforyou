@@ -20,7 +20,7 @@ import unicodedata
 import datetime
 from pyrogram import filters, Client, raw, types, enums
 from pyrogram.enums import ParseMode
-from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate
+from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from toxic import app, get_client, pro_clients
 from config import API_ID, API_HASH, OWNER_ID, LOG_GROUP, THUMBNAIL_DIR
@@ -1897,8 +1897,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     except Exception as ref_err:
                         print(f"[Transfer] Refetch fresh msg notice: {ref_err}")
 
-                temp_file = await parallel_download_media(
-                    dl_client,
+                temp_file = await dl_client.download_media(
                     curr_msg,
                     file_name=f"{temp_dir}/"
                 )
@@ -1913,8 +1912,20 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     temp_file = None
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
-            except Exception as dl_err:
+            except (FileReferenceExpired, Exception) as dl_err:
                 print(f"[Transfer] Download attempt {dl_attempt}/3 failed with primary client for msg {msg.id}: {dl_err}")
+                # If file reference expired, obtain fresh message from source
+                if "FILE_REFERENCE" in str(dl_err).upper():
+                    try:
+                        fresh_ref = await dl_client.get_messages(src_chat_id, msg.id)
+                        if fresh_ref and not getattr(fresh_ref, "empty", False):
+                            curr_msg = fresh_ref
+                            temp_file = await dl_client.download_media(curr_msg, file_name=f"{temp_dir}/")
+                            if temp_file and os.path.isfile(temp_file) and os.path.getsize(temp_file) > 0:
+                                break
+                    except Exception as ref_retry_err:
+                        print(f"[Transfer] Fresh refetch retry error: {ref_retry_err}")
+
                 if alt_client:
                     try:
                         temp_file = await alt_client.download_media(curr_msg, file_name=f"{temp_dir}/")
