@@ -34,8 +34,17 @@ from toxic.core.get_func import get_user_branding_tag, format_caption_to_html, c
 # In-memory tracking of active topic mirroring jobs
 active_mirrors = {}
 
+def is_user_mirror_running(user_id: int):
+    """Checks if this specific user already has an active mirror task running."""
+    state = active_mirrors.get(user_id)
+    if isinstance(state, dict) and state.get("running"):
+        return True, state
+    elif state is True:
+        return True, {}
+    return False, None
+
 def is_any_mirror_running():
-    """Checks if any mirror task is currently active across the entire bot instance."""
+    """Checks if any mirror task is currently active across the entire bot instance (for admin diagnostics)."""
     for uid, state in active_mirrors.items():
         if isinstance(state, dict) and state.get("running"):
             return True, uid, state
@@ -43,27 +52,30 @@ def is_any_mirror_running():
             return True, uid, {}
     return False, None, None
 
+def stop_user_active_mirror(user_id: int):
+    """Stops ONLY the calling user's active mirror task, completely isolated from other users."""
+    state = active_mirrors.get(user_id)
+    if not state:
+        return False
+    if isinstance(state, dict):
+        state["running"] = False
+        active_mirrors.pop(user_id, None)
+        return True
+    elif state is True:
+        active_mirrors.pop(user_id, None)
+        return True
+    return False
+
 def stop_all_active_mirrors():
-    """Cancels and stops all running mirror/extraction tasks across all users immediately."""
+    """Cancels and stops all running mirror/extraction tasks across all users immediately (Admin only)."""
     stopped_count = 0
     for uid, state in list(active_mirrors.items()):
         if isinstance(state, dict) and state.get("running"):
             state["running"] = False
             stopped_count += 1
-            status_msg = state.get("status_msg")
-            if status_msg:
-                try:
-                    asyncio.create_task(status_msg.edit(
-                        "<blockquote>🛑 <b>Topic Mirror Stopped by User</b></blockquote>\n\n"
-                        "✨ <b>Status:</b> All processes stopped successfully\n"
-                        "💾 <b>Progress:</b> Checkpoint safely saved in database!",
-                        parse_mode=ParseMode.HTML
-                    ))
-                except Exception:
-                    pass
         elif state is True:
-            active_mirrors[uid] = False
             stopped_count += 1
+        active_mirrors.pop(uid, None)
     return stopped_count
 
 
@@ -2643,10 +2655,10 @@ async def sync_session_callback(_, query: CallbackQuery):
     src_chat_id = int(match.group(1))
     tgt_chat_id = int(match.group(2))
 
-    is_running, r_uid, r_state = is_any_mirror_running()
-    if is_running:
-        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
-        await query.answer(f"⚠️ Already a task is running ({cur_t})! Ek time par sirf 1 task chal sakta hai. /cancel se stop karein.", show_alert=True)
+    user_running, u_state = is_user_mirror_running(user_id)
+    if user_running:
+        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
+        await query.answer(f"⚠️ Aapka task already chal raha hai ({cur_t})! Use /cancel to stop.", show_alert=True)
         return
 
     session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
@@ -2675,20 +2687,25 @@ async def sync_session_callback(_, query: CallbackQuery):
 @app.on_message(filters.command(["cancel", "cancel_mirror", "cancelmirror", "stop", "stop_mirror"]))
 async def cancel_mirror_cmd(_, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
-    stopped_count = stop_all_active_mirrors()
-    if stopped_count > 0 or user_id in active_mirrors:
-        state = active_mirrors.get(user_id)
-        src_chat_id = None
-        tgt_chat_id = None
-        status_msg = None
-        stop_all_active_mirrors()
-        if isinstance(state, dict):
-            state["running"] = False
-            src_chat_id = state.get("src_chat_id")
-            tgt_chat_id = state.get("tgt_chat_id")
-            status_msg = state.get("status_msg")
-        else:
-            active_mirrors[user_id] = False
+    from config import OWNER_ID
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    is_owner = (user_id in owner_list or str(user_id) in [str(o) for o in owner_list])
+
+    # Check if admin wants to stop all tasks globally
+    cmd_text = (message.text or "").strip().lower()
+    if is_owner and "all" in cmd_text:
+        stopped_count = stop_all_active_mirrors()
+        await message.reply_text(f"🛑 <b>Admin Action:</b> All {stopped_count} active bot tasks stopped globally.", parse_mode=ParseMode.HTML)
+        return
+
+    # User-level isolated cancellation: ONLY stops this user's task!
+    state = active_mirrors.get(user_id)
+    if state and (isinstance(state, dict) and state.get("running") or state is True):
+        src_chat_id = state.get("src_chat_id") if isinstance(state, dict) else None
+        tgt_chat_id = state.get("tgt_chat_id") if isinstance(state, dict) else None
+        status_msg = state.get("status_msg") if isinstance(state, dict) else None
+        
+        stop_user_active_mirror(user_id)
 
         stop_buttons = []
         if src_chat_id and tgt_chat_id:
@@ -2696,7 +2713,6 @@ async def cancel_mirror_cmd(_, message):
         stop_buttons.append([InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")])
         stop_kb = InlineKeyboardMarkup(stop_buttons)
 
-        # 1. Edit the running status message if accessible
         if status_msg:
             try:
                 stop_card = (
@@ -2709,12 +2725,11 @@ async def cancel_mirror_cmd(_, message):
             except Exception:
                 pass
 
-        # 2. Send separate confirmation message to user
         dm_cancel_text = (
             "🛑 <b>Topic Mirroring Stopped Successfully!</b> 😉\n\n"
-            "<blockquote>✨ <b>Status:</b> Cancelled by user\n"
+            "<blockquote>✨ <b>Status:</b> Cancelled by you\n"
             "💾 <b>Progress:</b> Checkpoint Safely Saved in Database</blockquote>\n\n"
-            "Aapka topic mirror process rok diya gaya hai. Jab bhi aapko wapas shuru karna ho ya update karna ho, aap <b>Resume & Update</b> button dabakar wahi se continue kar sakte hain bina kisi duplicate messages ke!"
+            "Aapka topic mirror process rok diya gaya hai. Aapke alawa dusre users ke tasks bilkul safe chalte rahenge!"
         )
         await message.reply_text(dm_cancel_text, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
     else:
@@ -3478,10 +3493,10 @@ async def new_mirror_callback(_, query: CallbackQuery):
         await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan! Upgrade via /plans.", show_alert=True)
         return
     
-    is_running, r_uid, r_state = is_any_mirror_running()
-    if is_running:
-        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
-        await query.answer(f"⚠️ A mirror task is currently active ({cur_t})! Send /cancel to stop.", show_alert=True)
+    user_running, u_state = is_user_mirror_running(user_id)
+    if user_running:
+        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
+        await query.answer(f"⚠️ Aapka mirror task currently active hai ({cur_t})! Send /cancel to stop.", show_alert=True)
         return
 
     await query.answer("⚡ Starting New Group Mirror Wizard...")
@@ -3533,16 +3548,15 @@ def get_mirror_access_denied_card():
 
 async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False):
     """Interactive flow to configure and launch a new topic mirror session with seamless message editing."""
-    # Enforce Global Single Task Concurrency (Only 1 task per bot instance)
-    is_running, r_uid, r_state = is_any_mirror_running()
-    if is_running and r_uid != user_id:
-        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+    # Enforce 1 Task Per User (Each user is 100% independent)
+    user_running, u_state = is_user_mirror_running(user_id)
+    if user_running:
+        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
         busy_card = (
-            "<blockquote>⚠️ <b>Bot Busy: Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
-            "Server par maximum speed aur stability ke liye ek time par **sirf 1 task** chal sakta hai!\n\n"
-            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n"
-            f"👤 <b>User:</b> <code>{r_uid}</code>\n\n"
-            "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar sabhi running tasks stop karein.</i>"
+            "<blockquote>⚠️ <b>Aapka Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
+            "Aapke account par ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
+            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n\n"
+            "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar use stop karein.</i>"
         )
         if is_callback and message:
             try:
@@ -3736,10 +3750,10 @@ async def start_topic_link_flow(user_id: int, message, is_callback: bool = False
         return
 
 
-    is_running, r_uid, r_state = is_any_mirror_running()
-    if is_running:
-        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
-        err_active = f"⚠️ <b>Bot Busy:</b> Ek task already chal raha hai (<code>{cur_t}</code>)!\nSend <code>/cancel</code> to abort it first."
+    user_running, u_state = is_user_mirror_running(user_id)
+    if user_running:
+        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
+        err_active = f"⚠️ <b>Aapka task already chal raha hai ({cur_t})!</b>\nSend <code>/cancel</code> to abort it first."
         if is_callback:
             await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
         else:
@@ -4505,15 +4519,14 @@ async def topic_mirror_cmd(client, message):
 
 async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None, is_auto_update: bool = False):
     """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, range support, and auto-update detection."""
-    # Enforce Global Single Task Concurrency (Only 1 task per bot instance)
-    is_running, r_uid, r_state = is_any_mirror_running()
-    if is_running:
-        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+    # Enforce 1 Task Per User (Each user is 100% independent)
+    user_running, u_state = is_user_mirror_running(user_id)
+    if user_running:
+        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
         busy_text = (
-            "<blockquote>⚠️ <b>Bot Busy: Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
-            "Server par maximum speed aur stability ke liye ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
-            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n"
-            f"👤 <b>Active User:</b> <code>{r_uid}</code>\n\n"
+            "<blockquote>⚠️ <b>Aapka Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
+            "Aapke account par ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
+            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n\n"
             "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar use stop karein.</i>"
         )
         if status_msg:
