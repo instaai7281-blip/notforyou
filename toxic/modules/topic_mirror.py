@@ -3149,7 +3149,7 @@ async def sync_new_topics_callback(_, query: CallbackQuery):
         mirror_all_topics=True,
         detected_topic_id=None,
         status_msg=query.message,
-        force_sync=True
+        force_sync=False
     )
 
 
@@ -4389,7 +4389,7 @@ async def do_reupload_topic_callback(_, query: CallbackQuery):
         mirror_all_topics=False,
         detected_topic_id=topic_id,
         status_msg=query.message,
-        force_sync=True
+        force_sync=False
     )
 
 
