@@ -5,6 +5,7 @@ aiofiles
 pillow
 git+https://github.com/instaai7281-blip/toxictools.git
 tgcrypto
+cryptg
 pyromod
 opencv-python-headless
 requests

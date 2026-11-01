@@ -20,7 +20,7 @@ import unicodedata
 import datetime
 import inspect
 from typing import Callable, Optional, Union, Dict, Any, List
-from pyrogram import filters, Client, raw, types, enums
+from pyrogram import filters, Client, raw, types, enums, StopTransmission
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -1456,6 +1456,8 @@ async def resilient_send_media(
                             progress=progress,
                             progress_args=progress_args
                         )
+                    except pyrogram.StopTransmission:
+                        raise
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
                         await asyncio.sleep(fw.value + 1)
@@ -1889,20 +1891,30 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         os.makedirs(temp_dir, exist_ok=True)
 
         async def _on_dl_prog(current, total):
+            st = active_mirrors.get(user_id)
+            if isinstance(st, dict) and not st.get("running", True):
+                raise pyrogram.StopTransmission
             if progress_callback:
                 try:
                     res = progress_callback(current, total, "⬇️ Downloading")
                     if inspect.iscoroutine(res):
                         await res
+                except pyrogram.StopTransmission:
+                    raise
                 except Exception:
                     pass
 
         async def _on_up_prog(current, total):
+            st = active_mirrors.get(user_id)
+            if isinstance(st, dict) and not st.get("running", True):
+                raise pyrogram.StopTransmission
             if progress_callback:
                 try:
                     res = progress_callback(current, total, "⬆️ Uploading")
                     if inspect.iscoroutine(res):
                         await res
+                except pyrogram.StopTransmission:
+                    raise
                 except Exception:
                     pass
 
@@ -1937,6 +1949,13 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                         except Exception:
                             pass
                     temp_file = None
+            except pyrogram.StopTransmission:
+                if temp_file and os.path.isfile(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except Exception:
+                        pass
+                return False, "cancelled", None
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 1)
             except (FileReferenceExpired, Exception) as dl_err:
@@ -4403,6 +4422,26 @@ async def topic_mirror_cmd(client, message):
 
 async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None, is_auto_update: bool = False):
     """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, range support, and auto-update detection."""
+    # Enforce Global Single Task Concurrency (Only 1 task per bot instance)
+    is_running, r_uid, r_state = is_any_mirror_running()
+    if is_running:
+        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+        busy_text = (
+            "<blockquote>⚠️ <b>Bot Busy: Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
+            "Server par maximum speed aur stability ke liye ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
+            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n"
+            f"👤 <b>Active User:</b> <code>{r_uid}</code>\n\n"
+            "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar use stop karein.</i>"
+        )
+        if status_msg:
+            try:
+                await status_msg.edit(busy_text, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, busy_text, parse_mode=ParseMode.HTML)
+        return
+
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg, kb = get_mirror_access_denied_card()

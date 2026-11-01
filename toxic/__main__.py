@@ -358,23 +358,12 @@ Status: Running Successfully...
 """)
 
     asyncio.create_task(schedule_expiry_check())
-    asyncio.create_task(schedule_broadcast_task())
+    # Heavy startup tasks disabled to prevent resource hogging and auto-starts on boot
+    # asyncio.create_task(schedule_broadcast_task())
     # asyncio.create_task(schedule_mirror_auto_updates()) # Disabled: manual only
     asyncio.create_task(optimized_memory_cleanup())
-    try:
-        from toxic.modules.view_once import load_all_view_once_listeners
-        asyncio.create_task(load_all_view_once_listeners())
-    except Exception as e:
-        print(f"Failed to start view_once listeners loader: {e}")
-    try:
-        from toxic.modules.smart_broadcast import sync_all_broadcast_destinations, smart_broadcast_background_scheduler, smart_broadcast_dedicated_deletion_worker
-        asyncio.create_task(sync_all_broadcast_destinations())
-        asyncio.create_task(smart_broadcast_background_scheduler())
-        asyncio.create_task(smart_broadcast_dedicated_deletion_worker())
-        print("[STARTUP AUTO-DETECT] Auto-discovery & sync for bot groups/channels started in background.")
-    except Exception as e:
-        print(f"Failed to start smart broadcast scanner/scheduler: {e}")
-    print("Auto removal, daily plans, and scheduled broadcasts started ...")
+    # All background auto-discovery and scraping disabled on boot for zero idle overhead & instant manual response
+    print("Bot ready for manual commands (Auto-background sync disabled on restart)...")
     await idle()
 
     print("Bot stopped...")

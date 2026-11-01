@@ -556,11 +556,34 @@ async def stop_batch_callback(_, query):
     else:
         await query.answer("No active batch process found.", show_alert=True)
 
-@app.on_message(filters.command("cancel"))
+@app.on_message(filters.command(["cancel", "stop", "cancel_mirror", "stop_mirror"]))
 async def stop_batch_command(_, message):
-    user_id = message.chat.id
-    if user_id in users_loop:
-        users_loop[user_id] = False
-        await message.reply("Batch process stopping... 🛑")
-    else:
-        await message.reply("No active batch process to cancel.")
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    
+    # 1. Stop all batch processes
+    for uid in list(users_loop.keys()):
+        users_loop[uid] = False
+
+    # 2. Stop all topic mirror and extraction tasks
+    stopped_mirrors = 0
+    try:
+        from toxic.modules.topic_mirror import stop_all_active_mirrors
+        stopped_mirrors = stop_all_active_mirrors()
+    except Exception as e:
+        print(f"Error stopping mirrors: {e}")
+
+    # 3. Stop range forwarder tasks
+    try:
+        from toxic.modules.range_forwarder import active_range_jobs
+        for uid in list(active_range_jobs.keys()):
+            active_range_jobs[uid]["running"] = False
+    except Exception:
+        pass
+
+    stop_card = (
+        "<blockquote>🛑 <b>All Bot Tasks Stopped Successfully!</b></blockquote>\n\n"
+        "✨ <b>Status:</b> All active tasks (Topic Mirror, Batch, Downloads) aborted\n"
+        "💾 <b>Checkpoints:</b> Safely preserved in database!\n\n"
+        "<i>Ab koi bhi background task run nahi ho raha hai. Aap jab chahein naya task fresh shuru kar sakte hain.</i>"
+    )
+    await message.reply_text(stop_card, parse_mode=ParseMode.HTML)

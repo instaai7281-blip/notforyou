@@ -4,7 +4,7 @@ FROM python:3.10-slim-bookworm
 # Prevent interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Update system & install dependencies
+# Update system & install dependencies with build tools for native C extensions (tgcrypto/cryptg)
 RUN apt update && apt upgrade -y && \
     apt install -y \
         git \
@@ -14,6 +14,10 @@ RUN apt update && apt upgrade -y && \
         wget \
         bash \
         neofetch \
+        gcc \
+        python3-dev \
+        build-essential \
+        libffi-dev \
         software-properties-common && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
@@ -21,7 +25,7 @@ RUN apt update && apt upgrade -y && \
 # Copy requirements and install Python packages
 COPY requirements.txt .
 
-RUN pip3 install --no-cache-dir wheel && \
+RUN pip3 install --no-cache-dir wheel setuptools && \
     pip3 install --no-cache-dir -r requirements.txt
 
 # Set working directory
