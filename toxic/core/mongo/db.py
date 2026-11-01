@@ -621,16 +621,49 @@ async def get_all_active_userbots():
 # Collection for persistent topic mirror mappings & checkpoints
 mirror_db = mongo.user_data.topic_mirror_sessions
 
-async def get_mirror_session(src_chat_id, tgt_chat_id):
-    """Retrieves saved topic mappings and progress for a source-target pair."""
+def _get_chat_id_variants(chat_id):
+    """Generates all possible integer and string representations for Telegram chat/channel IDs to guarantee 100% cross-bot compatibility."""
+    if not chat_id:
+        return []
+    s = str(chat_id).strip()
+    raw = s.replace("-100", "").replace("-", "")
+    variants = set()
+    if raw.isdigit():
+        r_int = int(raw)
+        variants.add(r_int)
+        variants.add(-r_int)
+        variants.add(int(f"-100{raw}"))
+        variants.add(raw)
+        variants.add(f"-{raw}")
+        variants.add(f"-100{raw}")
+    else:
+        variants.add(s)
+    return list(variants)
+
+def _canonical_tg_id(chat_id) -> int:
+    """Returns canonical -100 integer ID for consistent indexing."""
+    if not chat_id:
+        return 0
+    s = str(chat_id).strip()
+    raw = s.replace("-100", "").replace("-", "")
+    if raw.isdigit():
+        return int(f"-100{raw}")
     try:
-        s_id = int(src_chat_id)
-        t_id = int(tgt_chat_id)
+        return int(chat_id)
+    except Exception:
+        return chat_id
+
+async def get_mirror_session(src_chat_id, tgt_chat_id):
+    """Retrieves saved topic mappings and progress across ALL bots and chat ID representations."""
+    try:
+        s_vars = _get_chat_id_variants(src_chat_id)
+        t_vars = _get_chat_id_variants(tgt_chat_id)
+        id_list = [f"{s}_{t}" for s in s_vars for t in t_vars]
+
         doc = await mirror_db.find_one({
             "$or": [
-                {"_id": f"{s_id}_{t_id}"},
-                {"_id": f"{src_chat_id}_{tgt_chat_id}"},
-                {"src_chat_id": s_id, "tgt_chat_id": t_id}
+                {"_id": {"$in": id_list}},
+                {"src_chat_id": {"$in": s_vars}, "tgt_chat_id": {"$in": t_vars}}
             ]
         })
         return doc if doc else {}
@@ -639,19 +672,23 @@ async def get_mirror_session(src_chat_id, tgt_chat_id):
         return {}
 
 async def save_mirror_topic_mapping(src_chat_id, tgt_chat_id, src_topic_id, tgt_topic_id, title):
-    """Saves or updates a topic mapping between source and target."""
+    """Saves or updates a topic mapping between source and target, updating existing session if present."""
     try:
-        s_id = int(src_chat_id)
-        t_id = int(tgt_chat_id)
+        s_canon = _canonical_tg_id(src_chat_id)
+        t_canon = _canonical_tg_id(tgt_chat_id)
         st_id = int(src_topic_id)
         tt_id = int(tgt_topic_id)
         key = f"topics.{str(st_id)}"
+
+        existing = await get_mirror_session(src_chat_id, tgt_chat_id)
+        target_doc_id = existing.get("_id") if existing else f"{s_canon}_{t_canon}"
+
         await mirror_db.update_one(
-            {"_id": f"{s_id}_{t_id}"},
+            {"_id": target_doc_id},
             {
                 "$set": {
-                    "src_chat_id": s_id,
-                    "tgt_chat_id": t_id,
+                    "src_chat_id": s_canon,
+                    "tgt_chat_id": t_canon,
                     f"{key}.src_topic_id": st_id,
                     f"{key}.tgt_topic_id": tt_id,
                     f"{key}.title": str(title),
@@ -664,19 +701,23 @@ async def save_mirror_topic_mapping(src_chat_id, tgt_chat_id, src_topic_id, tgt_
         print(f"[MongoDB] save_mirror_topic_mapping error: {e}")
 
 async def update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, last_msg_id):
-    """Updates the highest message ID copied for a topic."""
+    """Updates the highest message ID copied for a topic across all variants."""
     try:
-        s_id = int(src_chat_id)
-        t_id = int(tgt_chat_id)
+        s_canon = _canonical_tg_id(src_chat_id)
+        t_canon = _canonical_tg_id(tgt_chat_id)
         st_id = int(src_topic_id)
         lm_id = int(last_msg_id)
         key = f"topics.{str(st_id)}.last_msg_id"
+
+        existing = await get_mirror_session(src_chat_id, tgt_chat_id)
+        target_doc_id = existing.get("_id") if existing else f"{s_canon}_{t_canon}"
+
         await mirror_db.update_one(
-            {"_id": f"{s_id}_{t_id}"},
+            {"_id": target_doc_id},
             {
                 "$set": {
-                    "src_chat_id": s_id,
-                    "tgt_chat_id": t_id,
+                    "src_chat_id": s_canon,
+                    "tgt_chat_id": t_canon,
                     key: lm_id,
                     "updated_at": datetime.datetime.now()
                 }
@@ -687,14 +728,16 @@ async def update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id,
         print(f"[MongoDB] update_mirror_topic_checkpoint error: {e}")
 
 async def reset_mirror_session(src_chat_id, tgt_chat_id):
-    """Resets progress checkpoints for a source-target mirror session."""
+    """Resets progress checkpoints for a source-target mirror session across all ID variants."""
     try:
-        s_id = int(src_chat_id)
-        t_id = int(tgt_chat_id)
-        await mirror_db.delete_one({
+        s_vars = _get_chat_id_variants(src_chat_id)
+        t_vars = _get_chat_id_variants(tgt_chat_id)
+        id_list = [f"{s}_{t}" for s in s_vars for t in t_vars]
+
+        await mirror_db.delete_many({
             "$or": [
-                {"_id": f"{s_id}_{t_id}"},
-                {"_id": f"{src_chat_id}_{tgt_chat_id}"}
+                {"_id": {"$in": id_list}},
+                {"src_chat_id": {"$in": s_vars}, "tgt_chat_id": {"$in": t_vars}}
             ]
         })
     except Exception as e:
@@ -703,16 +746,20 @@ async def reset_mirror_session(src_chat_id, tgt_chat_id):
 async def save_mirror_session_info(user_id, src_chat_id, tgt_chat_id, src_title, tgt_title):
     """Saves session metadata for quick resume buttons."""
     try:
-        s_id = int(src_chat_id)
-        t_id = int(tgt_chat_id)
+        s_canon = _canonical_tg_id(src_chat_id)
+        t_canon = _canonical_tg_id(tgt_chat_id)
         u_id = int(user_id) if user_id else 0
+
+        existing = await get_mirror_session(src_chat_id, tgt_chat_id)
+        target_doc_id = existing.get("_id") if existing else f"{s_canon}_{t_canon}"
+
         await mirror_db.update_one(
-            {"_id": f"{s_id}_{t_id}"},
+            {"_id": target_doc_id},
             {
                 "$set": {
                     "user_id": u_id,
-                    "src_chat_id": s_id,
-                    "tgt_chat_id": t_id,
+                    "src_chat_id": s_canon,
+                    "tgt_chat_id": t_canon,
                     "src_title": str(src_title),
                     "tgt_title": str(tgt_title),
                     "updated_at": datetime.datetime.now()

@@ -728,16 +728,17 @@ def match_existing_target_topic(st_title: str, target_topics_by_title: dict) -> 
 
 async def get_highest_topic_checkpoint(src_chat_id: int, src_topic_id: int, tgt_chat_id: int = None, current_saved_checkpoint: int = 0) -> int:
     """
-    Finds the highest last_msg_id checkpoint for a source topic specifically for this target chat ID.
-    If tgt_chat_id is provided, only searches within that specific target chat's session to ensure
-    each target group/channel maintains its own independent checkpoint.
+    Finds the highest last_msg_id checkpoint across ALL bots and chat ID representations.
+    Ensures seamless continuation regardless of which bot saved the previous progress.
     """
     highest = current_saved_checkpoint
     try:
-        from toxic.core.mongo.db import mirror_db
-        query = {"src_chat_id": int(src_chat_id)}
+        from toxic.core.mongo.db import mirror_db, _get_chat_id_variants
+        s_vars = _get_chat_id_variants(src_chat_id)
+        query = {"src_chat_id": {"$in": s_vars}}
         if tgt_chat_id is not None:
-            query["tgt_chat_id"] = int(tgt_chat_id)
+            t_vars = _get_chat_id_variants(tgt_chat_id)
+            query["tgt_chat_id"] = {"$in": t_vars}
         async for doc in mirror_db.find(query):
             topics = doc.get("topics", {})
             st_info = topics.get(str(src_topic_id), {})
@@ -2667,7 +2668,7 @@ async def sync_session_callback(_, query: CallbackQuery):
         mirror_all_topics=True,
         detected_topic_id=None,
         status_msg=query.message,
-        force_sync=True
+        force_sync=False
     )
 
 
@@ -3013,7 +3014,7 @@ async def update_single_topic_callback(_, query: CallbackQuery):
         mirror_all_topics=False,
         detected_topic_id=src_topic_id,
         status_msg=query.message,
-        force_sync=True
+        force_sync=False
     )
 
 
@@ -4759,83 +4760,19 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 continue
 
             # ────────────────────────────────────────────────────────────
-            # STEP 7: Create a new topic in target — with smart icon & color
-            # Only reached if topic confirmed absent in target everywhere
+            # STEP 7: Create a new topic in target — clean title & safe color
+            # Zero premium account requirement, runs completely smoothly!
             # ────────────────────────────────────────────────────────────
-            styled_title, auto_color, auto_emoji_id = get_topic_styling(st_title)
+            styled_title, auto_color, _ = get_topic_styling(st_title)
             src_icon_color = auto_color or st.get("icon_color") or 0x6FB9F0
-            src_icon_emoji_id = st.get("icon_emoji_id") or auto_emoji_id
-            new_tgt_topic_id = None
-
-            # Attempt 1: Pyrogram high-level API with smart styled title and icon color
-            try:
-                create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": src_icon_color}
-                if src_icon_emoji_id:
-                    create_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                created = await app.create_forum_topic(**create_kwargs)
-                new_tgt_topic_id = extract_topic_id_from_result(created)
-                if new_tgt_topic_id:
-                    print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Pyrogram API")
-            except Exception as hl_err:
-                if src_icon_emoji_id:
-                    try:
-                        created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=src_icon_color)
-                        new_tgt_topic_id = extract_topic_id_from_result(created)
-                    except Exception:
-                        pass
-                if not new_tgt_topic_id:
-                    print(f"[TopicMirror] create_forum_topic notice for '{styled_title}': {hl_err}")
-
-            # Attempt 2: Raw RPC CreateForumTopic if Pyrogram failed
-            if not new_tgt_topic_id:
-                try:
-                    ch_peer = await app.resolve_peer(tgt_chat_id)
-                    inp_ch = raw.types.InputChannel(channel_id=ch_peer.channel_id, access_hash=ch_peer.access_hash)
-                    rpc_kwargs = dict(
-                        channel=inp_ch,
-                        title=styled_title,
-                        random_id=random.randint(1000000, 9999999)
-                    )
-                    if src_icon_color:
-                        rpc_kwargs["icon_color"] = src_icon_color
-                    if src_icon_emoji_id:
-                        rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                    res = await app.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
-                    new_tgt_topic_id = extract_topic_id_from_result(res)
-                    if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via raw RPC")
-                except Exception as rpc_create_err:
-                    print(f"[TopicMirror] ⚠️ CreateForumTopic RPC failed for '{styled_title}': {rpc_create_err}")
-
-            # Attempt 3: Userbot creation if Bot App failed
-            if not new_tgt_topic_id and userbot:
-                try:
-                    create_kwargs = {"chat_id": tgt_chat_id, "title": styled_title, "icon_color": src_icon_color}
-                    if src_icon_emoji_id:
-                        create_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                    created = await userbot.create_forum_topic(**create_kwargs)
-                    new_tgt_topic_id = extract_topic_id_from_result(created)
-                    if new_tgt_topic_id:
-                        print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot API")
-                except Exception as ub_err:
-                    try:
-                        ch_peer = await userbot.resolve_peer(tgt_chat_id)
-                        inp_ch = raw.types.InputChannel(channel_id=ch_peer.channel_id, access_hash=ch_peer.access_hash)
-                        rpc_kwargs = dict(
-                            channel=inp_ch,
-                            title=styled_title,
-                            random_id=random.randint(1000000, 9999999)
-                        )
-                        if src_icon_color:
-                            rpc_kwargs["icon_color"] = src_icon_color
-                        if src_icon_emoji_id:
-                            rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                        res = await userbot.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
-                        new_tgt_topic_id = extract_topic_id_from_result(res)
-                        if new_tgt_topic_id:
-                            print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot raw RPC")
-                    except Exception as ub_rpc_err:
-                        print(f"[TopicMirror] ⚠️ Userbot CreateForumTopic RPC failed for '{styled_title}': {ub_rpc_err}")
+            new_tgt_topic_id = await create_forum_topic_safely(
+                app=app,
+                userbot=userbot,
+                tgt_chat_id=tgt_chat_id,
+                styled_title=styled_title,
+                icon_color=src_icon_color,
+                icon_emoji_id=None
+            )
 
             # After creation, immediately register created topic ID without redundant full scan
             verified_id = new_tgt_topic_id
@@ -4906,6 +4843,15 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         current_topic_index = 0
         start_overall_time = time.time()
 
+        # Quick Pre-scan Status: Audit topics and show exact starting state
+        pre_audit_text = (
+            f"<blockquote><b>⚡️ 𝗔𝗨𝗗𝗜𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖 𝗖𝗛𝗘𝗖𝗞𝗣𝗢𝗜𝗡𝗧𝗦...</b></blockquote>\n\n"
+            f"📂 <b>Total Mapped Topics:</b> <code>{len(topic_map)}</code>\n"
+            f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+            f"<i>Scanning MongoDB checkpoints across all active bots to resume precisely without repeating content...</i>"
+        )
+        await _update_status(pre_audit_text, reply_markup=control_kb)
+
         for src_topic_id, tgt_topic_id in list(topic_map.items()):
             if not tgt_topic_id:
                 continue
@@ -4922,20 +4868,6 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             current_state["skip_topic"] = False
             topic_stats[src_topic_id] = {"copied": 0, "failed": 0, "skipped": 0, "title": topic_title}
 
-            # Immediately show active progress card on topic transition!
-            init_progress_text = (
-                f"<blockquote><b>⚡️ 𝗫𝗧𝗥𝗔𝗖𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖𝗦...</b></blockquote>\n\n"
-                f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
-                f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
-                f"📊 <b>Progress:</b> [▰▱▱▱▱▱▱▱▱▱] 0%\n"
-                f"🔢 <b>Status:</b> <code>Scanning topic messages...</code>\n"
-                f"🚀 <b>Speed:</b> <code>Calculating...</code>\n"
-                f"⏳ <b>ETA:</b> <code>Estimating...</code>\n\n"
-                f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
-                f"❌ Failed: {overall_failed}"
-            )
-            await _update_status(init_progress_text, reply_markup=control_kb)
-
             try:
                 if src_client == userbot and userbot:
                     await ensure_userbot_connected(userbot)
@@ -4951,19 +4883,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 print(f"[TopicMirror] Topic '{topic_title}' → checkpoint: {saved_checkpoint}, target topic: {tgt_topic_id}, force_sync: {force_sync}")
 
                 # Rapidly fetch messages for this topic with checkpoint cutoff
-                if force_sync:
-                    fetch_cutoff = max(0, src_start_id - 1) if (src_start_id is not None and src_start_id > 0) else 0
-                elif src_start_id is not None and src_start_id > 0:
-                    fetch_cutoff = max(0, src_start_id - 1)
+                if src_start_id is not None and src_start_id > 0:
+                    effective_start = max(0, src_start_id - 1)
                 else:
-                    fetch_cutoff = saved_checkpoint
-                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
+                    effective_start = saved_checkpoint
 
-                # Filter pending messages to copy (respecting range + checkpoint)
-                if force_sync:
-                    effective_start = max(0, src_start_id - 1) if (src_start_id is not None and src_start_id > 0) else 0
-                else:
-                    effective_start = max(saved_checkpoint, src_start_id - 1 if src_start_id else 0)
+                fetch_cutoff = effective_start
+                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
                 if src_end_id and src_end_id > 0:
                     messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
                 else:
@@ -5447,84 +5373,69 @@ async def on_group_member_update(_, event):
 
 async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title: str, icon_color: int = None, icon_emoji_id: int = None) -> int:
     """
-    Safely creates a forum topic in tgt_chat_id with robust multi-stage fallback:
-    1. app.create_forum_topic with styled_title + icon_color (+ icon_emoji_id if provided)
-    2. app.create_forum_topic with styled_title + icon_color (without icon_emoji_id)
-    3. app.create_forum_topic with styled_title only
-    4. Raw RPC CreateForumTopic via app
-    5. Userbot create_forum_topic (if userbot has access)
+    Bulletproof topic creation:
+    Creates topic directly with standard color and zero dependency on custom premium emoji icons.
+    Uses peer resolution and raw MTProto invocation to eliminate all 'unexpected keyword argument channel' errors.
     """
     new_id = None
-    
-    # 1. Attempt with app high-level Pyrogram API
+    safe_color = icon_color or 0x6FB9F0
+
+    # Attempt 1: Raw MTProto messages.CreateForumTopic via app (Primary & fastest)
     try:
-        kwargs = {"chat_id": tgt_chat_id, "title": styled_title}
-        if icon_color:
-            kwargs["icon_color"] = icon_color
-        if icon_emoji_id:
-            kwargs["icon_emoji_id"] = icon_emoji_id
-        created = await app.create_forum_topic(**kwargs)
-        new_id = extract_topic_id_from_result(created)
+        peer = await app.resolve_peer(tgt_chat_id)
+        rnd = random.randint(1000000, 9999999)
+        res = await app.invoke(raw.functions.messages.CreateForumTopic(
+            peer=peer,
+            title=styled_title,
+            random_id=rnd,
+            icon_color=safe_color
+        ))
+        new_id = extract_topic_id_from_result(res)
         if new_id:
+            print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via MTProto")
             return new_id
-    except Exception as e1:
-        if icon_emoji_id:
+    except Exception as m_err:
+        print(f"[TopicMirror] MTProto CreateForumTopic notice: {m_err}")
+
+    # Attempt 2: High level Pyrogram create_forum_topic without icon_emoji_id
+    if not new_id:
+        try:
+            created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=safe_color)
+            new_id = extract_topic_id_from_result(created)
+            if new_id:
+                return new_id
+        except Exception:
             try:
-                created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=icon_color)
+                created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
                 new_id = extract_topic_id_from_result(created)
                 if new_id:
                     return new_id
-            except Exception:
-                pass
-        try:
-            created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
-            new_id = extract_topic_id_from_result(created)
-            if new_id:
-                return new_id
-        except Exception:
-            pass
+            except Exception as e2:
+                print(f"[TopicMirror] Pyrogram create_forum_topic notice: {e2}")
 
-    # 2. Attempt with app Raw RPC CreateForumTopic
-    if not new_id:
-        try:
-            peer = await app.resolve_peer(tgt_chat_id)
-            rpc_kwargs = dict(
-                peer=peer,
-                title=styled_title,
-                icon_color=icon_color or 0x6FB9F0,
-                random_id=random.randint(1000000, 9999999)
-            )
-            if icon_emoji_id:
-                rpc_kwargs["icon_emoji_id"] = icon_emoji_id
-            res = await app.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
-            new_id = extract_topic_id_from_result(res)
-            if new_id:
-                return new_id
-        except Exception:
-            try:
-                peer = await app.resolve_peer(tgt_chat_id)
-                res = await app.invoke(raw.functions.messages.CreateForumTopic(
-                    peer=peer,
-                    title=styled_title,
-                    icon_color=0x6FB9F0,
-                    random_id=random.randint(1000000, 9999999)
-                ))
-                new_id = extract_topic_id_from_result(res)
-                if new_id:
-                    return new_id
-            except Exception as rpc_err2:
-                print(f"[TopicMirror] Bot RPC CreateForumTopic notice: {rpc_err2}")
-
-    # 3. Attempt with userbot (only if userbot has met the chat)
+    # Attempt 3: Userbot MTProto fallback
     if not new_id and userbot:
         try:
-            await userbot.get_chat(tgt_chat_id)
-            created = await userbot.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=icon_color or 0x6FB9F0)
-            new_id = extract_topic_id_from_result(created)
+            peer = await userbot.resolve_peer(tgt_chat_id)
+            rnd = random.randint(1000000, 9999999)
+            res = await userbot.invoke(raw.functions.messages.CreateForumTopic(
+                peer=peer,
+                title=styled_title,
+                random_id=rnd,
+                icon_color=safe_color
+            ))
+            new_id = extract_topic_id_from_result(res)
             if new_id:
+                print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via Userbot MTProto")
                 return new_id
         except Exception as ub_err:
-            print(f"[TopicMirror] Userbot CreateForumTopic notice: {ub_err}")
+            try:
+                created = await userbot.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
+                new_id = extract_topic_id_from_result(created)
+                if new_id:
+                    return new_id
+            except Exception as ub_e2:
+                print(f"[TopicMirror] Userbot CreateForumTopic error: {ub_e2}")
 
     return new_id
 
