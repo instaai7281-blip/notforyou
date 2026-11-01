@@ -20,6 +20,7 @@ import unicodedata
 import datetime
 import inspect
 from typing import Callable, Optional, Union, Dict, Any, List
+import pyrogram
 from pyrogram import filters, Client, raw, types, enums, StopTransmission
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
@@ -1456,7 +1457,7 @@ async def resilient_send_media(
                             progress=progress,
                             progress_args=progress_args
                         )
-                    except pyrogram.StopTransmission:
+                    except StopTransmission:
                         raise
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
@@ -1893,13 +1894,13 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         async def _on_dl_prog(current, total):
             st = active_mirrors.get(user_id)
             if isinstance(st, dict) and not st.get("running", True):
-                raise pyrogram.StopTransmission
+                raise StopTransmission
             if progress_callback:
                 try:
                     res = progress_callback(current, total, "⬇️ Downloading")
                     if inspect.iscoroutine(res):
                         await res
-                except pyrogram.StopTransmission:
+                except StopTransmission:
                     raise
                 except Exception:
                     pass
@@ -1907,13 +1908,13 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         async def _on_up_prog(current, total):
             st = active_mirrors.get(user_id)
             if isinstance(st, dict) and not st.get("running", True):
-                raise pyrogram.StopTransmission
+                raise StopTransmission
             if progress_callback:
                 try:
                     res = progress_callback(current, total, "⬆️ Uploading")
                     if inspect.iscoroutine(res):
                         await res
-                except pyrogram.StopTransmission:
+                except StopTransmission:
                     raise
                 except Exception:
                     pass
@@ -1949,7 +1950,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                         except Exception:
                             pass
                     temp_file = None
-            except pyrogram.StopTransmission:
+            except StopTransmission:
                 if temp_file and os.path.isfile(temp_file):
                     try:
                         os.remove(temp_file)
@@ -2017,8 +2018,13 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     if not cl:
                         continue
                     try:
-                        # Pass the thumbnail object or re-fetch to avoid expired file references
-                        res_th = await cl.download_media(target_thumb_obj, file_name=thumb_target_path)
+                        fresh_thumb_obj = target_thumb_obj
+                        if curr_msg != msg:
+                            if curr_msg.video and getattr(curr_msg.video, 'thumbs', None) and len(curr_msg.video.thumbs) > 0:
+                                fresh_thumb_obj = curr_msg.video.thumbs[0]
+                            elif curr_msg.document and getattr(curr_msg.document, 'thumbs', None) and len(curr_msg.document.thumbs) > 0:
+                                fresh_thumb_obj = curr_msg.document.thumbs[0]
+                        res_th = await cl.download_media(fresh_thumb_obj, file_name=thumb_target_path)
                         if res_th and os.path.exists(res_th) and os.path.getsize(res_th) > 0:
                             thumb_path = res_th
                             auto_thumb_file = res_th
@@ -3533,7 +3539,7 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
             f"👤 <b>User:</b> <code>{r_uid}</code>\n\n"
             "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar sabhi running tasks stop karein.</i>"
         )
-        if status_msg:
+        if is_callback and message:
             try:
                 await status_msg.edit(busy_card, parse_mode=ParseMode.HTML)
             except Exception:
@@ -4783,16 +4789,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             # Attempt 2: Raw RPC CreateForumTopic if Pyrogram failed
             if not new_tgt_topic_id:
                 try:
-                    peer = await app.resolve_peer(tgt_chat_id)
+                    ch_peer = await app.resolve_peer(tgt_chat_id)
+                    inp_ch = raw.types.InputChannel(channel_id=ch_peer.channel_id, access_hash=ch_peer.access_hash)
                     rpc_kwargs = dict(
-                        peer=peer,
+                        channel=inp_ch,
                         title=styled_title,
-                        icon_color=src_icon_color,
                         random_id=random.randint(1000000, 9999999)
                     )
+                    if src_icon_color:
+                        rpc_kwargs["icon_color"] = src_icon_color
                     if src_icon_emoji_id:
                         rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                    res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+                    res = await app.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
                     new_tgt_topic_id = extract_topic_id_from_result(res)
                     if new_tgt_topic_id:
                         print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via raw RPC")
@@ -4811,16 +4819,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot API")
                 except Exception as ub_err:
                     try:
-                        peer = await userbot.resolve_peer(tgt_chat_id)
+                        ch_peer = await userbot.resolve_peer(tgt_chat_id)
+                        inp_ch = raw.types.InputChannel(channel_id=ch_peer.channel_id, access_hash=ch_peer.access_hash)
                         rpc_kwargs = dict(
-                            peer=peer,
+                            channel=inp_ch,
                             title=styled_title,
-                            icon_color=src_icon_color,
                             random_id=random.randint(1000000, 9999999)
                         )
+                        if src_icon_color:
+                            rpc_kwargs["icon_color"] = src_icon_color
                         if src_icon_emoji_id:
                             rpc_kwargs["icon_emoji_id"] = src_icon_emoji_id
-                        res = await userbot.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+                        res = await userbot.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
                         new_tgt_topic_id = extract_topic_id_from_result(res)
                         if new_tgt_topic_id:
                             print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_tgt_topic_id}) via Userbot raw RPC")
@@ -4938,17 +4948,22 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 if highest_ckpt > saved_checkpoint:
                     saved_checkpoint = highest_ckpt
 
-                print(f"[TopicMirror] Topic '{topic_title}' → checkpoint: {saved_checkpoint}, target topic: {tgt_topic_id}")
+                print(f"[TopicMirror] Topic '{topic_title}' → checkpoint: {saved_checkpoint}, target topic: {tgt_topic_id}, force_sync: {force_sync}")
 
                 # Rapidly fetch messages for this topic with checkpoint cutoff
-                if src_start_id is not None and src_start_id > 0:
+                if force_sync:
+                    fetch_cutoff = max(0, src_start_id - 1) if (src_start_id is not None and src_start_id > 0) else 0
+                elif src_start_id is not None and src_start_id > 0:
                     fetch_cutoff = max(0, src_start_id - 1)
                 else:
                     fetch_cutoff = saved_checkpoint
                 all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
 
                 # Filter pending messages to copy (respecting range + checkpoint)
-                effective_start = max(saved_checkpoint, src_start_id - 1 if src_start_id else 0)
+                if force_sync:
+                    effective_start = max(0, src_start_id - 1) if (src_start_id is not None and src_start_id > 0) else 0
+                else:
+                    effective_start = max(saved_checkpoint, src_start_id - 1 if src_start_id else 0)
                 if src_end_id and src_end_id > 0:
                     messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
                 else:
@@ -5174,7 +5189,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                 # Send Completion Message DIRECTLY into the specific target topic thread where content was synced
                 effective_thread = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
-                if effective_thread and (topic_stats[src_topic_id]["copied"] > 0 or topic_stats[src_topic_id]["skipped"] > 0):
+                if effective_thread and topic_stats[src_topic_id]["copied"] > 0:
                     try:
                         t_copied = topic_stats[src_topic_id]["copied"]
                         t_skipped = topic_stats[src_topic_id]["skipped"]
@@ -5481,7 +5496,7 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
             )
             if icon_emoji_id:
                 rpc_kwargs["icon_emoji_id"] = icon_emoji_id
-            res = await app.invoke(raw.functions.messages.CreateForumTopic(**rpc_kwargs))
+            res = await app.invoke(raw.functions.channels.CreateForumTopic(**rpc_kwargs))
             new_id = extract_topic_id_from_result(res)
             if new_id:
                 return new_id

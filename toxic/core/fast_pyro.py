@@ -247,12 +247,11 @@ def patch_pyrogram_downloader():
                         raise e
                     finally:
                         await cdn_session.stop()
-            except pyrogram.StopTransmission:
-                raise
-            except pyrogram.errors.FloodWait:
+            except (pyrogram.StopTransmission, pyrogram.errors.FloodWait, pyrogram.errors.FileReferenceExpired):
                 raise
             except Exception as e:
                 log.exception(e)
+                raise
             finally:
                 await session.stop()
 
