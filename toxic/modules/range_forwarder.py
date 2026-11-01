@@ -358,7 +358,7 @@ async def range_forward_command(client: Client, message: types.Message):
 
         # Send Final Completion Message strictly to Target Destination Topic / Chat
         completion_text = (
-            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b></blockquote>\n\n"
+            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎</b></blockquote>\n\n"
             f"• <b>Total Content in Topic:</b> 📁 <code>{copied_count}</code> files"
         )
 

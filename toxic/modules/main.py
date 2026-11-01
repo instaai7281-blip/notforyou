@@ -534,7 +534,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                     except Exception:
                         pass
                 try:
-                    await app.send_message(chat_id, "> **✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎**", reply_to_message_id=topic_id)
+                    await app.send_message(chat_id, "> **✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎**", reply_to_message_id=topic_id)
                 except Exception as e:
                     print(f"Failed to send complete message to target chat: {e}")
 

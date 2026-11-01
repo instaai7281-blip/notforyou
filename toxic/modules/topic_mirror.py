@@ -3949,7 +3949,7 @@ async def run_single_link_mirror(
         # Send Completion Message DIRECTLY to target topic inside blockquote
         elapsed_total = time.time() - start_time
         completion_msg = (
-            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
             f"📁 <b>Total Downloaded:</b> <code>{copied_count}</code> files\n"
             f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
             f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
@@ -5180,7 +5180,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         t_skipped = topic_stats[src_topic_id]["skipped"]
                         t_elapsed = time.time() - topic_start_time
                         topic_done_msg = (
-                            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+                            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
                             f"📁 <b>Topic:</b> <code>{topic_title}</code>\n"
                             f"📥 <b>New Files Downloaded:</b> <code>{t_copied}</code> files\n"
                             f"⏩ <b>Already Up-to-date:</b> <code>{t_skipped}</code> files\n"
@@ -5285,7 +5285,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     )
             else:
                 # Jab naya content download / update hua ho
-                header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝗮𝘆𝗮 𝗕ꪮ$$ 😎"
+                header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎"
                 target_group_msg = (
                     f"<blockquote><b>{header}</b>\n\n"
                     f"📁 <b>New Files Downloaded & Updated:</b> <code>{overall_copied}</code> files\n"
