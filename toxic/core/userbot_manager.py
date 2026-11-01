@@ -110,8 +110,8 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 session_string=session_string,
                 in_memory=True,
                 no_updates=True,
-                workers=150,
-                max_concurrent_transmissions=128,
+                workers=20,
+                max_concurrent_transmissions=4,
                 sleep_threshold=120
             )
             await ub.start()

@@ -154,6 +154,7 @@ def patch_pyrogram_downloader():
                         if len(chunk) < chunk_size or current >= total:
                             break
 
+                        await asyncio.sleep(0.02)
                         r = await session.invoke(
                             raw.functions.upload.GetFile(
                                 location=location,
@@ -241,6 +242,7 @@ def patch_pyrogram_downloader():
 
                             if len(chunk) < chunk_size or current >= total:
                                 break
+                            await asyncio.sleep(0.02)
                     except Exception as e:
                         raise e
                     finally:
