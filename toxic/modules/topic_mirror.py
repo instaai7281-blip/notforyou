@@ -3477,10 +3477,14 @@ async def new_mirror_callback(_, query: CallbackQuery):
     if await chk_mirror_user(user_id) != 0:
         await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan! Upgrade via /plans.", show_alert=True)
         return
-    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
-        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+    
+    is_running, r_uid, r_state = is_any_mirror_running()
+    if is_running:
+        cur_t = r_state.get("current_topic", "In progress") if r_state else "In progress"
+        await query.answer(f"⚠️ A mirror task is currently active ({cur_t})! Send /cancel to stop.", show_alert=True)
         return
-    await query.answer()
+
+    await query.answer("⚡ Starting New Group Mirror Wizard...")
     await start_new_mirror_flow(user_id, query.message, is_callback=True)
 
 
@@ -3528,7 +3532,7 @@ def get_mirror_access_denied_card():
 
 
 async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False):
-    """Interactive flow to configure and launch a new topic mirror session."""
+    """Interactive flow to configure and launch a new topic mirror session with seamless message editing."""
     # Enforce Global Single Task Concurrency (Only 1 task per bot instance)
     is_running, r_uid, r_state = is_any_mirror_running()
     if is_running and r_uid != user_id:
@@ -3542,7 +3546,7 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
         )
         if is_callback and message:
             try:
-                await status_msg.edit(busy_card, parse_mode=ParseMode.HTML)
+                await message.edit_text(busy_card, parse_mode=ParseMode.HTML)
             except Exception:
                 pass
         else:
@@ -3552,60 +3556,120 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
         err_msg, kb = get_mirror_access_denied_card()
-        if is_callback:
-            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        if is_callback and message:
+            try:
+                await message.edit_text(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         else:
             await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
 
+    cancel_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel / Back to Hub", callback_data="tm_hub")]
+    ])
+    active_chat_id = message.chat.id if message else user_id
 
     # STEP 1: Ask for Source Message/Topic Link
+    step1_text = (
+        "<blockquote><b>⚡️ 𝗡𝗘𝗪 𝗚𝗥𝗢𝗨𝗣 𝗠𝗜𝗥𝗥𝗢𝗥 𝗦𝗘𝗦𝗦𝗜𝗢𝗡</b></blockquote>\n\n"
+        "📥 <b>Step 1 of 2 — Source Link</b>\n"
+        "Send any message link from the <b>SOURCE Topics group / channel</b>:\n\n"
+        "• <i>Topic link:</i> <code>https://t.me/c/1234567890/164/500</code>\n"
+        "• <i>Public link:</i> <code>https://t.me/group_name/100</code>\n\n"
+        "<i>Send <code>/cancel</code> or click Cancel to abort.</i>"
+    )
+
+    if is_callback and message:
+        try:
+            await message.edit_text(step1_text, parse_mode=ParseMode.HTML, reply_markup=cancel_kb)
+        except Exception:
+            pass
+
     try:
         prompt_1 = await app.ask(
-            user_id,
-            "🔗 **Send any message link from the SOURCE Topics group / channel:**\n\n"
-            "*(e.g., `https://t.me/c/1234567890/164/500` or `https://t.me/username/100`)*\n\n"
-            "Send `/cancel` to abort.",
+            chat_id=active_chat_id,
+            text=step1_text if not (is_callback and message) else "",
+            user_id=user_id,
             timeout=180
         )
     except Exception as e:
-        err_text = "❌ **Interactive Prompt Failed:**\nPlease start the bot first in private DM (@" + (await app.get_me()).username + ") to configure prompts!"
-        if is_callback:
-            await app.send_message(user_id, err_text)
+        err_text = f"⏱ <b>Prompt timed out or cancelled:</b> {e}"
+        if is_callback and message:
+            try:
+                await message.edit_text(err_text, parse_mode=ParseMode.HTML, reply_markup=cancel_kb)
+            except Exception:
+                pass
         else:
-            await message.reply(err_text)
+            await app.send_message(user_id, err_text, parse_mode=ParseMode.HTML)
         return
 
-    if prompt_1.text == "/cancel":
-        await app.send_message(user_id, "❌ Operation cancelled.")
+    if not prompt_1 or prompt_1.text == "/cancel":
+        cancel_text = "❌ <b>Operation cancelled.</b>\n\nUse <code>/mirror</code> anytime to start again."
+        if is_callback and message:
+            try:
+                await message.edit_text(cancel_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Hub", callback_data="tm_hub")]]))
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, cancel_text, parse_mode=ParseMode.HTML)
         return
 
     src_link = prompt_1.text.strip()
     src_chat_id, detected_topic_id, src_msg_id = parse_source_link(src_link)
 
     if not src_chat_id:
-        await app.send_message(user_id, "❌ **Invalid Telegram link format.** Please provide a valid message link.")
+        invalid_text = "❌ <b>Invalid Telegram link format.</b> Please provide a valid message link (e.g., <code>https://t.me/c/1234567890/164/500</code>)."
+        if is_callback and message:
+            try:
+                await message.edit_text(invalid_text, parse_mode=ParseMode.HTML, reply_markup=cancel_kb)
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, invalid_text, parse_mode=ParseMode.HTML)
         return
 
     # STEP 2: Ask for Target Supergroup ID
     user_db_data = await db.get_data(user_id)
     saved_target = user_db_data.get("chat_id") if user_db_data else None
+    default_prompt_text = f"\n*(Default from settings: <code>{saved_target}</code> — send <code>ok</code> to use it)*" if saved_target else ""
 
-    default_prompt_text = f"\n*(Default from settings: `{saved_target}` — send `ok` to use it)*" if saved_target else ""
+    step2_text = (
+        "<blockquote><b>⚡️ 𝗡𝗘𝗪 𝗚𝗥𝗢𝗨𝗣 𝗠𝗜𝗥𝗥𝗢𝗥 𝗦𝗘𝗦𝗦𝗜𝗢𝗡</b></blockquote>\n\n"
+        f"✅ <b>Source Identified:</b> <code>{src_chat_id}</code>\n\n"
+        "📥 <b>Step 2 of 2 — Target Group ID</b>\n"
+        "Send the <b>TARGET Supergroup ID</b>:\n\n"
+        "• <i>Format:</i> Must start with <code>-100</code> (e.g. <code>-1001234567890</code>)"
+        f"{default_prompt_text}\n\n"
+        "<i>Send <code>/cancel</code> or click Cancel to abort.</i>"
+    )
+
+    if is_callback and message:
+        try:
+            await message.edit_text(step2_text, parse_mode=ParseMode.HTML, reply_markup=cancel_kb)
+        except Exception:
+            pass
+
     try:
         prompt_2 = await app.ask(
-            user_id,
-            f"📥 **Send the TARGET Supergroup ID:**\n\n"
-            f"*(Must start with `-100`, e.g. `-100987654321`)*{default_prompt_text}\n\n"
-            f"Send `/cancel` to abort.",
+            chat_id=active_chat_id,
+            text=step2_text if not (is_callback and message) else "",
+            user_id=user_id,
             timeout=180
         )
     except Exception as e:
         await app.send_message(user_id, f"❌ Session timed out or error: {e}")
         return
 
-    if prompt_2.text == "/cancel":
-        await app.send_message(user_id, "❌ Operation cancelled.")
+    if not prompt_2 or prompt_2.text == "/cancel":
+        cancel_text = "❌ <b>Operation cancelled.</b>"
+        if is_callback and message:
+            try:
+                await message.edit_text(cancel_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Hub", callback_data="tm_hub")]]))
+            except Exception:
+                pass
+        else:
+            await app.send_message(user_id, cancel_text, parse_mode=ParseMode.HTML)
         return
 
     target_input = prompt_2.text.strip()
@@ -3621,31 +3685,43 @@ async def start_new_mirror_flow(user_id: int, message, is_callback: bool = False
     # STEP 3: Ask Mirror Mode (All Topics vs Single Topic)
     mirror_all_topics = True
     if detected_topic_id:
+        step3_text = (
+            "<blockquote><b>⚡️ 𝗡𝗘𝗪 𝗚𝗥𝗢𝗨𝗣 𝗠𝗜𝗥𝗥𝗢𝗥 𝗦𝗘𝗦𝗦𝗜𝗢𝗡</b></blockquote>\n\n"
+            f"🎛️ <b>Topic Selection Detected:</b>\n\n"
+            f"• Source Topic ID detected: <code>{detected_topic_id}</code>\n\n"
+            "Reply with:\n"
+            "<b>1</b> — 🌐 Mirror <b>ALL Topics</b> from the source group (Recommended)\n"
+            "<b>2</b> — 🎯 Mirror <b>ONLY Topic <code>{detected_topic_id}</code></b>\n\n"
+            "<i>Send <code>/cancel</code> to abort.</i>"
+        )
+        if is_callback and message:
+            try:
+                await message.edit_text(step3_text, parse_mode=ParseMode.HTML, reply_markup=cancel_kb)
+            except Exception:
+                pass
         try:
             prompt_3 = await app.ask(
-                user_id,
-                f"🎛️ **Topic Selection Detected:**\n\n"
-                f"• Source Topic ID detected: `{detected_topic_id}`\n\n"
-                f"Reply with:\n"
-                f"**1** — 🌐 Mirror **ALL Topics** from the source group (Recommended)\n"
-                f"**2** — 🎯 Mirror **ONLY Topic `{detected_topic_id}`**\n\n"
-                f"Send `/cancel` to abort.",
+                chat_id=active_chat_id,
+                text=step3_text if not (is_callback and message) else "",
+                user_id=user_id,
                 timeout=180
             )
-            if prompt_3.text == "/cancel":
+            if prompt_3 and prompt_3.text == "/cancel":
                 await app.send_message(user_id, "❌ Operation cancelled.")
                 return
-            if prompt_3.text.strip() == "2":
+            if prompt_3 and prompt_3.text.strip() == "2":
                 mirror_all_topics = False
         except Exception:
             mirror_all_topics = True
 
+    status_target_msg = message if is_callback and message else None
     await run_topic_mirror(
         user_id=user_id,
         src_chat_id=src_chat_id,
         tgt_chat_id=tgt_chat_id,
         mirror_all_topics=mirror_all_topics,
-        detected_topic_id=detected_topic_id
+        detected_topic_id=detected_topic_id,
+        status_msg=status_target_msg
     )
 
 
