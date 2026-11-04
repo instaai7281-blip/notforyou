@@ -599,7 +599,7 @@ def extract_caption_content_ids(text: str) -> set:
     if not text:
         return set()
     patterns = [
-        r'(?i)(?:pdf|video|doc|lecture|file|item|content|msg)[\s_]*id[\s_]*[:\-#]?[\s_]*(\d+)',
+        r'(?i)(?:index|idx|pdf|video|doc|lecture|file|item|content|msg)[\s_]*(?:id)?[\s_]*[:\-#]?[\s_]*(\d+)',
         r'(?i)id[\s_]*[:\-#][\s_]*(\d+)',
         r'\[(?:ID|id)[\s:]*(\d+)\]',
         r'\((?:ID|id)[\s:]*(\d+)\)'
@@ -609,7 +609,7 @@ def extract_caption_content_ids(text: str) -> set:
         for match in re.finditer(pattern, str(text)):
             try:
                 val = int(match.group(1))
-                if val >= 1000:
+                if val >= 100:
                     extracted_ids.add(val)
             except Exception:
                 pass
@@ -1852,6 +1852,25 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         await asyncio.sleep(fw.value + 1)
         return await transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_topic_id, msg, user_id, is_general_topic=is_general_topic, src_client=src_client, is_public=is_public)
     except Exception as cp_err:
+        # 2.6 FAST PATH: Userbot direct server-side copy
+        if userbot:
+            try:
+                ub_copied = await userbot.copy_message(
+                    chat_id=tgt_chat_id,
+                    from_chat_id=src_chat_id,
+                    message_id=msg.id,
+                    caption=caption_html or final_caption,
+                    parse_mode=ParseMode.HTML if caption_html else None,
+                    message_thread_id=effective_tgt_topic_id,
+                    reply_to_message_id=effective_tgt_topic_id
+                )
+                if ub_copied:
+                    sent_id = getattr(ub_copied, 'id', None)
+                    await _log_msg(ub_copied)
+                    return True, 'ub_fast_copy', sent_id
+            except Exception:
+                pass
+
         # Fallback to direct forward if copy_message is restricted
         try:
             fwd_res = await app.forward_messages(
@@ -4409,6 +4428,202 @@ async def topic_link_callback(_, query: CallbackQuery):
     await start_topic_link_flow(user_id, query.message, is_callback=True)
 
 
+async def start_topic_link_flow(user_id: int, message, is_callback: bool = False):
+    """Interactive prompt flow for mirroring from ONE specific topic link to ANOTHER topic link with range support."""
+    if await chk_mirror_user(user_id) != 0:
+        err_msg, kb = get_mirror_access_denied_card()
+        if is_callback:
+            await app.send_message(user_id, err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await message.reply(err_msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+        if is_callback:
+            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(err_active, parse_mode=ParseMode.HTML)
+        return
+
+    # STEP 1: SOURCE Link (Topic link / Post link / Channel link)
+    try:
+        prompt_1 = await app.ask(
+            user_id,
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 1 of 3 — Source Link</b>\n"
+            "<i>Jis topic/channel se copy karna hai uska link bhejo.</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📂 Topic link: <code>https://t.me/c/123/50</code>\n"
+            "• 🎯 Post link: <code>https://t.me/c/123/50/100</code>\n"
+            "• 📣 Channel link: <code>https://t.me/channel/100</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        err_text = "⏱ <b>Prompt timed out!</b>\n\nPlease start the bot in your private DM first."
+        if is_callback:
+            await app.send_message(user_id, err_text, parse_mode=ParseMode.HTML)
+        else:
+            await message.reply(err_text, parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_1.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    src_link = prompt_1.text.strip()
+    src_chat_id, src_topic_id, src_post_id = parse_topic_and_post_link(src_link)
+
+    if not src_chat_id:
+        await app.send_message(
+            user_id,
+            "❌ <b>Invalid Source link!</b>\n\nCould not extract Group / Channel ID.\n\n"
+            "Example: <code>https://t.me/c/1234567890/50</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    src_start_id = src_post_id if src_post_id else (src_topic_id if src_topic_id else 0)
+
+    # STEP 2: End Post Link or Count (Optional)
+    try:
+        prompt_2 = await app.ask(
+            user_id,
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 2 of 3 — Range Limit</b>\n"
+            "<i>Kahan tak copy karna hai? (Sab copy karna ho to 0 bhejo)</i>\n\n"
+            "<b>Options:</b>\n"
+            "• 🏁 End post link: <code>https://t.me/c/123/50/200</code>\n"
+            "• 🔢 Message count: <code>50</code>\n"
+            "• ♾️ All pending: <code>0</code> or <code>all</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        await app.send_message(user_id, "⏱ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_2.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    src_end_id = 0
+    val2 = prompt_2.text.strip()
+    if val2.isdigit():
+        count_or_id = int(val2)
+        if count_or_id > 0:
+            if src_start_id > 0 and count_or_id < 10000 and count_or_id < src_start_id:
+                src_end_id = src_start_id + count_or_id - 1
+            else:
+                src_end_id = count_or_id
+    else:
+        _, end_tid, end_pid = parse_topic_and_post_link(val2)
+        src_end_id = end_pid or end_tid or 0
+
+    # STEP 3: TARGET Topic Link / Group Link
+    try:
+        prompt_3 = await app.ask(
+            user_id,
+            "📌 <b>TOPIC LINK MIRROR</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>Step 3 of 3 — Target Destination</b>\n"
+            "<i>Jahan content dalna hai uska link bhejo (Bot Admin hona chahiye).</i>\n\n"
+            "<b>Formats:</b>\n"
+            "• 📂 Topic link: <code>https://t.me/c/987/200</code>\n"
+            "• 🆔 Group ID: <code>-1009876543</code>\n"
+            "• 👤 Username: <code>@my_channel</code>\n\n"
+            "❌ Send <code>/cancel</code> to abort.",
+            timeout=300,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception:
+        await app.send_message(user_id, "❌ <b>Prompt timed out.</b>", parse_mode=ParseMode.HTML)
+        return
+
+    if prompt_3.text.strip() == "/cancel":
+        await app.send_message(user_id, "❌ Operation cancelled.")
+        return
+
+    tgt_link = prompt_3.text.strip()
+    tgt_chat_id, tgt_topic_id, _ = parse_topic_and_post_link(tgt_link)
+
+    if not tgt_chat_id:
+        await app.send_message(
+            user_id,
+            "❌ <b>Invalid Target link!</b>\nExample: <code>https://t.me/c/9876543210/200</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Resolve usernames to numeric IDs
+    userbot, _ = await get_working_userbot(user_id)
+    if isinstance(src_chat_id, str) and userbot:
+        try:
+            c = await userbot.get_chat(src_chat_id)
+            src_chat_id = c.id
+        except Exception:
+            pass
+
+    if isinstance(tgt_chat_id, str):
+        try:
+            c = await app.get_chat(tgt_chat_id)
+            tgt_chat_id = c.id
+        except Exception:
+            pass
+
+    start_str = f"#{src_start_id}" if src_start_id > 0 else "Beginning"
+    end_str = f"#{src_end_id}" if src_end_id > 0 else "End"
+
+    control_kb = get_mirror_keyboard(user_id)
+    status_msg = await app.send_message(
+        user_id,
+        f"🚀 <b>Single Topic Link Mirror Starting...</b>\n\n"
+        f"📤 <b>Source:</b> <code>{src_chat_id}</code>" + (f" | Topic: <code>{src_topic_id}</code>" if src_topic_id else "") + "\n"
+        f"📥 <b>Target:</b> <code>{tgt_chat_id}</code>" + (f" | Topic: <code>{tgt_topic_id}</code>" if tgt_topic_id else "") + "\n"
+        f"📊 <b>Range:</b> {start_str} ➔ {end_str}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=control_kb
+    )
+
+    await run_single_link_mirror(
+        user_id=user_id,
+        src_chat_id=src_chat_id,
+        src_topic_id=src_topic_id,
+        tgt_chat_id=tgt_chat_id,
+        tgt_topic_id=tgt_topic_id,
+        src_start_id=src_start_id if src_start_id > 0 else None,
+        src_end_id=src_end_id if src_end_id > 0 else None,
+        status_msg=status_msg
+    )
+
+
+@app.on_message(filters.command(["topiclink", "linkmirror", "topicmirrorlink"]))
+async def topic_link_cmd(client, message):
+    if not message.from_user:
+        await message.reply("❌ **Error:** This command must be sent by a user.")
+        return
+    user_id = message.from_user.id
+    await start_topic_link_flow(user_id, message, is_callback=False)
+
+
+@app.on_callback_query(filters.regex(r"^tm_topiclink$"))
+async def topic_link_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirroring requires the ₹299 Topic Mirror Plan!", show_alert=True)
+        return
+    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
+        await query.answer("⚠️ A mirror task is already running!", show_alert=True)
+        return
+    await query.answer()
+    await start_topic_link_flow(user_id, query.message, is_callback=True)
+
+
 @app.on_callback_query(filters.regex(r"^tm_picktopic_(-?\d+)_(-?\d+)$"))
 async def pick_single_topic_callback(_, query: CallbackQuery):
     user_id = query.from_user.id
@@ -5103,16 +5318,39 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 else:
                     effective_start = saved_checkpoint
 
-                fetch_cutoff = effective_start
-                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
-                if src_end_id and src_end_id > 0:
-                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
+                # Step A: Scan target topic FIRST to know what content is already synced
+                synced_caption_ids = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
+                target_empty = (len(synced_caption_ids) == 0)
+
+                # Step B: Determine effective start checkpoint
+                if src_start_id is not None and src_start_id > 0:
+                    effective_start = max(0, src_start_id - 1)
+                elif target_empty:
+                    # If target topic is 100% empty, ignore stale DB checkpoint and sync all from post 0!
+                    print(f"[TopicMirror] Target topic {tgt_topic_id} is completely EMPTY. Syncing from message 0.")
+                    effective_start = 0
                 else:
-                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start]
-                already_done_count = len(all_topic_messages) - len(messages_to_copy)
+                    effective_start = saved_checkpoint
+
+                # Step C: Fetch messages for topic
+                fetch_cutoff = 0 if target_empty else effective_start
+                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
+                
+                if target_empty:
+                    if src_end_id and src_end_id > 0:
+                        messages_to_copy = [m for m in all_topic_messages if m.id <= src_end_id]
+                    else:
+                        messages_to_copy = all_topic_messages
+                    already_done_count = 0
+                else:
+                    if src_end_id and src_end_id > 0:
+                        messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
+                    else:
+                        messages_to_copy = [m for m in all_topic_messages if m.id > effective_start]
+                    already_done_count = len(all_topic_messages) - len(messages_to_copy)
+
                 topic_stats[src_topic_id]["skipped"] = already_done_count
                 overall_skipped += already_done_count
-
                 total_msgs_in_topic = len(messages_to_copy)
 
                 if total_msgs_in_topic == 0:
@@ -5130,9 +5368,6 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     )
                     await _update_status(up_to_date_text, reply_markup=control_kb)
                     continue
-
-                # Scan target topic content IDs for smart deduplication & zero-skip continuation
-                synced_caption_ids = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
 
 
                 # Instant Extraction Start without heavy pre-loop file sizing
@@ -5813,8 +6048,22 @@ async def run_channel_to_topics_mirror(
     topic_cache = dict(target_topics_by_title)
     for tid, info in target_topics_by_id.items():
         if isinstance(info, dict) and "title" in info:
-            topic_cache[info["title"].strip().lower()] = tid
-            topic_cache[normalize_topic_title(info["title"])] = tid
+            t_name = info["title"].strip()
+            topic_cache[t_name.lower()] = tid
+            topic_cache[normalize_topic_title(t_name)] = tid
+            topic_cache[alphanumeric_topic_title(t_name)] = tid
+
+    # Layer 2: Merge persistent topics from MongoDB so previously created topics are NEVER duplicated
+    try:
+        from toxic.core.mongo.db import get_target_forum_topics, save_target_forum_topic
+        saved_mongo_topics = await get_target_forum_topics(tgt_chat_id)
+        for t_title, tid in saved_mongo_topics.items():
+            topic_cache[t_title.lower()] = int(tid)
+            topic_cache[normalize_topic_title(t_title)] = int(tid)
+            topic_cache[alphanumeric_topic_title(t_title)] = int(tid)
+        print(f"[C2T] Loaded {len(saved_mongo_topics)} saved topics from MongoDB for group {tgt_chat_id}")
+    except Exception as m_t_err:
+        print(f"[C2T] Notice loading MongoDB topics: {m_t_err}")
 
     # Save C2T session metadata in mirror_db so it appears in Mirror Hub with all buttons
     from toxic.core.mongo.db import mirror_db
@@ -5958,19 +6207,34 @@ async def run_channel_to_topics_mirror(
         # Extract topic from caption / text
         raw_cap = (msg.caption.markdown if hasattr(msg.caption, 'markdown') and msg.caption.markdown else msg.caption) or (msg.text.markdown if hasattr(msg.text, 'markdown') and msg.text.markdown else msg.text) or ""
         detected_topic_name = extract_topic_from_caption(raw_cap)
-        if not detected_topic_name:
+        
+        is_general_fallback = False
+        if not detected_topic_name or detected_topic_name.strip().lower() in ("general", "general content", "general topic", "default"):
+            is_general_fallback = True
             detected_topic_name = "General Content"
 
         styled_title, icon_color, icon_emoji_id = get_topic_styling(detected_topic_name)
         norm_name = normalize_topic_title(detected_topic_name)
         norm_styled = normalize_topic_title(styled_title)
+        alnum_name = alphanumeric_topic_title(detected_topic_name)
 
-        # Robust topic lookup: matches exact raw, normalized variants, or alphanumeric
+        # Robust topic lookup across exact raw, normalized variants, or alphanumeric
         tgt_topic_id = match_existing_target_topic(detected_topic_name, topic_cache)
         if not tgt_topic_id:
             tgt_topic_id = match_existing_target_topic(styled_title, topic_cache)
         if not tgt_topic_id:
-            tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(detected_topic_name.strip().lower())
+            tgt_topic_id = topic_cache.get(norm_name) or topic_cache.get(norm_styled) or topic_cache.get(alnum_name) or topic_cache.get(detected_topic_name.strip().lower())
+
+        # Fuzzy match fallback before creating any new topic
+        if not tgt_topic_id:
+            for ex_key, ex_id in list(topic_cache.items()):
+                if ex_key and (ex_key == norm_name or ex_key == alnum_name or ex_key == detected_topic_name.strip().lower()):
+                    tgt_topic_id = ex_id
+                    break
+
+        # If it's a general post with no specific topic and no existing General Content topic, route directly to Topic #1 (Telegram's built-in General Topic)
+        if is_general_fallback and not tgt_topic_id:
+            tgt_topic_id = 1
 
         # If topic already exists, ensure its left icon badge displays the real custom emoji
         # and strip any old prepended emojis from its title on Telegram
@@ -6011,10 +6275,18 @@ async def run_channel_to_topics_mirror(
                 created_topics_count += 1
                 topic_cache[norm_name] = tgt_topic_id
                 topic_cache[norm_styled] = tgt_topic_id
+                topic_cache[alnum_name] = tgt_topic_id
                 topic_cache[detected_topic_name.strip().lower()] = tgt_topic_id
                 _register_topic(topic_cache, target_topics_by_id, styled_title, tgt_topic_id)
                 _register_topic(topic_cache, target_topics_by_id, detected_topic_name, tgt_topic_id)
-                print(f"[C2T] ✅ Auto-created topic '{styled_title}' (ID: {tgt_topic_id})")
+                # Instantly persist to MongoDB so this topic is NEVER created again across bot restarts
+                try:
+                    from toxic.core.mongo.db import save_target_forum_topic
+                    await save_target_forum_topic(tgt_chat_id, detected_topic_name, tgt_topic_id)
+                    await save_target_forum_topic(tgt_chat_id, styled_title, tgt_topic_id)
+                except Exception as save_err:
+                    print(f"[C2T] Notice saving topic to MongoDB: {save_err}")
+                print(f"[C2T] ✅ Auto-created topic '{styled_title}' (ID: {tgt_topic_id}) and saved to MongoDB")
             else:
                 tgt_topic_id = 1
 

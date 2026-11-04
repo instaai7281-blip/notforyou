@@ -201,7 +201,10 @@ async def set(client, message):
         BotCommand("transfer", "💞 𝗚𝗶𝗳𝘁 𝗽𝗿𝗲𝗺𝗶𝘂𝗺"),
         BotCommand("stats", "📊 𝗕𝗼𝘁 𝘀𝘁𝗮𝘁𝗶𝘀𝘁𝗶𝗰𝘀"),
         BotCommand("gcast", "📢 𝗚𝗿𝗼𝘂𝗽 𝗯𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁"),
-        BotCommand("autobroadcast", "⚡ 𝗔𝘂𝘁𝗼 𝗯𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀")
+        BotCommand("autobroadcast", "⚡ 𝗔𝘂𝘁𝗼 𝗯𝗿𝗼𝗮𝗱𝗰𝗮𝘀𝘁 𝘀𝗲𝘁𝘁𝗶𝗻𝗴𝘀"),
+            BotCommand("checkuser", "🔍 Audit user memberships"),
+            BotCommand("multiban", "🚫 Stealth multi-channel ban"),
+            BotCommand("multiunban", "🔓 Universal channel unban")
     ])
  
     await message.reply("✅ Commands configured successfully!")

@@ -875,14 +875,19 @@ async def update_mirror_schedule_last_run(src_chat_id: int, tgt_chat_id: int, ru
 DEFAULT_GROUP_BIO = (
     "Don't DM to anyone ⚠️\n\n"
     "https://telegra.ph/Disclaimer-cum-DMCA-09-13-2\n\n"
-    "Contact: @CHOSEN_ONEx_bot"
+    "Contact: @BerlinxMoney_bot"
 )
 
 async def get_custom_group_bio() -> str:
     """Retrieves configured global group bio/description from MongoDB, or default."""
     doc = await db.find_one({"_id": "global_group_bio"})
     if doc and doc.get("bio"):
-        return doc["bio"]
+        bio_val = doc["bio"]
+        if "CHOSEN_ONE" in bio_val.upper():
+            import re
+            bio_val = re.sub(r'@CHOSEN_ONEx_bot', '@BerlinxMoney_bot', bio_val, flags=re.IGNORECASE)
+            await db.update_one({"_id": "global_group_bio"}, {"$set": {"bio": bio_val}})
+        return bio_val
     return DEFAULT_GROUP_BIO
 
 async def set_custom_group_bio(bio: str):
@@ -1011,3 +1016,31 @@ async def reset_c2t_checkpoint(src_chat_id, tgt_chat_id):
         await c2t_db.delete_one({"_id": _c2t_key(src_chat_id, tgt_chat_id)})
     except Exception:
         pass
+
+
+async def save_target_forum_topic(tgt_chat_id: int, topic_title: str, topic_id: int):
+    """Saves a created/discovered topic title -> topic_id mapping for a target group in MongoDB."""
+    try:
+        clean_title = str(topic_title).strip()
+        clean_lower = clean_title.lower()
+        await c2t_db.update_one(
+            {"_id": f"group_topics_{tgt_chat_id}"},
+            {"$set": {
+                f"topics.{clean_lower}": int(topic_id),
+                "tgt_chat_id": tgt_chat_id,
+                "updated_at": datetime.datetime.now()
+            }},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[C2T_DB] save_target_forum_topic error: {e}")
+
+async def get_target_forum_topics(tgt_chat_id: int) -> dict:
+    """Retrieves all previously saved topics for a target group from MongoDB."""
+    try:
+        doc = await c2t_db.find_one({"_id": f"group_topics_{tgt_chat_id}"})
+        if doc and "topics" in doc:
+            return doc["topics"]
+    except Exception as e:
+        print(f"[C2T_DB] get_target_forum_topics error: {e}")
+    return {}

@@ -37,6 +37,7 @@ async def generate_random_name(length=8):
 
 
 users_loop = {}
+batch_active_loops = {}
 interval_set = {}
 batch_mode = {}
 
@@ -120,7 +121,7 @@ async def single_link(_, message):
         return
 
     # Check if user is already in a loop
-    if users_loop.get(user_id, False):
+    if batch_active_loops.get(user_id, False):
         await message.reply(
             "You already have an ongoing process. Please wait for it to finish or cancel it with /cancel."
         )
@@ -144,7 +145,7 @@ async def single_link(_, message):
         return
 
     # Add user to the loop
-    users_loop[user_id] = True
+    batch_active_loops[user_id] = True
 
     link = message.text if "tg://openmessage" in message.text else get_link(message.text)
     msg = await message.reply("Processing...")
@@ -220,7 +221,7 @@ async def batch_link(_, message):
         return
 
     # Check if a batch process is already running
-    if users_loop.get(user_id, False):
+    if batch_active_loops.get(user_id, False):
         await app.send_message(
             message.chat.id,
             "You already have a batch process running. Please wait for it to complete."
@@ -405,7 +406,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
     )
     await pin_msg.pin(both_sides=True)
 
-    users_loop[user_id] = True
+    batch_active_loops[user_id] = True
     userbot = None
     success_count = 0
     fail_count = 0
@@ -415,7 +416,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         userbot = await initialize_userbot(user_id)
         
         for i in range(cs, cs + cl):
-            if user_id not in users_loop or not users_loop[user_id]:
+            if user_id not in batch_active_loops or not batch_active_loops[user_id]:
                 break
             
             if is_tg_openmessage:
@@ -487,7 +488,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 except:
                     pass
 
-        final_status = "completed" if users_loop.get(user_id) else "stopped"
+        final_status = "completed" if batch_active_loops.get(user_id) else "stopped"
         
         # If successfully completed, save the next URL index for subsequent batches
         if final_status == "completed":
@@ -541,7 +542,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
     except Exception as e:
         await app.send_message(user_id, f"Critical Error: {e}")
     finally:
-        users_loop.pop(user_id, None)
+        batch_active_loops.pop(user_id, None)
         # Userbot is globally managed by userbot_manager; keep alive
 
 @app.on_callback_query(filters.regex(r"stop_batch_(\d+)"))
@@ -550,8 +551,8 @@ async def stop_batch_callback(_, query):
     if query.from_user.id != user_id:
         return await query.answer("This is not your process!", show_alert=True)
     
-    if user_id in users_loop:
-        users_loop[user_id] = False
+    if user_id in batch_active_loops:
+        batch_active_loops[user_id] = False
         await query.answer("Batch process stopping...", show_alert=True)
     else:
         await query.answer("No active batch process found.", show_alert=True)
@@ -563,6 +564,8 @@ async def stop_batch_command(_, message):
     # 1. Stop all batch processes
     for uid in list(users_loop.keys()):
         users_loop[uid] = False
+    for uid in list(batch_active_loops.keys()):
+        batch_active_loops[uid] = False
 
     # 2. Stop all topic mirror and extraction tasks
     stopped_mirrors = 0

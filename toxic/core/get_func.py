@@ -798,6 +798,23 @@ async def upload_media(sender, target_chat_id, file, caption, edit, topic_id, th
             )
 
     except Exception as e:
+        err_msg = str(e).lower()
+        if any(k in err_msg for k in ["channel_invalid", "id not found", "peer_id_invalid", "chat_write_forbidden", "right_forbidden"]):
+            print(f"[UploadMedia] Target channel {target_chat_id} is invalid/inaccessible for user {sender}: {e}")
+            try:
+                from toxic.core.mongo.db import remove_channel
+                await remove_channel(sender)
+                await app.send_message(
+                    sender,
+                    f"⚠️ <b>Invalid Target Channel!</b>\n\n"
+                    f"Bot target channel (<code>{target_chat_id}</code>) me access nahi kar pa rha ya channel invalid hai.\n\n"
+                    f"👉 <i>Aapka target channel setting reset kar diya gaya hai. Please <code>/set_channel</code> se apna valid channel dobara set karein.</i>",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+            return
+
         import traceback
         tb_str = traceback.format_exc()
         
