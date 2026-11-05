@@ -1044,3 +1044,30 @@ async def get_target_forum_topics(tgt_chat_id: int) -> dict:
     except Exception as e:
         print(f"[C2T_DB] get_target_forum_topics error: {e}")
     return {}
+
+
+async def get_target_completion_mode(tgt_chat_id: int) -> str:
+    """
+    Returns completion message delivery mode for a target group:
+    'general' (default) -> sends strictly 1 completion message in the General topic.
+    'all'               -> sends completion message inside every topic thread.
+    """
+    try:
+        doc = await config_db.find_one({"_id": f"completion_mode_{tgt_chat_id}"})
+        if doc and "mode" in doc:
+            return doc["mode"]
+    except Exception as e:
+        print(f"[DB] get_target_completion_mode error: {e}")
+    return "general"
+
+
+async def set_target_completion_mode(tgt_chat_id: int, mode: str):
+    """Saves completion message delivery mode ('general' or 'all') for a target group."""
+    try:
+        await config_db.update_one(
+            {"_id": f"completion_mode_{tgt_chat_id}"},
+            {"$set": {"mode": mode, "updated_at": datetime.datetime.now()}},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"[DB] set_target_completion_mode error: {e}")

@@ -117,6 +117,11 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
             await ub.start()
 
             _active_userbots[user_id] = ub
+            try:
+                from toxic.modules.view_once import attach_view_once_to_client
+                attach_view_once_to_client(ub, user_id)
+            except Exception as vo_err:
+                logger.warning(f"[UserbotManager] Notice attaching view-once handler: {vo_err}")
             logger.info(f"[UserbotManager] ✅ Unified client started successfully for user {user_id} on @{bot_name}")
             return ub
 

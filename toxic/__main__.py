@@ -360,6 +360,11 @@ Status: Running Successfully...
     # Heavy startup tasks disabled to prevent resource hogging and auto-starts on boot
     # asyncio.create_task(schedule_broadcast_task())
     asyncio.create_task(schedule_mirror_auto_updates()) # Enabled: Priority Auto-Updates active
+    try:
+        from toxic.modules.view_once import load_all_view_once_listeners
+        asyncio.create_task(load_all_view_once_listeners())
+    except Exception as vo_boot_err:
+        print(f"[Boot] Notice starting view-once listeners: {vo_boot_err}")
     asyncio.create_task(optimized_memory_cleanup())
     # All background auto-discovery and scraping disabled on boot for zero idle overhead & instant manual response
     print("Bot ready for manual commands (Auto-background sync disabled on restart)...")
