@@ -14,6 +14,10 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.session import Session, Auth
 from pyrogram.crypto import aes
 from pyrogram.errors import FloodWait, CDNFileHashMismatch, VolumeLocNotFound
+try:
+    from pyrogram.errors import FloodPremiumWait
+except ImportError:
+    FloodPremiumWait = FloodWait
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +38,28 @@ def patch_pyrogram_downloader():
     _patched = True
 
     orig_get_file = Client.get_file
+
+    async def _safe_invoke_get_file(session, req, max_retries=10):
+        """Invokes upload.GetFile with robust retry on FloodPremiumWait and FloodWait."""
+        for attempt in range(max_retries):
+            try:
+                return await session.invoke(req, sleep_threshold=60)
+            except (FloodPremiumWait, FloodWait) as fw:
+                wait_time = getattr(fw, "value", None) or getattr(fw, "x", None) or 15
+                log.warning(f"[FastPyro] Caught {type(fw).__name__} ({wait_time}s) in get_file. Sleeping {wait_time + 1}s (attempt {attempt+1}/{max_retries})...")
+                await asyncio.sleep(wait_time + 1)
+            except Exception as e:
+                # Some Pyrogram versions raise generic RPCError with FLOOD_PREMIUM_WAIT_X in str
+                err_str = str(e).upper()
+                if "FLOOD_PREMIUM_WAIT" in err_str or "FLOOD_WAIT" in err_str:
+                    import re
+                    digits = re.findall(r'\d+', str(e))
+                    wait_sec = int(digits[-1]) if digits else 15
+                    log.warning(f"[FastPyro] Caught flood regex ({wait_sec}s): {e}. Sleeping {wait_sec + 1}s...")
+                    await asyncio.sleep(wait_sec + 1)
+                else:
+                    raise e
+        return await session.invoke(req, sleep_threshold=60)
 
     async def optimized_get_file(
         self: Client,
@@ -118,13 +144,13 @@ def patch_pyrogram_downloader():
                         )
                     )
 
-                r = await session.invoke(
+                r = await _safe_invoke_get_file(
+                    session,
                     raw.functions.upload.GetFile(
                         location=location,
                         offset=offset_bytes,
                         limit=chunk_size
-                    ),
-                    sleep_threshold=10
+                    )
                 )
 
                 if isinstance(r, raw.types.upload.File):
@@ -155,13 +181,13 @@ def patch_pyrogram_downloader():
                             break
 
                         await asyncio.sleep(0.08)
-                        r = await session.invoke(
+                        r = await _safe_invoke_get_file(
+                            session,
                             raw.functions.upload.GetFile(
                                 location=location,
                                 offset=offset_bytes,
                                 limit=chunk_size
-                            ),
-                            sleep_threshold=10
+                            )
                         )
 
                 elif isinstance(r, raw.types.upload.FileCdnRedirect):
@@ -247,7 +273,7 @@ def patch_pyrogram_downloader():
                         raise e
                     finally:
                         await cdn_session.stop()
-            except (pyrogram.StopTransmission, pyrogram.errors.FloodWait, pyrogram.errors.FileReferenceExpired):
+            except (pyrogram.StopTransmission, pyrogram.errors.FloodWait, FloodPremiumWait, pyrogram.errors.FileReferenceExpired):
                 raise
             except Exception as e:
                 log.exception(e)

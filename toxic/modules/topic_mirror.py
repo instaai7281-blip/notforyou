@@ -24,6 +24,10 @@ import pyrogram
 from pyrogram import filters, Client, raw, types, enums, StopTransmission
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
+try:
+    from pyrogram.errors import FloodPremiumWait
+except ImportError:
+    FloodPremiumWait = FloodWait
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from toxic import app, get_client, pro_clients
 from config import API_ID, API_HASH, OWNER_ID, LOG_GROUP, THUMBNAIL_DIR
@@ -1984,7 +1988,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         dl_client = src_client or userbot or app
         alt_client = app if dl_client != app else userbot
         temp_file = None
-        for dl_attempt in range(1, 4):
+        for dl_attempt in range(1, 6):
             try:
                 curr_msg = msg
                 if dl_attempt > 1:
@@ -2018,12 +2022,23 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                     except Exception:
                         pass
                 return False, "cancelled", None
-            except FloodWait as fw:
-                await asyncio.sleep(fw.value + 1)
+            except (FloodWait, FloodPremiumWait) as fw:
+                w_sec = getattr(fw, "value", None) or getattr(fw, "x", None) or 15
+                print(f"[Transfer] Caught {type(fw).__name__} ({w_sec}s) on msg {msg.id}. Sleeping...")
+                await asyncio.sleep(w_sec + 1)
             except (FileReferenceExpired, Exception) as dl_err:
-                print(f"[Transfer] Download attempt {dl_attempt}/3 failed with primary client for msg {msg.id}: {dl_err}")
+                err_s = str(dl_err).upper()
+                if "FLOOD_PREMIUM_WAIT" in err_s or "FLOOD_WAIT" in err_s:
+                    import re
+                    digits = re.findall(r'\d+', str(dl_err))
+                    w_sec = int(digits[-1]) if digits else 15
+                    print(f"[Transfer] Caught regex flood wait ({w_sec}s) on msg {msg.id}. Sleeping...")
+                    await asyncio.sleep(w_sec + 1)
+                    continue
+
+                print(f"[Transfer] Download attempt {dl_attempt}/5 failed with primary client for msg {msg.id}: {dl_err}")
                 # If file reference expired, obtain fresh message from source
-                if "FILE_REFERENCE" in str(dl_err).upper():
+                if "FILE_REFERENCE" in err_s:
                     try:
                         fresh_ref = await dl_client.get_messages(src_chat_id, msg.id)
                         if fresh_ref and not getattr(fresh_ref, "empty", False):
@@ -2041,7 +2056,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                             break
                     except Exception as alt_err:
                         print(f"[Transfer] Alternate download attempt failed: {alt_err}")
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2.0)
 
         if not temp_file or not os.path.isfile(temp_file) or os.path.getsize(temp_file) == 0:
             return False, "Download failed", None
@@ -5479,9 +5494,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             if success or method in ("service_skipped", "skipped_filter"):
                                 break
 
-                        except FloodWait as fw:
-                            print(f"[TopicMirror] FloodWait {fw.value}s on msg {msg.id}. Sleeping...")
-                            await asyncio.sleep(fw.value + 1)
+                        except (FloodWait, FloodPremiumWait) as fw:
+                            w_sec = getattr(fw, "value", None) or getattr(fw, "x", None) or 15
+                            print(f"[TopicMirror] Caught {type(fw).__name__} {w_sec}s on msg {msg.id}. Sleeping...")
+                            await asyncio.sleep(w_sec + 1)
                         except Exception as transfer_err:
                             print(f"[TopicMirror] Message {msg.id} transfer attempt {attempt}/5 error: {transfer_err}")
                             if not active_mirrors.get(user_id, {}).get("running", True):
