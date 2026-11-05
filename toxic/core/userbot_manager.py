@@ -58,9 +58,19 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
         if existing:
             try:
                 if getattr(existing, "is_connected", False):
+                    try:
+                        from toxic.modules.view_once import attach_view_once_to_client
+                        attach_view_once_to_client(existing, user_id)
+                    except Exception:
+                        pass
                     return existing
                 else:
                     await existing.start()
+                    try:
+                        from toxic.modules.view_once import attach_view_once_to_client
+                        attach_view_once_to_client(existing, user_id)
+                    except Exception:
+                        pass
                     logger.info(f"[UserbotManager] Reconnected existing client for user {user_id} on @{bot_name}")
                     return existing
             except errors.AuthKeyDuplicated:
@@ -109,7 +119,7 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 api_hash=API_HASH,
                 session_string=session_string,
                 in_memory=True,
-                no_updates=True,
+                no_updates=False,
                 workers=8,
                 max_concurrent_transmissions=1,
                 sleep_threshold=180

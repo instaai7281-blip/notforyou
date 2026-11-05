@@ -10,7 +10,7 @@ import time
 import html
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from pyrogram import Client, filters, enums
 from pyrogram.handlers import MessageHandler
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -19,7 +19,8 @@ from toxic.core.mongo import db
 
 logger = logging.getLogger(__name__)
 
-# Tracks user_ids that have the view-once handler attached
+# Tracks active userbot listener clients for backwards compatibility
+active_viewonce_listeners: Dict[int, Client] = {}
 _attached_userbots = set()
 
 
@@ -45,26 +46,37 @@ def is_view_once_media(message: Message) -> bool:
     if not message:
         return False
 
-    # 1. Message-level TTL
-    if getattr(message, "ttl_period", None) or getattr(message, "ttl_seconds", None):
+    # Check direct view_once flag on message
+    if getattr(message, "view_once", None) is True:
         return True
 
-    # 2. Check all possible media fields in Pyrogram
+    # Check message-level ttl_seconds
+    msg_ttl = getattr(message, "ttl_seconds", None)
+    if msg_ttl is not None and msg_ttl > 0:
+        return True
+
+    # Check all possible media fields in Pyrogram
     for attr in ("photo", "video", "voice", "video_note", "document", "audio", "animation"):
         media = getattr(message, attr, None)
         if media:
+            if getattr(media, "view_once", None) is True:
+                return True
             ttl = getattr(media, "ttl_seconds", None) or getattr(media, "ttl_period", None)
             if ttl is not None and ttl > 0:
                 return True
 
-    # 3. Raw MTProto object fallback (PyroFork raw message/media inspection)
+    # Raw MTProto object fallback (PyroFork raw message/media inspection)
     try:
         raw_msg = getattr(message, "raw", None) or getattr(message, "_raw", None)
         if raw_msg:
-            if getattr(raw_msg, "ttl_period", None):
+            # Self-destructing timer on message (e.g. <= 60s)
+            raw_ttl_p = getattr(raw_msg, "ttl_period", None)
+            if raw_ttl_p is not None and 0 < raw_ttl_p <= 60:
                 return True
             raw_media = getattr(raw_msg, "media", None)
             if raw_media:
+                if getattr(raw_media, "view_once", None) is True:
+                    return True
                 raw_ttl = getattr(raw_media, "ttl_seconds", None)
                 if raw_ttl is not None and raw_ttl > 0:
                     return True
@@ -148,20 +160,41 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
 
         caption = await format_sender_caption(message, media_type)
 
-        # 5. Download media to disk
+        # 5. Download media to disk with fallback
         temp_dir = os.path.join("downloads", f"vo_{user_id}")
         os.makedirs(temp_dir, exist_ok=True)
 
-        downloaded_file = await client.download_media(message, file_name=f"{temp_dir}/")
+        downloaded_file = None
+        try:
+            downloaded_file = await client.download_media(message, file_name=f"{temp_dir}/")
+        except Exception as dl_err:
+            logger.warning(f"[VIEW-ONCE] Direct download_media failed: {dl_err}. Trying media attribute fallback...")
+            for attr in ("photo", "video", "voice", "video_note", "document", "audio"):
+                media_obj = getattr(message, attr, None)
+                if media_obj:
+                    try:
+                        downloaded_file = await client.download_media(media_obj, file_name=f"{temp_dir}/")
+                        if downloaded_file:
+                            break
+                    except Exception:
+                        pass
+
         if not downloaded_file or not os.path.exists(downloaded_file) or os.path.getsize(downloaded_file) == 0:
             logger.error(f"[VIEW-ONCE] ❌ Failed to download view-once media for user {user_id}")
             return
 
         logger.info(f"[VIEW-ONCE] 📥 Downloaded view-once file: {downloaded_file} ({os.path.getsize(downloaded_file)} bytes)")
 
+        fn_lower = downloaded_file.lower()
+        is_photo = message.photo is not None or fn_lower.endswith(('.jpg', '.jpeg', '.png', '.webp'))
+        is_video = message.video is not None or fn_lower.endswith(('.mp4', '.mkv', '.mov', '.webm'))
+        is_voice = message.voice is not None or fn_lower.endswith(('.ogg', '.oga'))
+        is_vnote = getattr(message, "video_note", None) is not None
+        is_audio = message.audio is not None or fn_lower.endswith(('.mp3', '.m4a', '.flac', '.wav'))
+
         # 6. Step 1: Save permanently into User's Saved Messages
-        # Sending to the user's numeric ID via userbot automatically saves into Saved Messages!
-        targets = [user_id, "me"]
+        # Sending to the user's numeric ID or "me" via userbot automatically saves into Saved Messages!
+        targets = ["me", user_id]
         saved_successfully = False
 
         for target in targets:
@@ -169,15 +202,15 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
                 break
             for mode in (enums.ParseMode.HTML, None):
                 try:
-                    if message.photo:
+                    if is_photo:
                         await client.send_photo(target, downloaded_file, caption=caption, parse_mode=mode)
-                    elif message.video:
+                    elif is_video:
                         await client.send_video(target, downloaded_file, caption=caption, parse_mode=mode)
-                    elif message.voice:
+                    elif is_voice:
                         await client.send_voice(target, downloaded_file, caption=caption, parse_mode=mode)
-                    elif getattr(message, "video_note", None):
+                    elif is_vnote:
                         await client.send_video_note(target, downloaded_file)
-                    elif message.audio:
+                    elif is_audio:
                         await client.send_audio(target, downloaded_file, caption=caption, parse_mode=mode)
                     else:
                         await client.send_document(target, downloaded_file, caption=caption, parse_mode=mode)
@@ -191,15 +224,15 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
         try:
             for mode in (enums.ParseMode.HTML, None):
                 try:
-                    if message.photo:
+                    if is_photo:
                         await app.send_photo(user_id, downloaded_file, caption=caption, parse_mode=mode)
-                    elif message.video:
+                    elif is_video:
                         await app.send_video(user_id, downloaded_file, caption=caption, parse_mode=mode)
-                    elif message.voice:
+                    elif is_voice:
                         await app.send_voice(user_id, downloaded_file, caption=caption, parse_mode=mode)
-                    elif getattr(message, "video_note", None):
+                    elif is_vnote:
                         await app.send_video_note(user_id, downloaded_file)
-                    elif message.audio:
+                    elif is_audio:
                         await app.send_audio(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     else:
                         await app.send_document(user_id, downloaded_file, caption=caption, parse_mode=mode)
@@ -224,19 +257,21 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
 
 def attach_view_once_to_client(client: Client, user_id: int):
     """Attaches the view-once MessageHandler dynamically to a unified userbot client."""
-    if user_id in _attached_userbots:
+    if not client:
+        return
+    if getattr(client, "_view_once_attached", False):
         return
 
-    # Filter catches any private message (incoming or outgoing) containing media
-    media_filter = filters.private & (
-        filters.photo | filters.video | filters.voice | filters.video_note | filters.document | filters.audio
-    )
+    # Filter catches ANY private message (incoming or outgoing)
+    media_filter = filters.private
 
     async def _handler(c: Client, m: Message):
         await _handle_view_once_media(c, m, user_id)
 
     client.add_handler(MessageHandler(_handler, media_filter))
+    client._view_once_attached = True
     _attached_userbots.add(user_id)
+    active_viewonce_listeners[user_id] = client
     logger.info(f"[VIEW-ONCE] Attached view-once listener to client for user {user_id}")
 
 
@@ -256,13 +291,11 @@ async def load_all_view_once_listeners():
         from toxic.core.userbot_manager import get_or_create_userbot, get_current_bot_username
 
         bot_uname = get_current_bot_username()
-        if not bot_uname or bot_uname == "default_bot":
-            return
 
         cursor = user_db.find({
             "$or": [
                 {f"sessions.{bot_uname}": {"$exists": True, "$ne": None}},
-                {"assigned_bot": bot_uname, "session": {"$exists": True, "$ne": None}}
+                {"session": {"$exists": True, "$ne": None}}
             ]
         })
         count = 0
@@ -272,17 +305,19 @@ async def load_all_view_once_listeners():
             s_str = s_dict.get(bot_uname) if isinstance(s_dict, dict) else None
             if not s_str:
                 s_str = doc.get("session")
-            # Only spawn on boot if explicitly enabled and assigned to this specific bot
-            is_enabled = doc.get("view_once_saver", False)
+
+            # Default view_once_saver to True if user has logged in
+            is_enabled = doc.get("view_once_saver", True)
             assigned_bot = doc.get("assigned_bot")
-            if uid and s_str and is_enabled and (assigned_bot == bot_uname):
+
+            if uid and s_str and is_enabled and (not assigned_bot or assigned_bot == bot_uname or bot_uname == "default_bot"):
                 try:
                     asyncio.create_task(get_or_create_userbot(uid, s_str))
                     count += 1
                 except Exception as e:
-                    logger.error(f"Error restoring userbot for {uid}: {e}")
+                    logger.error(f"[VIEW-ONCE] Error restoring userbot for {uid}: {e}")
         if count > 0:
-            print(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
+            logger.info(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
     except Exception as e:
         logger.error(f"[VIEW-ONCE] Failed to load listeners on boot: {e}")
 
