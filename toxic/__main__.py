@@ -201,8 +201,7 @@ async def schedule_daily_plans_broadcast():
     return
 
 async def schedule_mirror_auto_updates():
-    """Disabled: All tasks must be triggered manually by the user to avoid automatic boot runs."""
-    return
+    """High-Priority Scheduled Mirror & C2T Auto-Update Engine with Active Task Pre-emption."""
     import datetime
     from toxic.core.mongo.db import (
         get_all_scheduled_mirror_sessions,
@@ -288,7 +287,7 @@ async def schedule_mirror_auto_updates():
                                     src_chat_id=src_chat_id,
                                     tgt_chat_id=tgt_chat_id,
                                     status_msg=notify_msg,
-                                    is_resume=True
+                                    is_auto_update=True
                                 ))
                             else:
                                 from toxic.modules.topic_mirror import run_topic_mirror
@@ -360,7 +359,7 @@ Status: Running Successfully...
     asyncio.create_task(schedule_expiry_check())
     # Heavy startup tasks disabled to prevent resource hogging and auto-starts on boot
     # asyncio.create_task(schedule_broadcast_task())
-    # asyncio.create_task(schedule_mirror_auto_updates()) # Disabled: manual only
+    asyncio.create_task(schedule_mirror_auto_updates()) # Enabled: Priority Auto-Updates active
     asyncio.create_task(optimized_memory_cleanup())
     # All background auto-discovery and scraping disabled on boot for zero idle overhead & instant manual response
     print("Bot ready for manual commands (Auto-background sync disabled on restart)...")

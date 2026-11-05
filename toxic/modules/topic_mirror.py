@@ -4839,24 +4839,36 @@ async def topic_mirror_cmd(client, message):
 
 async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None, is_auto_update: bool = False):
     """Core execution engine for topic mirroring with instant resume, rapid extraction, force sync, range support, and auto-update detection."""
-    # Enforce 1 Task Per User (Each user is 100% independent)
+    # Enforce 1 Task Per User with Auto-Update Priority Pre-emption
     user_running, u_state = is_user_mirror_running(user_id)
     if user_running:
-        cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
-        busy_text = (
-            "<blockquote>⚠️ <b>Aapka Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
-            "Aapke account par ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
-            f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n\n"
-            "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar use stop karein.</i>"
-        )
-        if status_msg:
-            try:
-                await status_msg.edit(busy_text, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
+        if is_auto_update:
+            print(f"[TopicMirror] ⚡ Auto-update triggered for user {user_id}. Pre-empting active task '{u_state.get('current_topic')}'...")
+            stop_user_active_mirror(user_id)
+            if status_msg:
+                try:
+                    await status_msg.edit("⚡ <b>Pre-empting running task to prioritize Scheduled Auto-Update...</b>", parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+            # Allow active task loop to cleanly break and release resources
+            await asyncio.sleep(2.5)
+            active_mirrors.pop(user_id, None)
         else:
-            await app.send_message(user_id, busy_text, parse_mode=ParseMode.HTML)
-        return
+            cur_t = u_state.get("current_topic", "In progress") if u_state else "In progress"
+            busy_text = (
+                "<blockquote>⚠️ <b>Aapka Ek Task Already Chal Raha Hai</b></blockquote>\n\n"
+                "Aapke account par ek time par <b>sirf 1 task</b> chal sakta hai!\n\n"
+                f"📌 <b>Active Topic:</b> <code>{cur_t}</code>\n\n"
+                "👉 <i>Pehle is task ke complete hone ka wait karein, ya <code>/cancel</code> bhej kar use stop karein.</i>"
+            )
+            if status_msg:
+                try:
+                    await status_msg.edit(busy_text, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+            else:
+                await app.send_message(user_id, busy_text, parse_mode=ParseMode.HTML)
+            return
 
     # Check Topic Mirror Authorization
     if await chk_mirror_user(user_id) != 0:
@@ -5984,7 +5996,8 @@ async def run_channel_to_topics_mirror(
     tgt_chat_id: int,
     src_start_id: int = None,
     src_end_id: int = None,
-    status_msg = None
+    status_msg = None,
+    is_auto_update: bool = False
 ):
     """
     Sequentially processes messages from a flat source channel and routes each message into
@@ -6005,15 +6018,26 @@ async def run_channel_to_topics_mirror(
         return
 
     if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict) and active_mirrors[user_id].get("running"):
-        err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
-        if status_msg:
-            try:
-                await status_msg.edit(err_active, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
+        if is_auto_update:
+            print(f"[TopicMirror] ⚡ Auto-update triggered for user {user_id}. Pre-empting active task in Channel-to-Topics...")
+            stop_user_active_mirror(user_id)
+            if status_msg:
+                try:
+                    await status_msg.edit("⚡ <b>Pre-empting running task to prioritize Scheduled Auto-Update...</b>", parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+            await asyncio.sleep(2.5)
+            active_mirrors.pop(user_id, None)
         else:
-            await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
-        return
+            err_active = "⚠️ <b>A mirroring operation is already running!</b>\nSend <code>/cancel_mirror</code> to abort it first."
+            if status_msg:
+                try:
+                    await status_msg.edit(err_active, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+            else:
+                await app.send_message(user_id, err_active, parse_mode=ParseMode.HTML)
+            return
 
     userbot, is_temp_userbot = await get_working_userbot(user_id)
     src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
