@@ -200,6 +200,41 @@ async def process_special_links(userbot, user_id, msg, link):
         await msg.edit_text("Invalid link format.")
 
 
+def parse_batch_link_endpoint(link_str: str):
+    """
+    Parses any Telegram link format (public post, private channel, forum topic post, openmessage URI)
+    and returns (base_url, msg_id, is_tg_openmessage)
+    """
+    if not link_str:
+        return None, None, False
+
+    clean_link = link_str.strip()
+    if 'tg://' not in clean_link:
+        clean_link = clean_link.split('?')[0].rstrip('/')
+
+    # Format 1: tg://openmessage
+    if 'tg://openmessage' in clean_link:
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(clean_link)
+        params = urllib.parse.parse_qs(parsed_url.query)
+        msg_id_val = params.get("message_id", [None])[0] or params.get("msg_id", [None])[0]
+        if msg_id_val and msg_id_val.isdigit():
+            cs = int(msg_id_val)
+            remaining_params = "&".join([f"{k}={v[0]}" for k, v in params.items() if k not in ('message_id', 'msg_id')])
+            base_url = f"tg://openmessage?{remaining_params}" if remaining_params else "tg://openmessage"
+            return base_url, cs, True
+        return None, None, True
+
+    # Format 2: Web Links (t.me/c/..., t.me/..., telegram.me/...)
+    parts = clean_link.split('/')
+    if parts and parts[-1].isdigit():
+        cs = int(parts[-1])
+        base_url = '/'.join(parts[:-1])
+        return base_url, cs, False
+
+    return None, None, False
+
+
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_link(_, message):
     join = await subscribe(_, message)
@@ -224,9 +259,31 @@ async def batch_link(_, message):
     if batch_active_loops.get(user_id, False):
         await app.send_message(
             message.chat.id,
-            "You already have a batch process running. Please wait for it to complete."
+            "⚠️ You already have a batch process running. Please wait for it to complete or use /stop."
         )
         return
+
+    # Check if command has inline arguments: /batch <start_link> <end_link_or_count>
+    args = message.text.split(maxsplit=2)[1:]
+    if len(args) >= 2:
+        start_arg = args[0].strip()
+        end_or_count_arg = args[1].strip()
+        base_url, cs, is_tg_openmessage = parse_batch_link_endpoint(start_arg)
+        if base_url and cs:
+            max_batch_size = FREEMIUM_LIMIT if freecheck == 1 else PREMIUM_LIMIT
+            cl = None
+            if end_or_count_arg.isdigit():
+                cl = int(end_or_count_arg)
+            else:
+                _, end_id, _ = parse_batch_link_endpoint(end_or_count_arg)
+                if end_id:
+                    if end_id < cs:
+                        cs, end_id = end_id, cs
+                    cl = (end_id - cs) + 1
+
+            if cl and 1 <= cl <= max_batch_size:
+                await execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
+                return
 
     # Check if they have saved progress
     last_url = load_user_data(user_id, "last_batch_url")
@@ -245,18 +302,6 @@ async def batch_link(_, message):
     await prompt_new_batch(user_id, message)
 
 
-@app.on_callback_query(filters.regex(r"^resume_batch$|^new_batch$"))
-async def handle_batch_choice(_, query):
-    user_id = query.from_user.id
-    choice = query.data
-    await query.message.delete()
-    
-    if choice == "new_batch":
-        await prompt_new_batch(user_id, query.message)
-    elif choice == "resume_batch":
-        await prompt_resume_batch(user_id, query.message)
-
-
 async def prompt_new_batch(user_id, message):
     freecheck = await chk_user(message, user_id)
     if freecheck == 1 and FREEMIUM_LIMIT == 0 and user_id not in OWNER_ID:
@@ -268,6 +313,9 @@ async def prompt_new_batch(user_id, message):
     max_batch_size = FREEMIUM_LIMIT if freecheck == 1 else PREMIUM_LIMIT
 
     # Start link input
+    base_url = None
+    cs = None
+    is_tg_openmessage = False
     for attempt in range(3):
         await app.send_photo(
             user_id,
@@ -275,50 +323,48 @@ async def prompt_new_batch(user_id, message):
             caption="Just Copy Post Link And Send it To Me.\n\nजहाँ से शुरू करना है उस पोस्ट का लिंक भेजो\n\nMake sure the link is correct!"
         )
         start = await app.ask(user_id, "🎯 Send The Link For Where I Need To Start Process From \n\n> You Have Only 3 Tries")
-        start_id = start.text.strip().rstrip('/')
-        
-        # Clean query parameters except for tg:// openmessage
-        if 'tg://' not in start_id:
-            start_id = start_id.split('?')[0]
-
-        is_tg_openmessage = False
-        if 'tg://openmessage' in start_id:
-            import urllib.parse
-            parsed_url = urllib.parse.urlparse(start_id)
-            params = urllib.parse.parse_qs(parsed_url.query)
-            msg_id_val = params.get("message_id", [None])[0]
-            if msg_id_val and msg_id_val.isdigit():
-                cs = int(msg_id_val)
-                # Rebuild parameters without message_id
-                remaining_params = "&".join([f"{k}={v[0]}" for k, v in params.items() if k != 'message_id'])
-                base_url = f"tg://openmessage?{remaining_params}"
-                is_tg_openmessage = True
-                break
-        else:
-            s = start_id.split("/")[-1]
-            if s.isdigit():
-                cs = int(s)
-                base_url = '/'.join(start_id.split('/')[:-1])
-                is_tg_openmessage = False
-                break
-        await app.send_message(user_id, "Invalid link. Please send again ...")
+        if not start or not start.text:
+            continue
+        start_id = start.text.strip()
+        base_url, cs, is_tg_openmessage = parse_batch_link_endpoint(start_id)
+        if base_url and cs:
+            break
+        await app.send_message(user_id, "❌ Invalid link format. Please send a valid Telegram post link...")
     else:
         await app.send_message(user_id, "Maximum attempts exceeded. Try later.")
         return
 
-    # Number of messages input
+    # End link or Number of messages input
+    cl = None
     for attempt in range(3):
-        num_messages = await app.ask(user_id, f"How many messages do you want to process? 🌝\n> Max limit {max_batch_size}")
-        try:
-            cl = int(num_messages.text.strip())
-            if 1 <= cl <= max_batch_size:
+        prompt_txt = (
+            f"🎯 **Send End Post Link OR Total Count:** 🌝\n\n"
+            f"• **Option 1:** Send the number of messages (e.g. `50`)\n"
+            f"• **Option 2:** Send the End Post Link (e.g. `https://t.me/c/1234567890/150`)\n\n"
+            f"> Max limit: `{max_batch_size}` messages"
+        )
+        end_input = await app.ask(user_id, prompt_txt)
+        if not end_input or not end_input.text:
+            continue
+        text_val = end_input.text.strip()
+        if text_val.isdigit():
+            val = int(text_val)
+            if 1 <= val <= max_batch_size:
+                cl = val
                 break
-            raise ValueError()
-        except ValueError:
-            await app.send_message(
-                user_id, 
-                f"Invalid number. Please enter a number between 1 and {max_batch_size}."
-            )
+        else:
+            _, end_id, _ = parse_batch_link_endpoint(text_val)
+            if end_id:
+                if end_id < cs:
+                    cs, end_id = end_id, cs
+                val = (end_id - cs) + 1
+                if 1 <= val <= max_batch_size:
+                    cl = val
+                    break
+        await app.send_message(
+            user_id, 
+            f"❌ Invalid count or end link. Please enter a valid number (1 to {max_batch_size}) or an end post link."
+        )
     else:
         await app.send_message(user_id, "Maximum attempts exceeded. Try later.")
         return
@@ -340,47 +386,42 @@ async def prompt_resume_batch(user_id, message):
         await app.send_message(user_id, "No saved batch progress found.")
         return
 
-    # Parse saved URL
-    if 'tg://' not in last_url:
-        last_url = last_url.split('?')[0]
+    base_url, cs, is_tg_openmessage = parse_batch_link_endpoint(last_url)
+    if not base_url or not cs:
+        await app.send_message(user_id, "Failed to parse saved batch link.")
+        return
 
-    is_tg_openmessage = False
-    if 'tg://openmessage' in last_url:
-        import urllib.parse
-        parsed_url = urllib.parse.urlparse(last_url)
-        params = urllib.parse.parse_qs(parsed_url.query)
-        msg_id_val = params.get("message_id", [None])[0]
-        if msg_id_val and msg_id_val.isdigit():
-            cs = int(msg_id_val)
-            remaining_params = "&".join([f"{k}={v[0]}" for k, v in params.items() if k != 'message_id'])
-            base_url = f"tg://openmessage?{remaining_params}"
-            is_tg_openmessage = True
-        else:
-            await app.send_message(user_id, "Failed to parse saved batch link.")
-            return
-    else:
-        s = last_url.split("/")[-1]
-        if s.isdigit():
-            cs = int(s)
-            base_url = '/'.join(last_url.split('/')[:-1])
-            is_tg_openmessage = False
-        else:
-            await app.send_message(user_id, "Failed to parse saved batch link.")
-            return
-
-    # Number of messages input
+    # End link or Number of messages input
+    cl = None
     for attempt in range(3):
-        num_messages = await app.ask(user_id, f"How many messages do you want to process starting from message ID `{cs}`? 🌝\n> Max limit {max_batch_size}")
-        try:
-            cl = int(num_messages.text.strip())
-            if 1 <= cl <= max_batch_size:
+        prompt_txt = (
+            f"🎯 Resuming from message ID `{cs}`!\n\n"
+            f"• **Option 1:** Send count (e.g. `50`)\n"
+            f"• **Option 2:** Send End Post Link (e.g. `https://t.me/c/1234567890/150`)\n\n"
+            f"> Max limit: `{max_batch_size}` messages"
+        )
+        end_input = await app.ask(user_id, prompt_txt)
+        if not end_input or not end_input.text:
+            continue
+        text_val = end_input.text.strip()
+        if text_val.isdigit():
+            val = int(text_val)
+            if 1 <= val <= max_batch_size:
+                cl = val
                 break
-            raise ValueError()
-        except ValueError:
-            await app.send_message(
-                user_id, 
-                f"Invalid number. Please enter a number between 1 and {max_batch_size}."
-            )
+        else:
+            _, end_id, _ = parse_batch_link_endpoint(text_val)
+            if end_id:
+                if end_id < cs:
+                    cs, end_id = end_id, cs
+                val = (end_id - cs) + 1
+                if 1 <= val <= max_batch_size:
+                    cl = val
+                    break
+        await app.send_message(
+            user_id, 
+            f"❌ Invalid count or end link. Please enter a valid number (1 to {max_batch_size}) or an end post link."
+        )
     else:
         await app.send_message(user_id, "Maximum attempts exceeded. Try later.")
         return
@@ -389,7 +430,6 @@ async def prompt_resume_batch(user_id, message):
 
 
 async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck):
-    # Interval check
     can_proceed, response_message = await check_interval(user_id, freecheck)
     if not can_proceed:
         await app.send_message(user_id, response_message)
@@ -401,18 +441,37 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
     
     pin_msg = await app.send_message(
         user_id,
-        f"🚀 **Batch process started!**\n\n✅ **Processed:** 0/{cl}\n❌ **Failed:** 0\n⏳ **Status:** Initializing...",
+        f"🚀 **Batch process started!**\n\n"
+        f"📊 **Progress:** [░░░░░░░░░░] 0%\n"
+        f"✅ **Extracted:** `0/{cl}`\n"
+        f"⏩ **Skipped:** `0`\n"
+        f"❌ **Failed:** `0`\n"
+        f"⏳ **Status:** Initializing...",
         reply_markup=keyboard
     )
-    await pin_msg.pin(both_sides=True)
+    try:
+        await pin_msg.pin(both_sides=True)
+    except Exception:
+        pass
 
     batch_active_loops[user_id] = True
     userbot = None
     success_count = 0
     fail_count = 0
+    skipped_count = 0
     start_time_batch = time.time()
-    
+    last_ui_update = start_time_batch
+
+    # Reusable background status message to prevent FloodWait
+    status_msg = None
     try:
+        status_msg = await app.send_message(user_id, "⚡ **Batch process running in background...**")
+    except Exception:
+        pass
+    status_edit_id = status_msg.id if status_msg else None
+
+    try:
+        # Guarantee userbot initialization for user
         userbot = await initialize_userbot(user_id)
         
         for i in range(cs, cs + cl):
@@ -425,71 +484,96 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 url = f"{base_url}/{i}"
             link = url
             
-            # Check link type
+            # Check link type and guarantee userbot connectivity
             is_special = any(x in link for x in ['t.me/b/', 't.me/c/', 'tg://openmessage', 'telegram.me/c/', 'telegram.dog/c/'])
-            if is_special and (not userbot or not getattr(userbot, "is_connected", False)):
+            if not userbot or not getattr(userbot, "is_connected", False):
                 userbot = await initialize_userbot(user_id)
-                if not userbot:
+                if not userbot and is_special:
                     fail_count += 1
                     continue
             
-            # Save batch progress to MongoDB before processing so they can continue from the exact failure/stop point
+            # Save batch progress to MongoDB before processing so user can resume exactly here
             save_user_data(user_id, "last_batch_url", url)
             
             try:
                 # Process the message
-                await get_msg(userbot, user_id, None, link, 0, pin_msg)
-                success_count += 1
-                await asyncio.sleep(0.5) 
+                res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                if res is True:
+                    success_count += 1
+                elif res == "skipped":
+                    skipped_count += 1
+                else:
+                    fail_count += 1
+                await asyncio.sleep(0.3) 
             except FloodWait as e:
                 await asyncio.sleep(e.value + 2)
                 try:
-                    await get_msg(userbot, user_id, None, link, 0, pin_msg)
-                    success_count += 1
-                except:
+                    res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                    if res is True:
+                        success_count += 1
+                    elif res == "skipped":
+                        skipped_count += 1
+                    else:
+                        fail_count += 1
+                except Exception:
                     fail_count += 1
             except Exception as e:
                 print(f"Error at {i}: {e}")
-                # Auto-recovery retry for userbot disconnect or socket glitch
                 reconnected = False
                 if is_special:
                     try:
                         userbot = await initialize_userbot(user_id)
                         if userbot and getattr(userbot, "is_connected", False):
                             await asyncio.sleep(1)
-                            await get_msg(userbot, user_id, None, link, 0, pin_msg)
-                            success_count += 1
-                            reconnected = True
+                            res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                            if res is True:
+                                success_count += 1
+                                reconnected = True
+                            elif res == "skipped":
+                                skipped_count += 1
+                                reconnected = True
                     except Exception as retry_err:
                         print(f"Batch retry error at {i}: {retry_err}")
                 if not reconnected:
                     fail_count += 1
             
-            # Update progress
-            done = success_count + fail_count
-            if done % 2 == 0 or done == cl:
-                # Calculate ETA
-                elapsed_time = time.time() - start_time_batch
-                avg_time_per_msg = elapsed_time / done if done > 0 else 1.5
+            # Live progress UI update every 3 seconds
+            now = time.time()
+            done = success_count + fail_count + skipped_count
+            if (now - last_ui_update > 3.0) or done == cl:
+                last_ui_update = now
+                elapsed_time = now - start_time_batch
+                avg_time_per_msg = elapsed_time / done if done > 0 else 1.0
                 remaining_msgs = cl - done
-                eta_seconds = int(remaining_msgs * avg_time_per_msg)
+                eta_seconds = max(0, int(remaining_msgs * avg_time_per_msg))
                 eta_str = str(timedelta(seconds=eta_seconds))
+                pct = int((done / cl) * 100) if cl > 0 else 0
+                filled = int(pct / 10)
+                bar = "█" * filled + "░" * (10 - filled)
                 
                 try:
                     await pin_msg.edit_text(
                         f"🚀 **Batch process in progress...**\n\n"
-                        f"✅ **Processed:** {success_count}/{cl}\n"
-                        f"❌ **Failed:** {fail_count}\n"
+                        f"📊 **Progress:** [{bar}] {pct}%\n"
+                        f"✅ **Extracted:** `{success_count}/{cl}`\n"
+                        f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
+                        f"❌ **Failed:** `{fail_count}`\n"
                         f"⏳ **ETA:** `{eta_str}`\n"
-                        f"📍 **Current ID:** `{i}`\n\n"
-                        f"⚝**",
+                        f"📍 **Current ID:** `{i}`",
                         reply_markup=keyboard
                     )
-                except:
+                except Exception:
                     pass
 
         final_status = "completed" if batch_active_loops.get(user_id) else "stopped"
         
+        # Clean up temporary status message
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
         # If successfully completed, save the next URL index for subsequent batches
         if final_status == "completed":
             if is_tg_openmessage:
@@ -499,10 +583,14 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             save_user_data(user_id, "last_batch_url", next_url)
             
         await pin_msg.edit_text(
-            f"✅ **Batch {final_status}!**\n\n✨ **Success:** {success_count}\n❌ **Failed:** {fail_count}\n📊 **Total:** {cl}\n\n⚝__**",
+            f"✅ **Batch {final_status}!**\n\n"
+            f"✨ **Extracted:** `{success_count}`\n"
+            f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
+            f"❌ **Failed:** `{fail_count}`\n"
+            f"📊 **Total Scanned:** `{cl}`",
             reply_markup=InlineKeyboardMarkup([[join_button]])
         )
-        await app.send_message(user_id, f"Batch process {final_status}! ✨\nSuccess: {success_count} | Failed: {fail_count}")
+        await app.send_message(user_id, f"Batch process {final_status}! ✨\nExtracted: {success_count} | Skipped: {skipped_count} | Failed: {fail_count}")
         if final_status == "completed" and freecheck == 1:
             upgrade_msg = (
                 "⚡ **𝖴𝗉𝗀𝗋𝖺𝖽𝖾 𝗍𝗈 𝖯𝖱𝖮!** ⚡\n"
@@ -543,7 +631,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         await app.send_message(user_id, f"Critical Error: {e}")
     finally:
         batch_active_loops.pop(user_id, None)
-        # Userbot is globally managed by userbot_manager; keep alive
+
 
 @app.on_callback_query(filters.regex(r"stop_batch_(\d+)"))
 async def stop_batch_callback(_, query):

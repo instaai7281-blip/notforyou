@@ -1012,7 +1012,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                     await edit.delete()
                 except Exception:
                     pass
-            return
+            return "skipped"
 
         # Apply filter checks in get_msg!
         if msg.media == MessageMediaType.WEB_PAGE_PREVIEW or msg.text:
@@ -1513,21 +1513,31 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
 
     try:
         # Try with app or fallback client
-        client_to_use = app
+        # Prefer userbot if available (especially for private channels), else app, else shared client
+        client_to_use = None
+        if userbot and getattr(userbot, "is_connected", False):
+            client_to_use = userbot
+        else:
+            client_to_use = app
+
+        msg = None
         try:
             msg = await client_to_use.get_messages(chat_id, message_id)
             if not msg or msg.empty:
                 raise Exception("Message not found")
         except Exception:
-            client_to_use = get_client()
-            if client_to_use:
-                msg = await client_to_use.get_messages(chat_id, message_id)
-            else:
-                return False
+            for alt in [userbot, app, get_client()]:
+                if alt and alt != client_to_use and getattr(alt, "is_connected", False):
+                    try:
+                        msg = await alt.get_messages(chat_id, message_id)
+                        if msg and not msg.empty:
+                            client_to_use = alt
+                            break
+                    except Exception:
+                        pass
 
         if not msg or msg.empty:
             return False
-
         # Apply filter checks in copy_message_with_chat_id!
         if msg.media == MessageMediaType.WEB_PAGE_PREVIEW or msg.text:
             if not await is_enabled(sender, "text"):
@@ -1608,7 +1618,7 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             # Resolve chat_id if it's a username string
             if isinstance(chat_id, str) and not chat_id.startswith("-") and not chat_id.isdigit():
                 try:
-                    chat_entity = await userbot.get_entity(chat_id)
+                    chat_entity = await userbot.get_chat(chat_id)
                     resolved_chat_id = chat_entity.id
                 except Exception:
                     resolved_chat_id = chat_id
@@ -1631,25 +1641,24 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             filename = await get_media_filename(msg)
             final_caption = format_caption(msg.caption.markdown if msg.caption else "", sender, custom_caption, filename=filename)
             
-            # Try fast copy via userbot send_media first before downloading
+            # Try fast copy via userbot copy_message first before downloading
             if not getattr(msg, "has_protected_content", False) and not force_extraction:
                 try:
-                    has_spoiler = get_user_spoiler_preference(sender)
-                    if msg.video:
-                        await userbot.send_video(target_chat_id, msg.video, caption=final_caption, reply_to_message_id=topic_id, has_spoiler=has_spoiler)
-                        return True
-                    elif msg.document:
-                        await userbot.send_document(target_chat_id, msg.document, caption=final_caption, reply_to_message_id=topic_id)
-                        return True
-                    elif msg.photo:
-                        await userbot.send_photo(target_chat_id, msg.photo, caption=final_caption, reply_to_message_id=topic_id, has_spoiler=has_spoiler)
-                        return True
-                    elif msg.audio:
-                        await userbot.send_audio(target_chat_id, msg.audio, caption=final_caption, reply_to_message_id=topic_id)
+                    kwargs = {}
+                    if topic_id:
+                        kwargs["reply_to_message_id"] = topic_id
+                    if final_caption:
+                        kwargs["caption"] = final_caption
+                    copied = await userbot.copy_message(
+                        chat_id=target_chat_id,
+                        from_chat_id=resolved_chat_id,
+                        message_id=msg.id,
+                        **kwargs
+                    )
+                    if copied:
                         return True
                 except Exception as ue:
-                    print(f"Userbot instant copy failed: {ue}")
-
+                    print(f"Userbot direct copy failed: {ue}")
             # unique directory for each user to prevent concurrency collisions
             temp_dir = os.path.join("downloads", str(sender))
             os.makedirs(temp_dir, exist_ok=True)
