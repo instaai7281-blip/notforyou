@@ -633,6 +633,22 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         batch_active_loops.pop(user_id, None)
 
 
+
+@app.on_callback_query(filters.regex(r"^(resume_batch|new_batch)$"))
+async def batch_choice_callback(_, query):
+    user_id = query.from_user.id
+    action = query.data
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    if action == "resume_batch":
+        await prompt_resume_batch(user_id, query.message)
+    elif action == "new_batch":
+        await prompt_new_batch(user_id, query.message)
+
 @app.on_callback_query(filters.regex(r"stop_batch_(\d+)"))
 async def stop_batch_callback(_, query):
     user_id = int(query.matches[0].group(1))

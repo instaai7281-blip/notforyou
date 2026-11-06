@@ -230,7 +230,7 @@ def register_tictactoe(app):
             reply_markup=build_keyboard(player_x)
         )
 
-    @app.on_callback_query()
+    @app.on_callback_query(filters.regex(r"^\d+_\d+$"))
     async def handle_move(client, query):
         try:
             data = query.data.split("_")
