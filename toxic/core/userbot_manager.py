@@ -79,7 +79,6 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 return None
             except Exception as re_err:
                 logger.warning(f"[UserbotManager] Reconnecting cached client for {user_id} failed: {re_err}. Rebuilding...")
-                _active_userbots.pop(user_id, None)
                 try:
                     await existing.stop()
                 except Exception:
@@ -138,6 +137,13 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
         except errors.AuthKeyDuplicated:
             logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED for {user_id} on @{bot_name}. Releasing in-memory client without deleting DB session.")
             _active_userbots.pop(user_id, None)
+            return None
+            logger.error(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purging dead session from DB.")
+            _active_userbots.pop(user_id, None)
+            try:
+                await db.remove_user_session(user_id, bot_name=bot_name)
+            except Exception:
+                pass
             return None
         except Exception as e:
             logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id} on @{bot_name}: {e}")

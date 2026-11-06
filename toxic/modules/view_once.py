@@ -285,7 +285,10 @@ async def register_view_once_listener(user_id: int, session_string: str) -> Opti
 
 
 async def load_all_view_once_listeners():
-    """Scans users assigned to THIS bot on startup and boots their unified userbot clients."""
+    """
+    Scans users assigned to THIS bot on startup and gently boots their userbot clients
+    in small batches with throttled concurrency to prevent socket exhaustion and bot lag.
+    """
     try:
         from toxic.core.mongo.db import db as user_db
         from toxic.core.userbot_manager import get_or_create_userbot, get_current_bot_username
@@ -298,7 +301,8 @@ async def load_all_view_once_listeners():
                 {"session": {"$exists": True, "$ne": None}}
             ]
         })
-        count = 0
+        
+        valid_users = []
         async for doc in cursor:
             uid = doc.get("_id")
             s_dict = doc.get("sessions")
@@ -306,18 +310,35 @@ async def load_all_view_once_listeners():
             if not s_str:
                 s_str = doc.get("session")
 
-            # Default view_once_saver to True if user has logged in
             is_enabled = doc.get("view_once_saver", True)
             assigned_bot = doc.get("assigned_bot")
 
             if uid and s_str and is_enabled and (not assigned_bot or assigned_bot == bot_uname or bot_uname == "default_bot"):
-                try:
-                    asyncio.create_task(get_or_create_userbot(uid, s_str))
-                    count += 1
-                except Exception as e:
-                    logger.error(f"[VIEW-ONCE] Error restoring userbot for {uid}: {e}")
-        if count > 0:
-            logger.info(f"[VIEW-ONCE] Successfully initiated userbot listeners for {count} users on @{bot_uname} on boot!")
+                valid_users.append((uid, s_str))
+
+        if not valid_users:
+            return
+
+        logger.info(f"[VIEW-ONCE] Queueing background listener warmup for {len(valid_users)} users on @{bot_uname}...")
+
+        async def _warmup_worker(users_list):
+            # Boot gently in small chunks with delay so bot responds instantly to user commands
+            sem = asyncio.Semaphore(2)
+            async def _init_single(uid, s_str):
+                async with sem:
+                    try:
+                        await get_or_create_userbot(uid, s_str)
+                    except Exception as e:
+                        logger.warning(f"[VIEW-ONCE] Boot notice for {uid}: {e}")
+                    await asyncio.sleep(0.5)
+
+            for i in range(0, len(users_list), 2):
+                chunk = users_list[i:i+2]
+                await asyncio.gather(*[_init_single(u, s) for u, s in chunk], return_exceptions=True)
+                await asyncio.sleep(1.0)
+
+        asyncio.create_task(_warmup_worker(valid_users))
+
     except Exception as e:
         logger.error(f"[VIEW-ONCE] Failed to load listeners on boot: {e}")
 

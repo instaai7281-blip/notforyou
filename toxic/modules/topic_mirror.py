@@ -620,16 +620,50 @@ def extract_caption_content_ids(text: str) -> set:
     return extracted_ids
 
 
-async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topic_id: int, max_limit: int = 1500) -> set:
+def get_message_content_signature(m) -> str:
+    """Generates a robust unique fingerprint for media/document/text messages for deduplication."""
+    if not m:
+        return ""
+    try:
+        if m.video:
+            fs = getattr(m.video, "file_size", 0) or 0
+            dur = getattr(m.video, "duration", 0) or 0
+            fn = getattr(m.video, "file_name", "") or ""
+            return f"vid_{fs}_{dur}_{fn}"
+        if m.document:
+            fs = getattr(m.document, "file_size", 0) or 0
+            fn = getattr(m.document, "file_name", "") or ""
+            return f"doc_{fs}_{fn}"
+        if m.audio:
+            fs = getattr(m.audio, "file_size", 0) or 0
+            dur = getattr(m.audio, "duration", 0) or 0
+            return f"aud_{fs}_{dur}"
+        if m.photo:
+            fs = getattr(m.photo, "file_size", 0) or 0
+            return f"pho_{fs}"
+        txt = (m.text or m.caption or "").strip()
+        if txt:
+            # First 60 chars normalized
+            norm = "".join(txt.split())[:60]
+            return f"txt_{len(norm)}_{norm}"
+    except Exception:
+        pass
+    return ""
+
+
+async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topic_id: int, max_limit: int = 1500) -> tuple:
     """
-    Scans existing target topic messages to extract all already-synced caption content IDs
-    (e.g., PDF ID, Video ID, etc.) for robust deduplication & seamless continuation.
+    Scans existing target topic messages to extract:
+    1) synced_caption_ids: set of integer content IDs (PDF ID, Video ID, etc.)
+    2) synced_signatures: set of media signatures (file_size + file_name/duration)
+    3) content_msg_count: total count of content messages present in target topic
     """
     synced_ids = set()
+    synced_signatures = set()
+    content_msg_count = 0
     if not tgt_chat_id or not tgt_topic_id:
-        return synced_ids
+        return synced_ids, synced_signatures, 0
 
-    # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
     clients_to_try = [userbot] if userbot else []
     if not clients_to_try and app and tgt_topic_id in (None, 1):
         clients_to_try = [app]
@@ -638,7 +672,13 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
         try:
             if tgt_topic_id and tgt_topic_id != 1:
                 async for m in client.get_discussion_replies(tgt_chat_id, tgt_topic_id, limit=max_limit):
-                    cap = (m.caption or m.text or "") if m else ""
+                    if not m or getattr(m, "service", False) or getattr(m, "action", None) or getattr(m, "forum_topic_created", None):
+                        continue
+                    content_msg_count += 1
+                    sig = get_message_content_signature(m)
+                    if sig:
+                        synced_signatures.add(sig)
+                    cap = (m.caption or m.text or "")
                     if cap:
                         c_ids = extract_caption_content_ids(cap)
                         synced_ids.update(c_ids)
@@ -647,16 +687,22 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
                     m_thread = getattr(m, "message_thread_id", None)
                     reply_to = getattr(m, "reply_to_message_id", None)
                     if m_thread in (None, 1) and (not reply_to or reply_to == 1):
-                        cap = (m.caption or m.text or "") if m else ""
+                        if getattr(m, "service", False) or getattr(m, "action", None):
+                            continue
+                        content_msg_count += 1
+                        sig = get_message_content_signature(m)
+                        if sig:
+                            synced_signatures.add(sig)
+                        cap = (m.caption or m.text or "")
                         if cap:
                             c_ids = extract_caption_content_ids(cap)
                             synced_ids.update(c_ids)
-            if synced_ids:
+            if content_msg_count > 0 or synced_ids or synced_signatures:
                 break
         except Exception as err:
             print(f"[TopicMirror] scan_target_topic_content_ids notice for {tgt_topic_id}: {err}")
 
-    return synced_ids
+    return synced_ids, synced_signatures, content_msg_count
 
 
 
@@ -5346,35 +5392,46 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                     effective_start = saved_checkpoint
 
                 # Step A: Scan target topic FIRST to know what content is already synced
-                synced_caption_ids = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
-                target_empty = (len(synced_caption_ids) == 0)
+                synced_caption_ids, synced_signatures, target_content_count = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
+                
+                # Target topic is ONLY empty if saved_checkpoint is 0 AND no content messages exist in target topic
+                target_empty = (saved_checkpoint == 0 and target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)
 
                 # Step B: Determine effective start checkpoint
                 if src_start_id is not None and src_start_id > 0:
                     effective_start = max(0, src_start_id - 1)
+                elif saved_checkpoint > 0:
+                    # STRICT CONTINUATION: Never reset a valid saved checkpoint to 0!
+                    effective_start = saved_checkpoint
                 elif target_empty:
-                    # If target topic is 100% empty, ignore stale DB checkpoint and sync all from post 0!
-                    print(f"[TopicMirror] Target topic {tgt_topic_id} is completely EMPTY. Syncing from message 0.")
+                    print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY. Starting from post 0.")
                     effective_start = 0
                 else:
                     effective_start = saved_checkpoint
 
                 # Step C: Fetch messages for topic
-                fetch_cutoff = 0 if target_empty else effective_start
-                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=fetch_cutoff, fallback_client=userbot if src_client != userbot else app)
+                # min_msg_id=effective_start guarantees only newer messages > effective_start are fetched from source
+                all_topic_messages = await fetch_all_messages_for_topic(src_client, src_chat_id, src_topic_id, min_msg_id=effective_start, fallback_client=userbot if src_client != userbot else app)
                 
-                if target_empty:
-                    if src_end_id and src_end_id > 0:
-                        messages_to_copy = [m for m in all_topic_messages if m.id <= src_end_id]
-                    else:
-                        messages_to_copy = all_topic_messages
-                    already_done_count = 0
+                if src_end_id and src_end_id > 0:
+                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
                 else:
-                    if src_end_id and src_end_id > 0:
-                        messages_to_copy = [m for m in all_topic_messages if m.id > effective_start and m.id <= src_end_id]
-                    else:
-                        messages_to_copy = [m for m in all_topic_messages if m.id > effective_start]
-                    already_done_count = len(all_topic_messages) - len(messages_to_copy)
+                    messages_to_copy = [m for m in all_topic_messages if m.id > effective_start]
+
+                # Filter out messages whose content/signatures are already synced in target topic
+                deduped_messages = []
+                for m in messages_to_copy:
+                    m_cap = (m.caption or m.text or "") if m else ""
+                    m_c_ids = extract_caption_content_ids(m_cap)
+                    if m_c_ids and synced_caption_ids and m_c_ids.issubset(synced_caption_ids):
+                        continue
+                    m_sig = get_message_content_signature(m)
+                    if m_sig and synced_signatures and m_sig in synced_signatures:
+                        continue
+                    deduped_messages.append(m)
+
+                already_done_count = len(messages_to_copy) - len(deduped_messages)
+                messages_to_copy = deduped_messages
 
                 topic_stats[src_topic_id]["skipped"] = already_done_count
                 overall_skipped += already_done_count
@@ -5417,11 +5474,19 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
                         continue
 
-                    # Check caption content ID match (PDF ID, Video ID, etc.) for seamless continuation
+                    # Check caption content ID match or media signature match for zero duplication
                     msg_cap = (msg.caption or msg.text or "") if msg else ""
                     src_content_ids = extract_caption_content_ids(msg_cap)
                     if src_content_ids and synced_caption_ids and src_content_ids.issubset(synced_caption_ids):
                         print(f"[TopicMirror] Source msg {msg.id} content IDs {src_content_ids} already synced in target topic {tgt_topic_id}. Resuming next.")
+                        topic_stats[src_topic_id]["skipped"] += 1
+                        overall_skipped += 1
+                        await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
+                        continue
+
+                    msg_sig = get_message_content_signature(msg)
+                    if msg_sig and synced_signatures and msg_sig in synced_signatures:
+                        print(f"[TopicMirror] Source msg {msg.id} signature '{msg_sig}' already synced in target topic {tgt_topic_id}. Skipping duplicate.")
                         topic_stats[src_topic_id]["skipped"] += 1
                         overall_skipped += 1
                         await db.update_mirror_topic_checkpoint(src_chat_id, tgt_chat_id, src_topic_id, msg.id)
