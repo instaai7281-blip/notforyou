@@ -138,7 +138,8 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
             logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED for {user_id} on @{bot_name}. Releasing in-memory client without deleting DB session.")
             _active_userbots.pop(user_id, None)
             return None
-            logger.error(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purging dead session from DB.")
+        except (errors.AuthKeyUnregistered, errors.SessionRevoked, errors.UserDeactivated, errors.UserDeactivatedBan) as auth_err:
+            logger.info(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purged dead session from DB.")
             _active_userbots.pop(user_id, None)
             try:
                 await db.remove_user_session(user_id, bot_name=bot_name)
