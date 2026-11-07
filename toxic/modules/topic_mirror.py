@@ -71,15 +71,16 @@ def stop_user_active_mirror(user_id: int):
     return False
 
 def stop_all_active_mirrors():
-    """Cancels and stops all running mirror/extraction tasks across all users immediately (Admin only)."""
+    """Cancels and stops all running mirror/extraction tasks across all users immediately."""
     stopped_count = 0
     for uid, state in list(active_mirrors.items()):
-        if isinstance(state, dict) and state.get("running"):
+        if isinstance(state, dict):
             state["running"] = False
+            state["cancelled"] = True
             stopped_count += 1
         elif state is True:
+            active_mirrors[uid] = False
             stopped_count += 1
-        active_mirrors.pop(uid, None)
     return stopped_count
 
 
@@ -703,6 +704,105 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
             print(f"[TopicMirror] scan_target_topic_content_ids notice for {tgt_topic_id}: {err}")
 
     return synced_ids, synced_signatures, content_msg_count
+
+
+async def clean_duplicates_in_target_topic(userbot, app, tgt_chat_id: int, tgt_topic_id: int, max_scan: int = 2500) -> tuple:
+    """
+    Scans messages in a target topic, detects duplicates via content signatures and caption IDs,
+    and removes duplicate copies while preserving the original (first) post.
+    Returns: (deleted_count, scanned_count)
+    """
+    seen_signatures = set()
+    seen_content_ids = set()
+    to_delete_msg_ids = []
+    scanned_count = 0
+
+    clients_to_try = []
+    if userbot and getattr(userbot, "is_connected", False):
+        clients_to_try.append(userbot)
+    if app and getattr(app, "is_connected", False) and app not in clients_to_try:
+        clients_to_try.append(app)
+
+    # 1. Fetch messages in chronological order (oldest first) or reverse of chat history
+    topic_msgs = []
+    for client in clients_to_try:
+        try:
+            if tgt_topic_id and tgt_topic_id != 1:
+                async for m in client.get_discussion_replies(tgt_chat_id, tgt_topic_id, limit=max_scan):
+                    if not m or getattr(m, "service", False) or getattr(m, "action", None) or getattr(m, "forum_topic_created", None):
+                        continue
+                    topic_msgs.append(m)
+            else:
+                async for m in client.get_chat_history(tgt_chat_id, limit=max_scan):
+                    m_thread = getattr(m, "message_thread_id", None)
+                    reply_to = getattr(m, "reply_to_message_id", None)
+                    if m_thread in (None, 1) and (not reply_to or reply_to == 1):
+                        if getattr(m, "service", False) or getattr(m, "action", None):
+                            continue
+                        topic_msgs.append(m)
+            if topic_msgs:
+                break
+        except Exception as ex:
+            print(f"[DuplicateCleaner] scan error for topic {tgt_topic_id}: {ex}")
+
+    # Sort oldest first by id so we keep the first original copy and delete subsequent duplicates
+    topic_msgs.sort(key=lambda x: getattr(x, "id", 0))
+
+    for m in topic_msgs:
+        mid = getattr(m, "id", None)
+        if not mid or mid == tgt_topic_id:
+            continue
+        scanned_count += 1
+
+        is_dup = False
+        sig = get_message_content_signature(m)
+        cap = (m.caption or m.text or "")
+        c_ids = extract_caption_content_ids(cap) if cap else set()
+
+        if sig and sig in seen_signatures:
+            is_dup = True
+        elif c_ids and any(cid in seen_content_ids for cid in c_ids):
+            is_dup = True
+
+        if is_dup:
+            to_delete_msg_ids.append(mid)
+        else:
+            if sig:
+                seen_signatures.add(sig)
+            if c_ids:
+                seen_content_ids.update(c_ids)
+
+    deleted_count = 0
+    if to_delete_msg_ids:
+        # Delete using batch client
+        for client in clients_to_try:
+            try:
+                for chunk_idx in range(0, len(to_delete_msg_ids), 100):
+                    chunk = to_delete_msg_ids[chunk_idx:chunk_idx + 100]
+                    try:
+                        await client.delete_messages(tgt_chat_id, chunk, revoke=True)
+                        deleted_count += len(chunk)
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+                        try:
+                            await client.delete_messages(tgt_chat_id, chunk, revoke=True)
+                            deleted_count += len(chunk)
+                        except Exception:
+                            pass
+                    except Exception:
+                        # Fallback individual deletion
+                        for d_id in chunk:
+                            try:
+                                await client.delete_messages(tgt_chat_id, d_id, revoke=True)
+                                deleted_count += 1
+                            except Exception:
+                                pass
+                if deleted_count > 0:
+                    break
+            except Exception as del_err:
+                print(f"[DuplicateCleaner] Batch delete error: {del_err}")
+
+    return deleted_count, scanned_count
 
 
 
@@ -2479,6 +2579,7 @@ def build_session_action_keyboard(src_chat_id: int, tgt_chat_id: int, topic_coun
             InlineKeyboardButton("🔄 Re-Upload Topic", callback_data=f"tm_reuploadtopic_{src_chat_id}_{tgt_chat_id}")
         ],
         [InlineKeyboardButton("🔗 Mirror via Topic Links (Link ➔ Link)", callback_data="tm_topiclink")],
+        [InlineKeyboardButton("🧹 Delete Duplicates in All Topics", callback_data=f"tm_cleandup_all_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("▶️ Continue Mirroring", callback_data=f"tm_res_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("✏️ Modify Target Chat ID", callback_data=f"tm_edittgt_{src_chat_id}_{tgt_chat_id}")],
         [InlineKeyboardButton("🗑️ Delete This Session", callback_data=f"tm_delsess_{src_chat_id}_{tgt_chat_id}")],
@@ -2815,14 +2916,27 @@ async def cancel_mirror_cmd(_, message):
     owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
     is_owner = (user_id in owner_list or str(user_id) in [str(o) for o in owner_list])
 
-    # Check if admin wants to stop all tasks globally
-    cmd_text = (message.text or "").strip().lower()
-    if is_owner and "all" in cmd_text:
-        stopped_count = stop_all_active_mirrors()
-        await message.reply_text(f"🛑 <b>Admin Action:</b> All {stopped_count} active bot tasks stopped globally.", parse_mode=ParseMode.HTML)
-        return
+    # 1. Stop active mirrors
+    stopped_count = stop_all_active_mirrors()
 
-    # User-level isolated cancellation: ONLY stops this user's task!
+    # 2. Stop all batch loops
+    try:
+        from toxic.modules.main import users_loop, batch_active_loops
+        for uid in list(users_loop.keys()):
+            users_loop[uid] = False
+        for uid in list(batch_active_loops.keys()):
+            batch_active_loops[uid] = False
+    except Exception:
+        pass
+
+    # 3. Stop range jobs
+    try:
+        from toxic.modules.range_forwarder import active_range_jobs
+        for uid in list(active_range_jobs.keys()):
+            active_range_jobs[uid]["running"] = False
+    except Exception:
+        pass
+
     state = active_mirrors.get(user_id)
     if state and (isinstance(state, dict) and state.get("running") or state is True):
         src_chat_id = state.get("src_chat_id") if isinstance(state, dict) else None
@@ -3159,6 +3273,7 @@ async def single_topic_info_callback(_, query: CallbackQuery):
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ Update This Topic", callback_data=f"tm_sync1_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")],
+        [InlineKeyboardButton("🧹 Delete Duplicates in This Topic", callback_data=f"tm_cleandup_topic_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")],
         [
             InlineKeyboardButton("✏️ Rename Topic", callback_data=f"tm_rentop_{src_chat_id}_{tgt_chat_id}_{src_topic_id}"),
             InlineKeyboardButton("🗑️ Delete Topic", callback_data=f"tm_deltop_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")
@@ -3201,6 +3316,135 @@ async def update_single_topic_callback(_, query: CallbackQuery):
         status_msg=query.message,
         force_sync=False
     )
+
+
+@app.on_callback_query(filters.regex(r"^tm_cleandup_topic_(-?\d+)_(-?\d+)_(\d+)$"))
+async def clean_duplicates_single_topic_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_cleandup_topic_(-?\d+)_(-?\d+)_(\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+    src_topic_id = int(match.group(3))
+
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {}) if session else {}
+    topic_info = topics_dict.get(str(src_topic_id), {})
+    tgt_topic_id = topic_info.get("tgt_topic_id", src_topic_id)
+    title = topic_info.get("title", f"Topic {src_topic_id}")
+
+    await query.answer("🧹 Scanning and cleaning duplicates...", show_alert=False)
+    progress_card = (
+        f"<blockquote>🧹 <b>Smart Duplicate Cleaner Running...</b></blockquote>\n\n"
+        f"🏷️ <b>Topic:</b> <code>{title}</code>\n"
+        f"🎯 <b>Target Topic ID:</b> <code>{tgt_topic_id}</code>\n\n"
+        f"<i>Target topic me maujood messages scan ho rahe hain aur duplicate files ko safe remove kiya ja raha hai...</i>"
+    )
+    try:
+        await query.message.edit_text(progress_card, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    userbot, _ = await get_working_userbot(user_id)
+    deleted_count, scanned_count = await clean_duplicates_in_target_topic(userbot, app, tgt_chat_id, tgt_topic_id)
+
+    back_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Back to Topic Details", callback_data=f"tm_topinfo_{src_chat_id}_{tgt_chat_id}_{src_topic_id}")],
+        [InlineKeyboardButton("📂 View & Manage Topics", callback_data=f"tm_topics_{src_chat_id}_{tgt_chat_id}_0")]
+    ])
+
+    result_card = (
+        f"<blockquote>✅ <b>Duplicate Clean-up Completed!</b></blockquote>\n\n"
+        f"🏷️ <b>Topic:</b> <code>{title}</code>\n"
+        f"📊 <b>Total Messages Scanned:</b> <code>{scanned_count}</code>\n"
+        f"🗑️ <b>Duplicate Files Deleted:</b> <code>{deleted_count}</code>\n\n"
+        f"<i>Pehli aur original post ko 100% safe rakha gaya hai. Topic ab bilkul clean hai!</i>"
+    )
+    try:
+        await query.message.edit_text(result_card, parse_mode=ParseMode.HTML, reply_markup=back_kb)
+    except Exception:
+        pass
+
+
+@app.on_callback_query(filters.regex(r"^tm_cleandup_all_(-?\d+)_(-?\d+)$"))
+async def clean_duplicates_all_topics_callback(_, query: CallbackQuery):
+    user_id = query.from_user.id
+    if await chk_mirror_user(user_id) != 0:
+        await query.answer("🔒 Topic Mirror Plan required!", show_alert=True)
+        return
+
+    match = re.search(r"^tm_cleandup_all_(-?\d+)_(-?\d+)$", query.data)
+    src_chat_id = int(match.group(1))
+    tgt_chat_id = int(match.group(2))
+
+    session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
+    topics_dict = session.get("topics", {}) if session else {}
+    if not topics_dict:
+        await query.answer("⚠️ No topics found in this session!", show_alert=True)
+        return
+
+    await query.answer("🧹 Group ke sabhi topics me duplicates cleaning shuru...", show_alert=False)
+    userbot, _ = await get_working_userbot(user_id)
+
+    total_topics = len(topics_dict)
+    total_deleted = 0
+    total_scanned = 0
+    current_idx = 0
+
+    progress_card = (
+        f"<blockquote>🧹 <b>Group Duplicate Cleaner Active</b></blockquote>\n\n"
+        f"🏢 <b>Target Group:</b> <code>{tgt_chat_id}</code>\n"
+        f"📊 <b>Progress:</b> <code>0/{total_topics} Topics</code>\n"
+        f"🗑️ <b>Total Duplicates Cleaned:</b> <code>0</code>\n\n"
+        f"<i>Sabhi topics me se duplicate files khoj kar delete ki ja rahi hain...</i>"
+    )
+    try:
+        await query.message.edit_text(progress_card, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    last_update = time.time()
+    for s_tid, tinfo in topics_dict.items():
+        current_idx += 1
+        t_tid = tinfo.get("tgt_topic_id", int(s_tid))
+        title = tinfo.get("title", f"Topic {s_tid}")
+
+        del_c, scan_c = await clean_duplicates_in_target_topic(userbot, app, tgt_chat_id, t_tid)
+        total_deleted += del_c
+        total_scanned += scan_c
+
+        now = time.time()
+        if (now - last_update > 3.0) or (current_idx == total_topics):
+            last_update = now
+            pct = int((current_idx / total_topics) * 100)
+            live_card = (
+                f"<blockquote>🧹 <b>Group Duplicate Cleaner Active ({pct}%)</b></blockquote>\n\n"
+                f"🏢 <b>Target Group:</b> <code>{tgt_chat_id}</code>\n"
+                f"🏷️ <b>Current Topic:</b> <code>{title}</code>\n"
+                f"📊 <b>Progress:</b> <code>{current_idx}/{total_topics} Topics</code>\n"
+                f"🗑️ <b>Duplicates Cleaned So Far:</b> <code>{total_deleted}</code>"
+            )
+            try:
+                await query.message.edit_text(live_card, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+
+    final_kb = build_session_action_keyboard(src_chat_id, tgt_chat_id, topic_count=total_topics, auto_schedule=session.get("auto_schedule"))
+    final_card = (
+        f"<blockquote>🎉 <b>All Topics Duplicate Cleaner Completed!</b></blockquote>\n\n"
+        f"🏢 <b>Target Group:</b> <code>{tgt_chat_id}</code>\n"
+        f"📁 <b>Topics Cleaned:</b> <code>{total_topics}</code>\n"
+        f"📊 <b>Total Messages Scanned:</b> <code>{total_scanned}</code>\n"
+        f"🗑️ <b>Total Duplicate Files Deleted:</b> <code>{total_deleted}</code>\n\n"
+        f"<i>Group ke har ek topic me se duplicate files successfully clean ho chuki hain! Har content ka ek original post bilkul safe hai.</i>"
+    )
+    try:
+        await query.message.edit_text(final_card, parse_mode=ParseMode.HTML, reply_markup=final_kb)
+    except Exception:
+        pass
 
 
 @app.on_callback_query(filters.regex(r"^tm_rentop_(-?\d+)_(-?\d+)_(\d+)$"))

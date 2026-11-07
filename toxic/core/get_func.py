@@ -984,7 +984,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             copy_success = await copy_message_with_chat_id(app, userbot, sender, chat, msg_id, edit)
             if copy_success:
                 await edit.delete(2)
-                return
+                return True
             # If copy fails, fallback to extraction logic below
             await edit.edit("**Copy failed, trying extraction...**")
         
@@ -1019,32 +1019,32 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             if not await is_enabled(sender, "text"):
                 await edit.edit("🔇 **Text is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
         elif msg.media:
             if msg.video and not await is_enabled(sender, "video"):
                 await edit.edit("🔇 **Video is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
             if msg.document and not await is_enabled(sender, "document"):
                 await edit.edit("🔇 **Document is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
             if msg.photo and not await is_enabled(sender, "photo"):
                 await edit.edit("🔇 **Photo is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
             if msg.audio and not await is_enabled(sender, "audio"):
                 await edit.edit("🔇 **Audio is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
             if msg.voice and not await is_enabled(sender, "voice"):
                 await edit.edit("🔇 **Voice is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
             if msg.sticker and not await is_enabled(sender, "sticker"):
                 await edit.edit("🔇 **Sticker is turned OFF in settings. Skipping...**")
                 await edit.delete(2)
-                return
+                return "skipped"
 
         # Special handling for protected content (Restrict Saving Content)
         # Main bots (app) cannot download protected content; only user accounts (userbots) can.
@@ -1075,19 +1075,19 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         # Handle different message types
         if msg.media == MessageMediaType.WEB_PAGE_PREVIEW:
             if not await is_enabled(sender, "text"):
-                return
+                return "skipped"
             await clone_message(app, msg, target_chat_id, topic_id, edit_id, LOG_GROUP, sender=sender)
-            return
+            return True
 
         if msg.text:
             if not await is_enabled(sender, "text"):
-                return
+                return "skipped"
             await clone_text_message(app, msg, target_chat_id, topic_id, edit_id, LOG_GROUP, sender=sender)
-            return
+            return True
 
         if msg.sticker:
             await handle_sticker(app, msg, target_chat_id, topic_id, edit_id, LOG_GROUP)
-            return
+            return True
 
         
         # Handle file media (photo, document, video)
@@ -1295,30 +1295,30 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             await result.copy(LOG_GROUP)
             await check_and_auto_forward(sender, result, caption=caption_html)
             await edit.delete(1)
-            return
+            return True
         
         if msg.voice:
             result = await app.send_voice(target_chat_id, file, reply_to_message_id=topic_id)
             await result.copy(LOG_GROUP)
             await check_and_auto_forward(sender, result)
             await edit.delete(1)
-            return
+            return True
 
         if msg.photo:
             if not await is_enabled(sender, "photo"):
-                return
+                return "skipped"
             result = await app.send_photo(target_chat_id, file, caption=None, reply_to_message_id=topic_id)
             await result.copy(LOG_GROUP)
             await check_and_auto_forward(sender, result)
             await edit.delete(1)
-            return
+            return True
 
         # Upload media
         # await edit.edit("**Checking file...**")
         if msg.video and not await is_enabled(sender, "video"):
-            return
+            return "skipped"
         if msg.document and not await is_enabled(sender, "document"):
-            return
+            return "skipped"
 
         # Prepare thumbnail beforehand
         thumb_path = thumbnail(sender)
@@ -1335,11 +1335,13 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         if file_size > size_limit and (free_check == 0 or pro is None):
             await edit.delete()
             await split_and_upload_file(app, sender, target_chat_id, file, caption, topic_id, thumb=thumb_path)
-            return
+            return True
         elif file_size > size_limit:
             await handle_large_file(file, sender, edit, caption)
+            return True
         else:
             await upload_media(sender, target_chat_id, file, caption, edit, topic_id, thumb=thumb_path)
+            return True
 
     except (ChannelBanned, ChannelInvalid, ChannelPrivate, ChatIdInvalid, ChatInvalid):
         await app.edit_message_text(sender, edit_id, "🌚 First do /login & then send me the Link again send /guide for more help")
@@ -1641,6 +1643,7 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             filename = await get_media_filename(msg)
             final_caption = format_caption(msg.caption.markdown if msg.caption else "", sender, custom_caption, filename=filename)
             
+            force_extraction = thumbnail(sender) or get_user_rename_preference(sender) != '⚝'
             # Try fast copy via userbot copy_message first before downloading
             if not getattr(msg, "has_protected_content", False) and not force_extraction:
                 try:
@@ -1842,12 +1845,12 @@ async def send_media_message(app, target_chat_id, msg, caption, topic_id, sender
                 has_spoiler=has_spoiler
             )
 
+        return None
+
     except Exception as e:
-        print(f"Error while sending media: {e}")
-        return await app.send_message(
-            target_chat_id,
-            f"❌ Failed to send media.\n\nError: {e}"
-        )
+        print(f"Error while sending media with file_id: {e}")
+        # Return None so callers fall back to userbot direct copy or download/upload
+        return None
 
 
 
