@@ -462,14 +462,6 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
     start_time_batch = time.time()
     last_ui_update = start_time_batch
 
-    # Reusable background status message to prevent FloodWait
-    status_msg = None
-    try:
-        status_msg = await app.send_message(user_id, "⚡ **Batch process running in background...**")
-    except Exception:
-        pass
-    status_edit_id = status_msg.id if status_msg else None
-
     try:
         # Guarantee userbot initialization for user
         userbot = await initialize_userbot(user_id)
@@ -496,8 +488,8 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             save_user_data(user_id, "last_batch_url", url)
             
             try:
-                # Process the message
-                res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                # Process the message with fresh transient status per item
+                res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
                 if res is True:
                     success_count += 1
                 elif res == "skipped":
@@ -508,7 +500,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             except FloodWait as e:
                 await asyncio.sleep(e.value + 2)
                 try:
-                    res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                    res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
                     if res is True:
                         success_count += 1
                     elif res == "skipped":
@@ -525,7 +517,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                         userbot = await initialize_userbot(user_id)
                         if userbot and getattr(userbot, "is_connected", False):
                             await asyncio.sleep(1)
-                            res = await get_msg(userbot, user_id, status_edit_id, link, 0, pin_msg)
+                            res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
                             if res is True:
                                 success_count += 1
                                 reconnected = True

@@ -846,15 +846,28 @@ async def upload_media(sender, target_chat_id, file, caption, edit, topic_id, th
 
 
 
+async def _safe_edit_or_send(app_client, chat_id, edit_id, text, **kwargs):
+    """Safely edits an existing message; if it fails (e.g. MESSAGE_ID_INVALID), sends a fresh message."""
+    if edit_id:
+        try:
+            return await app_client.edit_message_text(chat_id, edit_id, text, **kwargs)
+        except Exception:
+            pass
+    try:
+        return await app_client.send_message(chat_id, text, **kwargs)
+    except Exception:
+        return None
+
+
 async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: str, i: int = 0, message: Message = None):
     await task_semaphore.acquire()
     try:
         # If edit_id is None (e.g. in batch mode), create a temporary message to act as edit message
-        edit = ''
+        edit = None
         if edit_id is None:
             try:
                 edit = await app.send_message(sender, "Processing batch link... ⏳")
-                edit_id = edit.id
+                edit_id = edit.id if edit else None
             except Exception as e:
                 print(f"Failed to create batch status message: {e}")
 
@@ -895,9 +908,10 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             pass
         elif 't.me/' in msg_link or 'telegram.me/' in msg_link or 'telegram.dog/' in msg_link:
             if '/s/' in msg_link: # handles stories
-                edit = await app.edit_message_text(sender, edit_id, "Story Link Detected... 📸")
+                edit = await _safe_edit_or_send(app, sender, edit_id, "Story Link Detected... 📸")
                 if userbot is None:
-                    await edit.edit("Please login using /login to save stories.")     
+                    if edit:
+                        await edit.edit("Please login using /login to save stories.")     
                     return
                 parts = [p for p in msg_link.split("/") if p]
                 # parts: ['https:', 't.me', 's', 'chat_id', 'msg_id'] -> index 3 is chat_id
@@ -906,7 +920,8 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                     chat = f"-100{chat}"
                 msg_id = int(parts[-1])
                 await download_user_stories(userbot, chat, msg_id, edit, sender)
-                await edit.delete(2)
+                if edit:
+                    await edit.delete(2)
                 return
             
             # Public links, Forum/Topic links
@@ -927,8 +942,8 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
 
         # Check if the channel is protected
         if chat in saved_channel_ids:
-            await app.edit_message_text(
-                sender, edit_id,
+            await _safe_edit_or_send(
+                app, sender, edit_id,
                 "This channel is protected by **@CrazyxDeveloper_Bot 🛡️**.\nKya Be... Hamara Hi Content Nikalega 🌝 Kahi Or Try Kar 😘"
             )
             return
@@ -939,7 +954,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
         is_direct_forward_enabled = get_user_forward_preference(sender)
         
         if not is_private and is_direct_forward_enabled:
-            edit = await app.edit_message_text(sender, edit_id, "Directly forwarding post... 🚀")
+            edit = await _safe_edit_or_send(app, sender, edit_id, "Directly forwarding post... 🚀")
             try:
                 client_to_use = userbot if userbot else app
                 chat_resolved = chat
@@ -961,7 +976,8 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                     message_ids=msg_id,
                     reply_to_message_id=topic_id
                 )
-                await edit.delete(2)
+                if edit:
+                    await edit.delete(2)
                 return
             except Exception as forward_err:
                 print(f"Direct forward failed: {forward_err}")
@@ -977,7 +993,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
                 status_text = "Processing Private Link... 🔐"
             elif force_extraction:
                 status_text = "Custom settings detected, extracting... ⚡"
-            edit = await app.edit_message_text(sender, edit_id, status_text)
+            edit = await _safe_edit_or_send(app, sender, edit_id, status_text)
 
         # Fast copy path without custom settings
         if not force_extraction:
@@ -1344,7 +1360,7 @@ async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: 
             return True
 
     except (ChannelBanned, ChannelInvalid, ChannelPrivate, ChatIdInvalid, ChatInvalid):
-        await app.edit_message_text(sender, edit_id, "🌚 First do /login & then send me the Link again send /guide for more help")
+        await _safe_edit_or_send(app, sender, edit_id, "🌚 First do /login & then send me the Link again send /guide for more help")
     except Exception as e:
         if edit:
             try:
