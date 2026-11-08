@@ -1557,9 +1557,11 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
 
 
 async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_markup=None):
-    """Safely edits a status message with multi-stage fallback (HTML -> Markdown -> plain text)."""
+    """Safely edits a status message with multi-stage fallback (HTML -> Markdown -> plain text).
+    If the message ID is invalid or cannot be edited, re-sends a new message and returns it.
+    """
     if not message or not text:
-        return
+        return message
     capped_text = str(text)
     if len(capped_text) > 3800:
         capped_text = capped_text[:3700] + "\n\n<i>...[Summary truncated for Telegram message length]</i>"
@@ -1567,29 +1569,44 @@ async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_mark
     # 1. Try with specified parse_mode (default HTML)
     try:
         await message.edit(capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
-        return
+        return message
     except Exception as e:
         err_s = str(e).upper()
+        if "MESSAGE_NOT_MODIFIED" in err_s:
+            return message
         # If parse mode entity error occurred, fallback to Markdown or plain text
         if any(k in err_s for k in ("PARSE", "ENTITY", "TAG", "UNCLOSED", "BAD REQUEST")):
             try:
                 await message.edit(capped_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-                return
+                return message
             except Exception:
                 try:
                     await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
-                    return
+                    return message
                 except Exception:
                     pass
         elif "MESSAGE_TOO_LONG" in err_s:
             capped_text = capped_text[:2800] + "\n\n...[Truncated]"
             try:
                 await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
-                return
+                return message
             except Exception:
                 pass
-        elif "MESSAGE_NOT_MODIFIED" in err_s:
-            return
+        
+        # If message ID is invalid, deleted, or cannot be edited, send a fresh message to same chat
+        if any(k in err_s for k in ("MESSAGE_ID_INVALID", "MESSAGE_NOT_FOUND", "MESSAGE_DELETE_FORBIDDEN", "CHAT_WRITE_FORBIDDEN", "CHANNEL_PRIVATE")):
+            try:
+                chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
+                if chat_id:
+                    new_msg = await app.send_message(chat_id, capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
+                    return new_msg
+            except Exception:
+                try:
+                    new_msg = await app.send_message(chat_id, capped_text, parse_mode=None, reply_markup=reply_markup)
+                    return new_msg
+                except Exception:
+                    pass
+    return message
 
 
 async def resilient_send_media(
@@ -5176,9 +5193,21 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
     control_kb = get_mirror_keyboard(user_id)
 
     async def _update_status(text: str, reply_markup=None):
+        nonlocal status_msg
         if status_msg:
             try:
-                await safe_edit_message(status_msg, text, reply_markup=reply_markup)
+                res = await safe_edit_message(status_msg, text, reply_markup=reply_markup)
+                if res:
+                    status_msg = res
+                    if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
+                        active_mirrors[user_id]["status_msg"] = status_msg
+            except Exception:
+                pass
+        else:
+            try:
+                status_msg = await app.send_message(user_id, text, reply_markup=reply_markup)
+                if user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
+                    active_mirrors[user_id]["status_msg"] = status_msg
             except Exception:
                 pass
 
