@@ -573,9 +573,7 @@ async def set_topic_diamond_icon(userbot, app, tgt_chat_id: int, tgt_topic_id: i
 
     clean_title = clean_topic_title(title)
     # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
-    clients_to_try = [userbot] if userbot else []
-    if not clients_to_try and app and tgt_topic_id in (None, 1):
-        clients_to_try = [app]
+    clients_to_try = [c for c in [app, userbot] if c]
 
     for client in clients_to_try:
         try:
@@ -684,9 +682,7 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
     if not tgt_chat_id or not tgt_topic_id:
         return synced_ids, synced_signatures, 0
 
-    clients_to_try = [userbot] if userbot else []
-    if not clients_to_try and app and tgt_topic_id in (None, 1):
-        clients_to_try = [app]
+    clients_to_try = [c for c in [app, userbot] if c]
 
     for client in clients_to_try:
         try:
@@ -1007,9 +1003,7 @@ async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query
         return None
     clean_q = clean_topic_title(title_query).strip()
     # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
-    clients_to_try = [userbot] if userbot else []
-    if not clients_to_try and app and tgt_topic_id in (None, 1):
-        clients_to_try = [app]
+    clients_to_try = [c for c in [app, userbot] if c]
 
     query_terms = [t for t in [clean_q, title_query.strip(), clean_q[:20].strip(), title_query[:20].strip()] if t]
     for client in clients_to_try:
@@ -5710,18 +5704,16 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 # Step A: Scan target topic FIRST to know what content is already synced
                 synced_caption_ids, synced_signatures, target_content_count = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
                 
-                # Target topic is ONLY empty if saved_checkpoint is 0 AND no content messages exist in target topic
-                target_empty = (saved_checkpoint == 0 and target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)
+                # A target topic is genuinely EMPTY if there are 0 content messages and 0 media signatures in it on Telegram
+                target_empty = (target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)
 
                 # Step B: Determine effective start checkpoint
-                if force_sync:
-                    print(f"[TopicMirror] Force sync requested for topic {tgt_topic_id}. Starting from post 0.")
+                if force_sync or target_empty:
+                    if target_empty:
+                        print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY on Telegram (0 messages found). Resetting checkpoint to 0 to mirror all content!")
                     effective_start = 0
                 elif src_start_id is not None and src_start_id > 0:
                     effective_start = max(0, src_start_id - 1)
-                elif target_empty:
-                    print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY (0 messages in target). Starting from post 0.")
-                    effective_start = 0
                 elif saved_checkpoint > 0:
                     effective_start = saved_checkpoint
                 else:
