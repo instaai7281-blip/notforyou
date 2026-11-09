@@ -657,21 +657,59 @@ async def stop_batch_callback(_, query):
 async def stop_batch_command(_, message):
     user_id = message.from_user.id if message.from_user else message.chat.id
     
-    # 1. Stop all batch processes
+    # 1. Stop ONLY this user's active batch processes (Zero interference with other users)
+    if user_id in users_loop:
+        users_loop[user_id] = False
+    if user_id in batch_active_loops:
+        batch_active_loops[user_id] = False
+
+    # 2. Stop ONLY this user's topic mirror and extraction tasks
+    stopped_mirrors = 0
+    try:
+        from toxic.modules.topic_mirror import stop_user_active_mirror
+        if stop_user_active_mirror(user_id):
+            stopped_mirrors = 1
+    except Exception as e:
+        print(f"Error stopping user mirror: {e}")
+
+    # 3. Stop ONLY this user's range forwarder task
+    try:
+        from toxic.modules.range_forwarder import active_range_jobs
+        if user_id in active_range_jobs and isinstance(active_range_jobs[user_id], dict):
+            active_range_jobs[user_id]["running"] = False
+    except Exception:
+        pass
+
+    stop_card = (
+        "<blockquote>🛑 <b>Your Active Tasks Stopped Successfully!</b></blockquote>\n\n"
+        "✨ <b>Status:</b> Your task (Topic Mirror, Batch, Downloads) has been aborted\n"
+        "💾 <b>Checkpoints:</b> Safely preserved in database!\n\n"
+        "<i>Aapke alawa dusre users ke tasks bilkul safe aur uninterrupted chalte rahenge.</i>"
+    )
+    await message.reply_text(stop_card, parse_mode=ParseMode.HTML)
+
+
+@app.on_message(filters.command(["stopall", "cancelall"]))
+async def stop_all_command(_, message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    from config import OWNER_ID
+    owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
+    if user_id not in owner_list and str(user_id) not in [str(o) for o in owner_list]:
+        await message.reply("⛔ <b>Access Denied:</b> This command is restricted to Bot Owners only.", parse_mode=ParseMode.HTML)
+        return
+
+    # Emergency owner stop across all users
     for uid in list(users_loop.keys()):
         users_loop[uid] = False
     for uid in list(batch_active_loops.keys()):
         batch_active_loops[uid] = False
 
-    # 2. Stop all topic mirror and extraction tasks
-    stopped_mirrors = 0
     try:
         from toxic.modules.topic_mirror import stop_all_active_mirrors
-        stopped_mirrors = stop_all_active_mirrors()
+        stop_all_active_mirrors()
     except Exception as e:
-        print(f"Error stopping mirrors: {e}")
+        print(f"Error stopping all mirrors: {e}")
 
-    # 3. Stop range forwarder tasks
     try:
         from toxic.modules.range_forwarder import active_range_jobs
         for uid in list(active_range_jobs.keys()):
@@ -679,10 +717,4 @@ async def stop_batch_command(_, message):
     except Exception:
         pass
 
-    stop_card = (
-        "<blockquote>🛑 <b>All Bot Tasks Stopped Successfully!</b></blockquote>\n\n"
-        "✨ <b>Status:</b> All active tasks (Topic Mirror, Batch, Downloads) aborted\n"
-        "💾 <b>Checkpoints:</b> Safely preserved in database!\n\n"
-        "<i>Ab koi bhi background task run nahi ho raha hai. Aap jab chahein naya task fresh shuru kar sakte hain.</i>"
-    )
-    await message.reply_text(stop_card, parse_mode=ParseMode.HTML)
+    await message.reply("🛑 <b>[OWNER ACTION] All active tasks across all users have been stopped.</b>", parse_mode=ParseMode.HTML)

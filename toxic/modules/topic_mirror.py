@@ -627,26 +627,45 @@ def get_message_content_signature(m) -> str:
         return ""
     try:
         if m.video:
+            fuid = getattr(m.video, "file_unique_id", "") or ""
             fs = getattr(m.video, "file_size", 0) or 0
             dur = getattr(m.video, "duration", 0) or 0
             fn = getattr(m.video, "file_name", "") or ""
-            return f"vid_{fs}_{dur}_{fn}"
+            if fuid:
+                return f"vid_uid_{fuid}"
+            if fs > 0:
+                return f"vid_{fs}_{dur}_{fn}"
         if m.document:
+            fuid = getattr(m.document, "file_unique_id", "") or ""
             fs = getattr(m.document, "file_size", 0) or 0
             fn = getattr(m.document, "file_name", "") or ""
-            return f"doc_{fs}_{fn}"
+            if fuid:
+                return f"doc_uid_{fuid}"
+            if fs > 0:
+                return f"doc_{fs}_{fn}"
         if m.audio:
+            fuid = getattr(m.audio, "file_unique_id", "") or ""
             fs = getattr(m.audio, "file_size", 0) or 0
             dur = getattr(m.audio, "duration", 0) or 0
-            return f"aud_{fs}_{dur}"
+            if fuid:
+                return f"aud_uid_{fuid}"
+            if fs > 0:
+                return f"aud_{fs}_{dur}"
         if m.photo:
+            fuid = getattr(m.photo, "file_unique_id", "") or ""
             fs = getattr(m.photo, "file_size", 0) or 0
-            return f"pho_{fs}"
+            w = getattr(m.photo, "width", 0) or 0
+            h = getattr(m.photo, "height", 0) or 0
+            if fuid:
+                return f"pho_uid_{fuid}"
+            if fs > 0:
+                return f"pho_{fs}_{w}_{h}"
         txt = (m.text or m.caption or "").strip()
         if txt:
-            # First 60 chars normalized
-            norm = "".join(txt.split())[:60]
-            return f"txt_{len(norm)}_{norm}"
+            import hashlib
+            norm = " ".join(txt.split())
+            if len(norm) > 10:
+                return f"txt_{len(norm)}_{hashlib.md5(norm.encode('utf-8')).hexdigest()[:16]}"
     except Exception:
         pass
     return ""
@@ -827,16 +846,33 @@ async def get_working_userbot(user_id: int):
 
 
 
-async def ensure_userbot_connected(userbot):
-    """Ensures userbot client connection is active during continuous mirroring."""
+async def ensure_userbot_connected(userbot, user_id: int = None):
+    """Ensures userbot client connection is active during continuous mirroring. Auto-reinstantiates on error."""
     if userbot:
         try:
             if not getattr(userbot, "is_connected", False):
                 print("[TopicMirror] Userbot disconnected. Attempting auto-reconnect...")
-                await userbot.start()
+                await asyncio.wait_for(userbot.start(), timeout=8.0)
                 print("[TopicMirror] ✅ Userbot reconnected successfully!")
+                return userbot
         except Exception as e:
             print(f"[TopicMirror] ensure_userbot_connected notice: {e}")
+            if user_id:
+                try:
+                    fresh_ub, _ = await get_working_userbot(user_id)
+                    if fresh_ub and getattr(fresh_ub, "is_connected", False):
+                        print(f"[TopicMirror] ✅ Re-instantiated fresh userbot client for user {user_id}")
+                        return fresh_ub
+                except Exception as fresh_err:
+                    print(f"[TopicMirror] Re-instantiate error: {fresh_err}")
+    elif user_id:
+        try:
+            fresh_ub, _ = await get_working_userbot(user_id)
+            if fresh_ub and getattr(fresh_ub, "is_connected", False):
+                return fresh_ub
+        except Exception:
+            pass
+    return userbot
 
 
 def normalize_topic_title(title: str) -> str:
@@ -1558,54 +1594,60 @@ async def send_split_messages(client, chat_id, text, parse_mode=ParseMode.HTML, 
 
 async def safe_edit_message(message, text, parse_mode=ParseMode.HTML, reply_markup=None):
     """Safely edits a status message with multi-stage fallback (HTML -> Markdown -> plain text).
-    If the message ID is invalid or cannot be edited, re-sends a new message and returns it.
+    Handles FloodWait, Connection lost, socket resets, and re-sends a fresh message if editing fails.
     """
     if not message or not text:
         return message
     capped_text = str(text)
     if len(capped_text) > 3800:
         capped_text = capped_text[:3700] + "\n\n<i>...[Summary truncated for Telegram message length]</i>"
-    
-    # 1. Try with specified parse_mode (default HTML)
-    try:
-        await message.edit(capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
-        return message
-    except Exception as e:
-        err_s = str(e).upper()
-        if "MESSAGE_NOT_MODIFIED" in err_s:
+
+    for edit_attempt in range(1, 4):
+        try:
+            await message.edit(capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
             return message
-        # If parse mode entity error occurred, fallback to Markdown or plain text
-        if any(k in err_s for k in ("PARSE", "ENTITY", "TAG", "UNCLOSED", "BAD REQUEST")):
-            try:
-                await message.edit(capped_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        except Exception as e:
+            err_s = str(e).upper()
+            if "MESSAGE_NOT_MODIFIED" in err_s:
                 return message
-            except Exception:
+            if "FLOOD_WAIT" in err_s or "FLOODPREMIUMWAIT" in err_s:
+                import re as _re
+                nums = _re.findall(r'\d+', str(e))
+                w_sec = int(nums[-1]) if nums else 2
+                if w_sec <= 4:
+                    await asyncio.sleep(w_sec + 0.5)
+                    continue
+                return message
+            if any(k in err_s for k in ("CONNECTION", "RESET", "SOCKET", "TIMEOUT", "OSERROR")):
+                await asyncio.sleep(1.0 * edit_attempt)
+                continue
+            if any(k in err_s for k in ("PARSE", "ENTITY", "TAG", "UNCLOSED", "BAD REQUEST")):
                 try:
-                    await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
+                    await message.edit(capped_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
                     return message
                 except Exception:
-                    pass
-        elif "MESSAGE_TOO_LONG" in err_s:
-            capped_text = capped_text[:2800] + "\n\n...[Truncated]"
-            try:
-                await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
-                return message
-            except Exception:
-                pass
-        
-        # If message ID is invalid, deleted, or cannot be edited, send a fresh message to same chat
-        if any(k in err_s for k in ("MESSAGE_ID_INVALID", "MESSAGE_NOT_FOUND", "MESSAGE_DELETE_FORBIDDEN", "CHAT_WRITE_FORBIDDEN", "CHANNEL_PRIVATE")):
-            try:
-                chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
-                if chat_id:
-                    new_msg = await app.send_message(chat_id, capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
-                    return new_msg
-            except Exception:
-                try:
-                    new_msg = await app.send_message(chat_id, capped_text, parse_mode=None, reply_markup=reply_markup)
-                    return new_msg
-                except Exception:
-                    pass
+                    try:
+                        await message.edit(capped_text, parse_mode=None, reply_markup=reply_markup)
+                        return message
+                    except Exception:
+                        pass
+                break
+            if any(k in err_s for k in ("MESSAGE_ID_INVALID", "MESSAGE_NOT_FOUND", "MESSAGE_DELETE_FORBIDDEN", "CHAT_WRITE_FORBIDDEN", "CHANNEL_PRIVATE")):
+                break
+            break
+
+    # If edit failed completely, send fresh message to chat so user UI never freezes
+    try:
+        chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
+        if chat_id:
+            new_msg = await app.send_message(chat_id, capped_text, parse_mode=parse_mode, reply_markup=reply_markup)
+            return new_msg
+    except Exception:
+        try:
+            new_msg = await app.send_message(chat_id, capped_text, parse_mode=None, reply_markup=reply_markup)
+            return new_msg
+        except Exception:
+            pass
     return message
 
 
@@ -2933,24 +2975,24 @@ async def cancel_mirror_cmd(_, message):
     owner_list = OWNER_ID if isinstance(OWNER_ID, list) else [OWNER_ID]
     is_owner = (user_id in owner_list or str(user_id) in [str(o) for o in owner_list])
 
-    # 1. Stop active mirrors
-    stopped_count = stop_all_active_mirrors()
+    # 1. Stop ONLY this calling user's active mirror task (Never kill other users' tasks)
+    stopped_count = 1 if stop_user_active_mirror(user_id) else 0
 
-    # 2. Stop all batch loops
+    # 2. Stop ONLY this calling user's batch loops
     try:
         from toxic.modules.main import users_loop, batch_active_loops
-        for uid in list(users_loop.keys()):
-            users_loop[uid] = False
-        for uid in list(batch_active_loops.keys()):
-            batch_active_loops[uid] = False
+        if user_id in users_loop:
+            users_loop[user_id] = False
+        if user_id in batch_active_loops:
+            batch_active_loops[user_id] = False
     except Exception:
         pass
 
-    # 3. Stop range jobs
+    # 3. Stop ONLY this calling user's range jobs
     try:
         from toxic.modules.range_forwarder import active_range_jobs
-        for uid in list(active_range_jobs.keys()):
-            active_range_jobs[uid]["running"] = False
+        if user_id in active_range_jobs and isinstance(active_range_jobs[user_id], dict):
+            active_range_jobs[user_id]["running"] = False
     except Exception:
         pass
 
@@ -4396,7 +4438,7 @@ async def run_single_link_mirror(
             sent_msg_id = None
             for retry in range(1, 4):
                 try:
-                    await ensure_userbot_connected(userbot)
+                    userbot = await ensure_userbot_connected(userbot, user_id)
                     is_gen = (src_topic_id in (None, 1))
                     success, method, sent_msg_id = await transfer_single_message(
                         userbot=userbot,
@@ -5618,6 +5660,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
         current_topic_index = 0
         start_overall_time = time.time()
+        last_skip_ui_time = 0
 
         # Quick Pre-scan Status: Audit topics and show exact starting state
         pre_audit_text = (
@@ -5646,7 +5689,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
             try:
                 if src_client == userbot and userbot:
-                    await ensure_userbot_connected(userbot)
+                    userbot = await ensure_userbot_connected(userbot, user_id)
 
                 # Always fetch FRESH checkpoint from MongoDB per-topic (not stale startup snapshot)
                 fresh_session = await db.get_mirror_session(src_chat_id, tgt_chat_id)
@@ -5671,16 +5714,18 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 target_empty = (saved_checkpoint == 0 and target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)
 
                 # Step B: Determine effective start checkpoint
-                if src_start_id is not None and src_start_id > 0:
-                    effective_start = max(0, src_start_id - 1)
-                elif saved_checkpoint > 0:
-                    # STRICT CONTINUATION: Never reset a valid saved checkpoint to 0!
-                    effective_start = saved_checkpoint
-                elif target_empty:
-                    print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY. Starting from post 0.")
+                if force_sync:
+                    print(f"[TopicMirror] Force sync requested for topic {tgt_topic_id}. Starting from post 0.")
                     effective_start = 0
-                else:
+                elif src_start_id is not None and src_start_id > 0:
+                    effective_start = max(0, src_start_id - 1)
+                elif target_empty:
+                    print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY (0 messages in target). Starting from post 0.")
+                    effective_start = 0
+                elif saved_checkpoint > 0:
                     effective_start = saved_checkpoint
+                else:
+                    effective_start = 0
 
                 # Step C: Fetch messages for topic
                 # min_msg_id=effective_start guarantees only newer messages > effective_start are fetched from source
@@ -5712,18 +5757,21 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
 
                 if total_msgs_in_topic == 0:
                     print(f"[TopicMirror] Topic '{topic_title}' already up to date ({already_done_count} msgs). Skipping.")
-                    up_to_date_text = (
-                        f"<blockquote><b>⚡️ 𝗫𝗧𝗥𝗔𝗖𝗧𝗜𝗡𝗚 𝗧𝗢𝗣𝗜𝗖𝗦...</b></blockquote>\n\n"
-                        f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
-                        f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
-                        f"📊 <b>Progress:</b> [▰▰▰▰▰▰▰▰▰▰] 100%\n"
-                        f"🔢 <b>Status:</b> <code>Already up-to-date ({already_done_count} msgs)</code>\n"
-                        f"🚀 <b>Speed:</b> <code>Fast Sync ⚡</code>\n"
-                        f"⏳ <b>ETA:</b> <code>00:00:00</code>\n\n"
-                        f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
-                        f"❌ Failed: {overall_failed}"
-                    )
-                    await _update_status(up_to_date_text, reply_markup=control_kb)
+                    now_skip = time.time()
+                    if current_topic_index == total_topics_count or (now_skip - last_skip_ui_time >= 2.5):
+                        last_skip_ui_time = now_skip
+                        up_to_date_text = (
+                            f"<blockquote><b>⚡ 𝕏𝕥𝕣𝕒𝕔𝕥𝕚𝕟𝕘 𝕋𝕠𝕡𝕚𝕔𝕤...</b></blockquote>\n\n"
+                            f"📁 <b>Topic [{current_topic_index}/{total_topics_count}]:</b> <code>{topic_title}</code>\n"
+                            f"📥 <b>Target:</b> <code>{tgt_title}</code>\n\n"
+                            f"📊 <b>Progress:</b> [▰▰▰▰▰▰▰▰▰▰] 100%\n"
+                            f"🔢 <b>Status:</b> <code>Already up-to-date ({already_done_count} msgs)</code>\n"
+                            f"🚀 <b>Speed:</b> <code>Fast Sync ⚡</code>\n"
+                            f"⏳ <b>ETA:</b> <code>00:00:00</code>\n\n"
+                            f"✅ Downloaded: {overall_copied} | ⏩ Skipped: {overall_skipped}\n"
+                            f"❌ Failed: {overall_failed}"
+                        )
+                        await _update_status(up_to_date_text, reply_markup=control_kb)
                     continue
 
 
@@ -5824,7 +5872,7 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             break
 
                         try:
-                            await ensure_userbot_connected(userbot)
+                            userbot = await ensure_userbot_connected(userbot, user_id)
                             is_gen = (src_topic_id == 1)
                             success, method, sent_msg_id = await transfer_single_message(
                                 userbot=userbot,
@@ -6517,8 +6565,15 @@ async def run_channel_to_topics_mirror(
         except Exception:
             pass
     else:
-        status_msg = await app.send_message(user_id, init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
-        active_mirrors[user_id]["status_msg"] = status_msg
+        for net_att in range(5):
+            try:
+                status_msg = await app.send_message(user_id, init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                break
+            except Exception:
+                import asyncio
+                await asyncio.sleep(2 * (net_att + 1))
+        if status_msg and user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
+            active_mirrors[user_id]["status_msg"] = status_msg
 
     # Detect if public channel for lightning-fast fetching and forwarding
     is_src_public = bool(getattr(src_chat, "username", None)) or (isinstance(src_chat_id, str) and not str(src_chat_id).startswith("-100"))
@@ -6676,7 +6731,7 @@ async def run_channel_to_topics_mirror(
         sent_msg_id = None
         for retry in range(1, 4):
             try:
-                await ensure_userbot_connected(userbot)
+                userbot = await ensure_userbot_connected(userbot, user_id)
                 is_gen = (tgt_topic_id == 1)
                 success, method, sent_msg_id = await transfer_single_message(
                     userbot=userbot,
