@@ -1787,6 +1787,9 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
     return False
 
 async def send_media_message(app, target_chat_id, msg, caption, topic_id, sender):
+    # If source chat restricts forwarding / has protected content, bots cannot send file_id ([400 MEDIA_EMPTY])
+    if getattr(msg.chat, "has_protected_content", False):
+        return None
     try:
         caption = clean_surrogates(caption)
         file_name = None

@@ -573,7 +573,7 @@ async def set_topic_diamond_icon(userbot, app, tgt_chat_id: int, tgt_topic_id: i
 
     clean_title = clean_topic_title(title)
     # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
-    clients_to_try = [c for c in [app, userbot] if c]
+    clients_to_try = [c for c in [userbot] if c]
 
     for client in clients_to_try:
         try:
@@ -682,7 +682,7 @@ async def scan_target_topic_content_ids(app, userbot, tgt_chat_id: int, tgt_topi
     if not tgt_chat_id or not tgt_topic_id:
         return synced_ids, synced_signatures, 0
 
-    clients_to_try = [c for c in [app, userbot] if c]
+    clients_to_try = [c for c in [userbot] if c]
 
     for client in clients_to_try:
         try:
@@ -1003,7 +1003,7 @@ async def search_target_topic_by_rpc(userbot, app, tgt_chat_id: int, title_query
         return None
     clean_q = clean_topic_title(title_query).strip()
     # Telegram Bots CANNOT use get_discussion_replies (400 BOT_METHOD_INVALID); use userbot only
-    clients_to_try = [c for c in [app, userbot] if c]
+    clients_to_try = [c for c in [userbot] if c]
 
     query_terms = [t for t in [clean_q, title_query.strip(), clean_q[:20].strip(), title_query[:20].strip()] if t]
     for client in clients_to_try:
@@ -1840,10 +1840,15 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
       - Full caption cleaning, branding tags, custom thumbnails, and watermarks applied.
     Checks user media filters and settings. Filters service/empty messages.
     """
-    # Instant Cancellation Check
+    # Instant Cancellation & Skip Check
     if user_id in active_mirrors:
         state = active_mirrors[user_id]
-        if (isinstance(state, dict) and not state.get("running", True)) or (isinstance(state, bool) and not state):
+        if isinstance(state, dict):
+            if not state.get("running", True):
+                return False, "cancelled", None
+            if state.get("skip_topic", False):
+                return False, "skipped", None
+        elif state is False:
             return False, "cancelled", None
 
     # 0. Skip Service, Action, Topic-Created, Pinned & Empty Messages
@@ -2157,7 +2162,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
         async def _on_dl_prog(current, total):
             st = active_mirrors.get(user_id)
-            if isinstance(st, dict) and not st.get("running", True):
+            if isinstance(st, dict) and (not st.get("running", True) or st.get("skip_topic", False)):
                 raise StopTransmission
             if progress_callback:
                 try:
@@ -2171,7 +2176,7 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
 
         async def _on_up_prog(current, total):
             st = active_mirrors.get(user_id)
-            if isinstance(st, dict) and not st.get("running", True):
+            if isinstance(st, dict) and (not st.get("running", True) or st.get("skip_topic", False)):
                 raise StopTransmission
             if progress_callback:
                 try:
@@ -2220,6 +2225,9 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
                         os.remove(temp_file)
                     except Exception:
                         pass
+                st = active_mirrors.get(user_id, {})
+                if isinstance(st, dict) and st.get("skip_topic", False):
+                    return False, "skipped", None
                 return False, "cancelled", None
             except (FloodWait, FloodPremiumWait) as fw:
                 w_sec = getattr(fw, "value", None) or getattr(fw, "x", None) or 15
@@ -5707,15 +5715,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 # A target topic is genuinely EMPTY if there are 0 content messages and 0 media signatures in it on Telegram
                 target_empty = (target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)
 
-                # Step B: Determine effective start checkpoint
-                if force_sync or target_empty:
-                    if target_empty:
-                        print(f"[TopicMirror] Target topic {tgt_topic_id} is genuinely EMPTY on Telegram (0 messages found). Resetting checkpoint to 0 to mirror all content!")
+                # Step B: Determine effective start checkpoint (Strict Continuation Guard)
+                if force_sync:
+                    print(f"[TopicMirror] Force sync requested for topic {tgt_topic_id}. Starting from post 0.")
                     effective_start = 0
                 elif src_start_id is not None and src_start_id > 0:
                     effective_start = max(0, src_start_id - 1)
                 elif saved_checkpoint > 0:
+                    # STRICT CONTINUATION: If MongoDB has a saved checkpoint, ALWAYS resume from it!
+                    # Never re-upload from 0 on bot restart, preventing double uploads!
+                    print(f"[TopicMirror] Resuming topic '{topic_title}' strictly from saved checkpoint #{saved_checkpoint}")
                     effective_start = saved_checkpoint
+                elif target_empty:
+                    print(f"[TopicMirror] Target topic {tgt_topic_id} is brand new (0 messages). Starting from post 0.")
+                    effective_start = 0
                 else:
                     effective_start = 0
 
@@ -5862,6 +5875,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                         if not c_state.get("running", True):
                             method = "cancelled"
                             break
+                        if c_state.get("skip_topic", False):
+                            method = "skipped"
+                            break
 
                         try:
                             userbot = await ensure_userbot_connected(userbot, user_id)
@@ -5898,8 +5914,12 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             else:
                                 success, method, sent_msg_id = False, str(transfer_err), None
 
-                    # If task was cancelled during attempt, stop immediately!
+                    # If task was cancelled or skipped during attempt, break immediately!
                     if method == "cancelled" or not active_mirrors.get(user_id, {}).get("running", True):
+                        break
+                    if method == "skipped" or active_mirrors.get(user_id, {}).get("skip_topic", False):
+                        print(f"[TopicMirror] ⏩ Topic '{topic_title}' skipped instantly by user request!")
+                        active_mirrors.get(user_id, {})["skip_topic"] = False
                         break
 
 
@@ -6562,7 +6582,6 @@ async def run_channel_to_topics_mirror(
                 status_msg = await app.send_message(user_id, init_text, parse_mode=ParseMode.HTML, reply_markup=control_kb)
                 break
             except Exception:
-                import asyncio
                 await asyncio.sleep(2 * (net_att + 1))
         if status_msg and user_id in active_mirrors and isinstance(active_mirrors[user_id], dict):
             active_mirrors[user_id]["status_msg"] = status_msg
