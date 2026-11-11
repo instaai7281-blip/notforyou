@@ -2290,12 +2290,11 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
         thumb_path = thumbnail(user_id)
         file_extension = str(temp_file).split('.')[-1].lower()
 
-        # If no custom thumbnail, try downloading original thumbnail from source message safely
-        if not thumb_path:
+        # For videos, generate fresh screenshot from 25%-50% into video to avoid original channel's watermarks/intros!
+        # Only use source message's original thumbnail for non-video documents if no custom thumb is set
+        if not thumb_path and not (msg.video or file_extension in ('mp4', 'mkv', 'mov', 'webm', 'flv', 'avi')):
             target_thumb_obj = None
-            if msg.video and getattr(msg.video, 'thumbs', None) and len(msg.video.thumbs) > 0:
-                target_thumb_obj = msg.video.thumbs[0]
-            elif msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
+            if msg.document and getattr(msg.document, 'thumbs', None) and len(msg.document.thumbs) > 0:
                 target_thumb_obj = msg.document.thumbs[0]
 
             if target_thumb_obj:

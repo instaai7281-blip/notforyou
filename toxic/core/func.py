@@ -333,10 +333,11 @@ def video_metadata(file):
     except Exception as e:
         print(f"Error in OpenCV video_metadata: {e}")
 
-    # Fallback to ffprobe
+    # Fallback to ffprobe only if installed
     try:
-        import subprocess
-        # Get stream info
+        import subprocess, shutil
+        if not shutil.which("ffprobe"):
+            return {'width': 0, 'height': 0, 'duration': 0}
         cmd = [
             "ffprobe",
             "-v", "error",
@@ -426,8 +427,8 @@ def _opencv_worker(video, out):
             vcap.release()
             return False
             
-        attempts = 20
-        seek_pcts = [i * 0.05 for i in range(1, attempts + 1)]
+        # Generate thumbnail deeper in video (20% to 65%) to avoid intro watermarks, logo slides, and promoter intros
+        seek_pcts = [0.25, 0.35, 0.50, 0.20, 0.40, 0.60, 0.15, 0.30, 0.45, 0.55]
         fallback_frame = None
         success = False
         
@@ -479,22 +480,22 @@ async def screenshot(video, duration, sender):
         if not success or not os.path.isfile(out) or os.path.getsize(out) == 0:
             print(f"[DEBUG] OpenCV screenshot failed or produced empty file. Falling back to FFmpeg for: {video}")
             
-            # Try multiple seek times to avoid black frames: 
-            # 10%, 25%, 50%, 5s, 15s, 2s
+            # Try multiple seek times deeper into video to bypass intro watermarks: 
+            # 25%, 35%, 50%, 20%, 40% (avoids first 15 seconds)
             seek_times = []
             if duration > 20:
                 seek_times = [
-                    int(duration * 0.1),
                     int(duration * 0.25),
-                    int(duration * 0.5),
-                    5,
-                    15,
-                    2
+                    int(duration * 0.35),
+                    int(duration * 0.50),
+                    int(duration * 0.20),
+                    int(duration * 0.40),
+                    max(15, int(duration * 0.15))
                 ]
             else:
                 seek_times = [
-                    max(int(duration) // 2, 1),
-                    2,
+                    max(int(duration) // 2, 2),
+                    max(int(duration) - 2, 1),
                     1
                 ]
                 
