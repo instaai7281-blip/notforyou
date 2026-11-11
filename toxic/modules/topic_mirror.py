@@ -5176,16 +5176,34 @@ async def topic_mirror_cmd(client, message):
 
     # Check for existing saved mirror sessions
     saved_sessions = await db.get_user_mirror_sessions(user_id)
-    if saved_sessions:
-        hub_kb = build_mirror_hub_keyboard(user_id, saved_sessions)
-        await message.reply(
-            f"🎛️ **Topic Mirroring Hub**\n\n"
-            f"Found **{len(saved_sessions)}** saved group session(s).\n"
-            f"Click a button below to **instantly resume/update pending topics**, or start a new mirror:",
-            reply_markup=hub_kb
-        )
-    else:
-        await start_new_mirror_flow(user_id, message)
+    try:
+        if saved_sessions:
+            hub_kb = build_mirror_hub_keyboard(user_id, saved_sessions)
+            await message.reply(
+                f"🎛️ **Topic Mirroring Hub**\n\n"
+                f"Found **{len(saved_sessions)}** saved group session(s).\n"
+                f"Click a button below to **instantly resume/update pending topics**, or start a new mirror:",
+                reply_markup=hub_kb
+            )
+        else:
+            await start_new_mirror_flow(user_id, message)
+    except errors.FloodWait as fw:
+        w_sec = getattr(fw, "value", 30)
+        hrs = w_sec // 3600
+        mins = (w_sec % 3600) // 60
+        secs = w_sec % 60
+        wait_fmt = f"{hrs}h {mins}m {secs}s" if hrs > 0 else f"{mins}m {secs}s"
+        print(f"[TopicMirror] ⚠️ Telegram FloodWait on /topic_mirror ({w_sec}s). Waiting cooldown...")
+        try:
+            if w_sec <= 5:
+                await asyncio.sleep(w_sec + 0.5)
+                if saved_sessions:
+                    hub_kb = build_mirror_hub_keyboard(user_id, saved_sessions)
+                    await message.reply(f"🎛️ **Topic Mirroring Hub**\n\nFound **{len(saved_sessions)}** saved group session(s).", reply_markup=hub_kb)
+                else:
+                    await start_new_mirror_flow(user_id, message)
+        except Exception:
+            pass
 
 
 async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mirror_all_topics: bool = True, detected_topic_id: int = None, forced_tgt_topic_id: int = None, status_msg=None, force_sync: bool = False, src_start_id: int = None, src_end_id: int = None, is_auto_update: bool = False):
@@ -5933,12 +5951,13 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                             # Auto-pin the FIRST transferred message of this topic
                             if topic_stats[src_topic_id]["copied"] == 1 and sent_msg_id:
                                 try:
+                                    await asyncio.sleep(1.2)
                                     await app.pin_chat_message(
                                         chat_id=tgt_chat_id,
                                         message_id=sent_msg_id,
                                         disable_notification=True
                                     )
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(0.8)
                                     # Auto-delete the "pinned a message" service message inside topic thread
                                     try:
                                         async for sys_m in userbot.get_discussion_replies(tgt_chat_id, tgt_topic_id, limit=5):
@@ -6267,12 +6286,15 @@ async def on_group_member_update(_, event):
 
 async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title: str, icon_color: int = None, icon_emoji_id: int = None) -> int:
     """
-    Bulletproof topic creation:
-    Creates topic directly with standard color and zero dependency on custom premium emoji icons.
-    Uses peer resolution and raw MTProto invocation to eliminate all 'unexpected keyword argument channel' errors.
+    Bulletproof topic creation with anti-floodwait protection:
+    Respects FloodWait from Telegram, sleeps dynamically, switches to userbot if bot is flood-waited,
+    and applies adaptive safety throttling to prevent 8-hour flood penalties.
     """
     new_id = None
     safe_color = icon_color or 0x6FB9F0
+
+    # Throttle slightly to respect Telegram's topic creation rate limits
+    await asyncio.sleep(1.2)
 
     # Attempt 1: Raw MTProto messages.CreateForumTopic via app (Primary & fastest)
     try:
@@ -6288,16 +6310,39 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
         if new_id:
             print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via MTProto")
             return new_id
+    except errors.FloodWait as fw:
+        w_sec = getattr(fw, "value", 10)
+        print(f"[TopicMirror] App hit FloodWait {w_sec}s creating topic '{styled_title}'")
+        if w_sec <= 25:
+            await asyncio.sleep(w_sec + 1)
+            try:
+                peer = await app.resolve_peer(tgt_chat_id)
+                rnd = random.randint(1000000, 9999999)
+                res = await app.invoke(raw.functions.messages.CreateForumTopic(
+                    peer=peer,
+                    title=styled_title,
+                    random_id=rnd,
+                    icon_color=safe_color
+                ))
+                new_id = extract_topic_id_from_result(res)
+                if new_id:
+                    return new_id
+            except Exception:
+                pass
     except Exception as m_err:
         print(f"[TopicMirror] MTProto CreateForumTopic notice: {m_err}")
 
-    # Attempt 2: High level Pyrogram create_forum_topic without icon_emoji_id
+    # Attempt 2: High level Pyrogram create_forum_topic via app
     if not new_id:
         try:
             created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title, icon_color=safe_color)
             new_id = extract_topic_id_from_result(created)
             if new_id:
                 return new_id
+        except errors.FloodWait as fw:
+            w_sec = getattr(fw, "value", 10)
+            if w_sec <= 20:
+                await asyncio.sleep(w_sec + 1)
         except Exception:
             try:
                 created = await app.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
@@ -6307,7 +6352,7 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
             except Exception as e2:
                 print(f"[TopicMirror] Pyrogram create_forum_topic notice: {e2}")
 
-    # Attempt 3: Userbot MTProto fallback
+    # Attempt 3: Userbot MTProto fallback (Bypasses bot token floodwait completely!)
     if not new_id and userbot:
         try:
             peer = await userbot.resolve_peer(tgt_chat_id)
@@ -6322,6 +6367,10 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
             if new_id:
                 print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via Userbot MTProto")
                 return new_id
+        except errors.FloodWait as fw:
+            w_sec = getattr(fw, "value", 10)
+            if w_sec <= 30:
+                await asyncio.sleep(w_sec + 1)
         except Exception as ub_err:
             try:
                 created = await userbot.create_forum_topic(chat_id=tgt_chat_id, title=styled_title)
