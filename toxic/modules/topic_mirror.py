@@ -324,10 +324,13 @@ async def clean_and_brand_caption(user_id: int, original_caption: str) -> str:
     text = re.sub(r'(?i)https?://api\.whatsapp\.com/[^\s]+', '', text)
     text = re.sub(r'(?i)[ \t\-_—>➤➢•*|~:👇👉]*whatsapp[\s\-_]*(?:link|channel|group|community)?[\s_:➤>–\-👇👉]*', '', text)
 
-    # 7. Remove any extraction/download lines including leading emojis, arrows, or bullets
-    extraction_pattern = r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*By[\s_:➤>–\-]*[^\n]*$'
-    text = re.sub(extraction_pattern, '', text)
+    # 7. Replace any extraction/download lines (including unicode small caps like '📥 ᴇxᴛʀᴀᴄᴛᴇᴅ ʙʏ ➤') with the branding tag
+    extraction_pattern = r'(?im)^[^\n]*(?:[eᴇ][x][tᴛ][rʀ][aᴀ][cᴄ][tᴛ][eᴇ][dᴅ]|[dᴅ][oᴏ][wᴡ][nɴ][lʟ][oᴏ][aᴀ][dᴅ][eᴇ][dᴅ]|[uᴜ][pᴘ][lʟ][oᴏ][aᴀ][dᴅ][eᴇ][dᴅ]|Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*(?:[bʙ][yʏ]|By)[\s_:➤>–\-]*[^\n]*$'
     text = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:]*(?:powered\s*by|bot:|via\s*⚝)[^\n]*$', '', text)
+    if re.search(extraction_pattern, text):
+        text = re.sub(extraction_pattern, f'> **{branding_tag}**', text)
+    else:
+        text = re.sub(extraction_pattern, '', text)
 
     # 8. Remove other unwanted promoter phrases
     unwanted_phrases = [
@@ -363,11 +366,11 @@ async def clean_and_brand_caption(user_id: int, original_caption: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
 
-    # 13. Apply custom template caption or append clean branding tag
+    # 13. Apply custom template caption or append clean branding tag (if not already replaced in-place)
     custom_cap = user_data.get("caption")
     if custom_cap:
         text = f"{custom_cap}\n\n{text}".strip()
-    else:
+    elif branding_tag not in text:
         text = f"{text}\n\n> **{branding_tag}**".strip()
 
     # 14. Clean any stray leading arrows before blockquote markers

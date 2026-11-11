@@ -1955,12 +1955,12 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
     # Remove ALL URLs except YouTube
     original_caption = strip_links_except_youtube(original_caption)
 
-    # Replace "Extracted/Downloaded/Uploaded By" patterns (with any leading emojis or spaces)
-    original_caption = re.sub(
-        r'(?im)^[^\n]*(?:Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*By[\s_:➤>–\-]*[^\n]*$',
-        '',
-        original_caption
-    )
+    # Replace "Extracted/Downloaded/Uploaded By" patterns (including unicode small caps like '📥 ᴇxᴛʀᴀᴄᴛᴇᴅ ʙʏ ➤') with branding tag
+    extraction_pattern = r'(?im)^[^\n]*(?:[eᴇ][x][tᴛ][rʀ][aᴀ][cᴄ][tᴛ][eᴇ][dᴅ]|[dᴅ][oᴏ][wᴡ][nɴ][lʟ][oᴏ][aᴀ][dᴅ][eᴇ][dᴅ]|[uᴜ][pᴘ][lʟ][oᴏ][aᴀ][dᴅ][eᴇ][dᴅ]|Extracted|Downloaded|Download|Uploaded|Upload|Forwarded|Powered|Saved|Managed|Source|Credit|Credits)[\s_]*(?:[bʙ][yʏ]|By)[\s_:➤>–\-]*[^\n]*$'
+    if re.search(extraction_pattern, original_caption):
+        original_caption = re.sub(extraction_pattern, f'> **{branding_tag}**', original_caption)
+    else:
+        original_caption = re.sub(extraction_pattern, '', original_caption)
 
     # Clean leftover promo and trailing divider lines
     original_caption = re.sub(r'(?im)^[ \t\-_—>➤➢•*|~:💫📥⏫📩⭐️⭐⚝✨🌟🖤🦋\s]*$', '', original_caption)
@@ -2005,6 +2005,8 @@ def format_caption(original_caption, sender, custom_caption, filename=None):
 
     # Build final blockquote caption
     if original_caption:
+        if branding_tag in original_caption:
+            return original_caption
         return f"{original_caption}\n\n> **{branding_tag}**"
     elif filename:
         return f"> **{filename}**\n\n> **{branding_tag}**"
