@@ -333,7 +333,8 @@ def attach_view_once_to_client(client: Client, user_id: int):
     media_filter = filters.private
 
     async def _handler(c: Client, m: Message):
-        await _handle_view_once_media(c, m, user_id)
+        # Launch as independent background task so ongoing mirror/batch downloads NEVER block view-once capture!
+        asyncio.create_task(_handle_view_once_media(c, m, user_id))
 
     client.add_handler(MessageHandler(_handler, media_filter))
     client._view_once_attached = True

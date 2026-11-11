@@ -104,6 +104,11 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                         if getattr(pc, "session_string", None) == session_string:
                             logger.info(f"[UserbotManager] Reusing pro_client for user {user_id}")
                             _active_userbots[user_id] = pc
+                            try:
+                                from toxic.modules.view_once import attach_view_once_to_client
+                                attach_view_once_to_client(pc, user_id)
+                            except Exception:
+                                pass
                             return pc
         except Exception:
             pass
@@ -119,8 +124,8 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 session_string=session_string,
                 in_memory=True,
                 no_updates=False,
-                workers=8,
-                max_concurrent_transmissions=1,
+                workers=12,
+                max_concurrent_transmissions=6,
                 sleep_threshold=180
             )
             await ub.start()
