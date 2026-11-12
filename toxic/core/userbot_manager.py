@@ -84,16 +84,33 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                 except Exception:
                     pass
 
-        # 2. Retrieve session string if not provided (per-bot partition first)
+        # 2. Retrieve session string if not provided (per-bot partition strictly prioritized)
+        is_dedicated_bot_session = False
         if not session_string:
             try:
-                session_string = await db.get_user_session(user_id, bot_name=bot_name)
+                # Check if user specifically logged into THIS bot
+                dedicated_sess = await db.get_user_session(user_id, bot_name=bot_name, allow_fallback=False)
+                if dedicated_sess:
+                    session_string = dedicated_sess
+                    is_dedicated_bot_session = True
+                else:
+                    # Fallback to shared session only when needed for operations (use no_updates=True!)
+                    session_string = await db.get_user_session(user_id, bot_name=bot_name, allow_fallback=True)
             except Exception as db_err:
                 logger.error(f"[UserbotManager] Failed to fetch session from MongoDB for {user_id}: {db_err}")
                 return None
 
         if not session_string:
             return None
+
+        # Check assigned_bot in DB so ONLY the primary logged-in bot subscribes to live updates
+        if not is_dedicated_bot_session:
+            try:
+                u_doc = await db.get_data(user_id)
+                if u_doc and u_doc.get("assigned_bot") == bot_name:
+                    is_dedicated_bot_session = True
+            except Exception:
+                pass
 
         # 3. Check if this session is already running in pro_clients to avoid duplicating
         try:
@@ -114,46 +131,58 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
             pass
 
         # 4. Create single unified Client instance for THIS bot
-        # Using no_updates=True allows multiple bots to share the exact same userbot session
-        # concurrently for cloning/mirroring without triggering Telegram's AUTH_KEY_DUPLICATED!
-        try:
-            ub = Client(
-                f"ub_{bot_name}_{user_id}",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                session_string=session_string,
-                in_memory=True,
-                no_updates=False,
-                workers=12,
-                max_concurrent_transmissions=6,
-                sleep_threshold=180
-            )
-            await ub.start()
-
-            _active_userbots[user_id] = ub
+        # Only subscribe to updates (no_updates=False) on the bot where user actually logged in!
+        # If AuthKeyDuplicated happens (e.g. rolling restart or concurrent client), cleanly fallback to no_updates=True.
+        last_err = None
+        for try_no_updates in ([False, True] if is_dedicated_bot_session else [True]):
             try:
-                from toxic.modules.view_once import attach_view_once_to_client
-                attach_view_once_to_client(ub, user_id)
-            except Exception as vo_err:
-                logger.warning(f"[UserbotManager] Notice attaching view-once handler: {vo_err}")
-            logger.info(f"[UserbotManager] ✅ Unified client started successfully for user {user_id} on @{bot_name}")
-            return ub
+                ub = Client(
+                    f"ub_{bot_name}_{user_id}_{'upd' if not try_no_updates else 'noupd'}",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    session_string=session_string,
+                    in_memory=True,
+                    no_updates=try_no_updates,
+                    workers=12,
+                    max_concurrent_transmissions=6,
+                    sleep_threshold=180
+                )
+                await ub.start()
 
-        except errors.AuthKeyDuplicated:
-            logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED for {user_id} on @{bot_name}. Releasing in-memory client without deleting DB session.")
-            _active_userbots.pop(user_id, None)
-            return None
-        except (errors.AuthKeyUnregistered, errors.SessionRevoked, errors.UserDeactivated, errors.UserDeactivatedBan) as auth_err:
-            logger.info(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purged dead session from DB.")
-            _active_userbots.pop(user_id, None)
-            try:
-                await db.remove_user_session(user_id, bot_name=bot_name)
-            except Exception:
-                pass
-            return None
-        except Exception as e:
-            logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id} on @{bot_name}: {e}")
-            return None
+                _active_userbots[user_id] = ub
+                if not try_no_updates:
+                    try:
+                        from toxic.modules.view_once import attach_view_once_to_client
+                        attach_view_once_to_client(ub, user_id)
+                    except Exception as vo_err:
+                        logger.warning(f"[UserbotManager] Notice attaching view-once handler: {vo_err}")
+                logger.info(f"[UserbotManager] ✅ Unified client started for {user_id} on @{bot_name} (no_updates={try_no_updates})")
+                return ub
+
+            except errors.AuthKeyDuplicated as akd_err:
+                last_err = akd_err
+                logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED (no_updates={try_no_updates}) for {user_id} on @{bot_name}. Retrying safe isolation mode...")
+                _active_userbots.pop(user_id, None)
+                try:
+                    await ub.stop()
+                except Exception:
+                    pass
+                await asyncio.sleep(1.0)
+                continue
+            except (errors.AuthKeyUnregistered, errors.SessionRevoked, errors.UserDeactivated, errors.UserDeactivatedBan) as auth_err:
+                logger.info(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purged dead session from DB.")
+                _active_userbots.pop(user_id, None)
+                try:
+                    await db.remove_user_session(user_id, bot_name=bot_name)
+                except Exception:
+                    pass
+                return None
+            except Exception as e:
+                last_err = e
+                logger.error(f"[UserbotManager] ❌ Failed to start unified client for {user_id} on @{bot_name}: {e}")
+                return None
+
+        return None
 
 
 async def handle_burned_session(user_id: int, bot_name: str = None):

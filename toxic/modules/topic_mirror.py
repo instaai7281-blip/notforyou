@@ -1146,10 +1146,21 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
         except Exception:
             pass
 
-        # Step A: Direct get_chat with strict 4s timeout
+        # Step A: Direct get_chat with strict 4s timeout (also cache access_hash to MongoDB)
         try:
             chat = await asyncio.wait_for(client.get_chat(src_chat_id), timeout=4.0)
             title = chat.title or str(src_chat_id)
+            try:
+                peer = await client.resolve_peer(src_chat_id)
+                acc_hash = getattr(peer, "access_hash", None)
+                if acc_hash:
+                    from toxic.core.mongo.db import mirror_db, _get_chat_id_variants
+                    await mirror_db.update_many(
+                        {"src_chat_id": {"$in": _get_chat_id_variants(src_chat_id)}},
+                        {"$set": {"src_access_hash": int(acc_hash)}}
+                    )
+            except Exception:
+                pass
             print(f"[TopicMirror] ✅ Resolved source chat via {client_name}: '{title}' ({src_chat_id})")
             return client, chat, title, None
         except Exception as err:
@@ -1158,47 +1169,110 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 return None, None, None, "AUTH_KEY_DUPLICATED"
             errors_encountered.append(f"{client_name}: {err}")
 
-        # Step B: Fast peer cache priming via raw messages.GetDialogs (max 2 pages of 100, timeout 4s)
+        # Skip GetDialogs for bot tokens (since Telegram forbids messages.GetDialogs on bots!)
+        is_bot_client = False
+        try:
+            me = getattr(client, "me", None)
+            if me and getattr(me, "is_bot", False):
+                is_bot_client = True
+            elif client == app:
+                is_bot_client = True
+        except Exception:
+            pass
+
+        if is_bot_client:
+            return None, None, None, None
+
+        # Step A2: Try direct access_hash lookup from MongoDB session metadata (if previously cached)
+        try:
+            from toxic.core.mongo.db import mirror_db, _get_chat_id_variants
+            if target_int:
+                s_vars = _get_chat_id_variants(src_chat_id)
+                doc = await mirror_db.find_one({"src_chat_id": {"$in": s_vars}, "src_access_hash": {"$exists": True}})
+                if doc and doc.get("src_access_hash"):
+                    acc_hash = int(doc["src_access_hash"])
+                    try:
+                        await client.storage.update_peers([(src_chat_id, acc_hash, "channel", None, None)])
+                        res_ch = await asyncio.wait_for(client.invoke(raw.functions.channels.GetChannels(
+                            id=[raw.types.InputChannel(channel_id=target_int, access_hash=acc_hash)]
+                        )), timeout=4.0)
+                        if getattr(res_ch, "chats", None):
+                            chat = await asyncio.wait_for(client.get_chat(src_chat_id), timeout=4.0)
+                            title = chat.title or str(src_chat_id)
+                            print(f"[TopicMirror] ✅ Resolved source chat via cached MongoDB access_hash ({client_name}): '{title}'")
+                            return client, chat, title, None
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Step B: Deep peer cache priming via raw messages.GetDialogs (main folder + archived folder, up to 2000 dialogs)
         try:
             matched_chat = None
-            offset_date = 0
-            offset_id = 0
-            offset_peer = raw.types.InputPeerEmpty()
-            for _ in range(2):  # Scan up to 200 dialogs max
-                res = await asyncio.wait_for(client.invoke(raw.functions.messages.GetDialogs(
-                    offset_date=offset_date,
-                    offset_id=offset_id,
-                    offset_peer=offset_peer,
-                    limit=100,
-                    hash=0
-                )), timeout=4.0)
-                chats_list = getattr(res, "chats", [])
-                if not chats_list:
-                    break
-                for c in chats_list:
-                    cid = getattr(c, "id", None)
-                    c_username = getattr(c, "username", None)
-                    if cid and target_int and cid == target_int:
-                        matched_chat = c
-                        break
-                    if c_username and str(c_username).lower() == str(src_chat_id).lower().lstrip("@"):
-                        matched_chat = c
-                        break
+            for folder_id in (0, 1):
                 if matched_chat:
                     break
-                messages_list = getattr(res, "messages", [])
-                if messages_list:
-                    last_m = messages_list[-1]
-                    offset_date = getattr(last_m, "date", 0)
-                    offset_id = getattr(last_m, "id", 0)
-                else:
-                    break
+                offset_date = 0
+                offset_id = 0
+                offset_peer = raw.types.InputPeerEmpty()
+                for _ in range(15):  # Up to 1500 dialogs per folder
+                    res = await asyncio.wait_for(client.invoke(raw.functions.messages.GetDialogs(
+                        offset_date=offset_date,
+                        offset_id=offset_id,
+                        offset_peer=offset_peer,
+                        limit=100,
+                        hash=0,
+                        folder_id=folder_id
+                    )), timeout=5.0)
+                    chats_list = getattr(res, "chats", [])
+                    if not chats_list:
+                        break
+                    for c in chats_list:
+                        cid = getattr(c, "id", None)
+                        c_username = getattr(c, "username", None)
+                        if cid and target_int and cid == target_int:
+                            matched_chat = c
+                            break
+                        if c_username and str(c_username).lower() == str(src_chat_id).lower().lstrip("@"):
+                            matched_chat = c
+                            break
+                    if matched_chat:
+                        break
+                    messages_list = getattr(res, "messages", [])
+                    if messages_list:
+                        last_m = messages_list[-1]
+                        offset_date = getattr(last_m, "date", 0)
+                        offset_id = getattr(last_m, "id", 0)
+                        # Build proper offset_peer for pagination
+                        peer_obj = getattr(last_m, "peer_id", None)
+                        if hasattr(peer_obj, "channel_id"):
+                            ch_map = {getattr(x, "id", None): getattr(x, "access_hash", 0) for x in chats_list}
+                            offset_peer = raw.types.InputPeerChannel(channel_id=peer_obj.channel_id, access_hash=ch_map.get(peer_obj.channel_id, 0))
+                        elif hasattr(peer_obj, "chat_id"):
+                            offset_peer = raw.types.InputPeerChat(chat_id=peer_obj.chat_id)
+                        elif hasattr(peer_obj, "user_id"):
+                            u_map = {getattr(x, "id", None): getattr(x, "access_hash", 0) for x in getattr(res, "users", [])}
+                            offset_peer = raw.types.InputPeerUser(user_id=peer_obj.user_id, access_hash=u_map.get(peer_obj.user_id, 0))
+                    else:
+                        break
 
             if matched_chat:
+                # Save access_hash in MongoDB and inject into storage so future restarts never forget this source group!
+                acc_hash = getattr(matched_chat, "access_hash", None)
+                if acc_hash and target_int:
+                    try:
+                        await client.storage.update_peers([(src_chat_id, acc_hash, "channel", None, None)])
+                        from toxic.core.mongo.db import mirror_db, _get_chat_id_variants
+                        await mirror_db.update_many(
+                            {"src_chat_id": {"$in": _get_chat_id_variants(src_chat_id)}},
+                            {"$set": {"src_access_hash": int(acc_hash)}}
+                        )
+                    except Exception:
+                        pass
                 try:
                     chat = await asyncio.wait_for(client.get_chat(src_chat_id), timeout=4.0)
                     title = chat.title or str(src_chat_id)
-                    print(f"[TopicMirror] ✅ Resolved source chat via {client_name} after raw dialog warm: '{title}' ({src_chat_id})")
+                    print(f"[TopicMirror] ✅ Resolved & cached source chat via {client_name}: '{title}' ({src_chat_id})")
                     return client, chat, title, None
                 except Exception:
                     pass
@@ -1208,22 +1282,22 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 return None, None, None, "AUTH_KEY_DUPLICATED"
             errors_encountered.append(f"{client_name}_warm: {warm_err}")
 
-        # Step C: Fallback to fast get_dialogs check (capped at 50 dialogs with timeout)
+        # Step C: Fallback to fast get_dialogs check (capped at 300 dialogs with timeout)
         try:
             matched_id = None
             async def _scan_diag():
                 nonlocal matched_id
                 count = 0
-                async for dialog in client.get_dialogs(limit=50):
+                async for dialog in client.get_dialogs(limit=300):
                     count += 1
                     if dialog.chat:
                         d_clean = str(dialog.chat.id).replace("-100", "").replace("-", "")
                         if d_clean == clean_target or getattr(dialog.chat, "username", None) == src_chat_id:
                             matched_id = dialog.chat.id
                             break
-                    if count >= 50:
+                    if count >= 300:
                         break
-            await asyncio.wait_for(_scan_diag(), timeout=4.0)
+            await asyncio.wait_for(_scan_diag(), timeout=8.0)
 
             if matched_id:
                 chat = await asyncio.wait_for(client.get_chat(matched_id), timeout=4.0)

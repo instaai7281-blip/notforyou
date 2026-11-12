@@ -361,6 +361,9 @@ async def load_all_view_once_listeners():
         from toxic.core.mongo.db import db as user_db
         from toxic.core.userbot_manager import get_or_create_userbot, get_current_bot_username
 
+        # Wait 6s on startup so rolling Heroku restarts finish terminating old container before connecting update listeners
+        await asyncio.sleep(6.0)
+
         bot_uname = get_current_bot_username()
 
         cursor = user_db.find({
@@ -374,14 +377,22 @@ async def load_all_view_once_listeners():
         async for doc in cursor:
             uid = doc.get("_id")
             s_dict = doc.get("sessions")
-            s_str = s_dict.get(bot_uname) if isinstance(s_dict, dict) else None
-            if not s_str:
-                s_str = doc.get("session")
-
-            is_enabled = doc.get("view_once_saver", True)
+            dedicated_str = s_dict.get(bot_uname) if isinstance(s_dict, dict) else None
             assigned_bot = doc.get("assigned_bot")
 
-            if uid and s_str and is_enabled and (not assigned_bot or assigned_bot == bot_uname or bot_uname == "default_bot"):
+            # Strict Bot Isolation: Only boot listener on the bot where user actually logged in!
+            # Prevents multi-bot simultaneous AUTH_KEY_DUPLICATED conflicts.
+            if dedicated_str:
+                s_str = dedicated_str
+            elif assigned_bot == bot_uname:
+                s_str = doc.get("session")
+            elif not assigned_bot and bot_uname in ("default_bot", "Xtractorx_Pro_Bot"):
+                s_str = doc.get("session")
+            else:
+                continue
+
+            is_enabled = doc.get("view_once_saver", True)
+            if uid and s_str and is_enabled:
                 valid_users.append((uid, s_str))
 
         if not valid_users:
