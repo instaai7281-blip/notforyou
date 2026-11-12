@@ -1206,7 +1206,7 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
         except Exception:
             pass
 
-        # Step B: Deep peer cache priming via raw messages.GetDialogs (main folder + archived folder, up to 2000 dialogs)
+        # Step B: Fast peer cache priming via raw messages.GetDialogs (main folder + archived folder, up to 500 dialogs)
         try:
             matched_chat = None
             for folder_id in (0, 1):
@@ -1215,7 +1215,7 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                 offset_date = 0
                 offset_id = 0
                 offset_peer = raw.types.InputPeerEmpty()
-                for _ in range(15):  # Up to 1500 dialogs per folder
+                for _ in range(5):  # Up to 500 dialogs per folder for fast startup
                     res = await asyncio.wait_for(client.invoke(raw.functions.messages.GetDialogs(
                         offset_date=offset_date,
                         offset_id=offset_id,
@@ -1223,7 +1223,7 @@ async def resolve_source_chat_and_client(userbot, app, src_chat_id: int):
                         limit=100,
                         hash=0,
                         folder_id=folder_id
-                    )), timeout=5.0)
+                    )), timeout=4.0)
                     chats_list = getattr(res, "chats", [])
                     if not chats_list:
                         break
@@ -1454,6 +1454,9 @@ async def fetch_all_messages_for_topic(client, src_chat_id, topic_id: int, min_m
                 async for m in cl.get_discussion_replies(src_chat_id, topic_id, limit=max_limit):
                     if not m or m.id in seen_ids:
                         continue
+                    if min_msg_id > 0 and m.id <= min_msg_id:
+                        # Replies are ordered newest-to-oldest; stop scanning once we hit saved checkpoint!
+                        break
                     m_thread = getattr(m, "message_thread_id", None)
                     if m_thread and m_thread != topic_id and m_thread != 1:
                         continue
@@ -1491,10 +1494,14 @@ async def fetch_all_messages_for_topic(client, src_chat_id, topic_id: int, min_m
                     users_map = {u.id: u for u in getattr(res, "users", [])}
                     chats_map = {c.id: c for c in getattr(res, "chats", [])}
                     new_found = 0
+                    hit_cutoff = False
                     for rm in raw_msgs:
                         mid = getattr(rm, "id", None)
                         if not mid or mid in seen_ids:
                             continue
+                        if min_msg_id > 0 and mid <= min_msg_id:
+                            hit_cutoff = True
+                            break
                         try:
                             parsed_m = await types.Message._parse(cl, rm, users_map, chats_map)
                             if parsed_m:
@@ -1503,7 +1510,7 @@ async def fetch_all_messages_for_topic(client, src_chat_id, topic_id: int, min_m
                                 new_found += 1
                         except Exception:
                             pass
-                    if new_found == 0 or len(raw_msgs) < 100:
+                    if hit_cutoff or new_found == 0 or len(raw_msgs) < 100:
                         break
                     offset_id = raw_msgs[-1].id
                 if collected_messages:
@@ -5419,11 +5426,20 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
         "status_msg": status_msg
     }
 
-    userbot, is_temp_userbot = await get_working_userbot(user_id)
+    try:
+        userbot, is_temp_userbot = await asyncio.wait_for(get_working_userbot(user_id), timeout=18.0)
+    except Exception:
+        userbot, is_temp_userbot = None, False
 
     # Fast cancellation check
     if not active_mirrors.get(user_id, {}).get("running", True):
         return
+
+    await _update_status(
+        "🔎 <b>Verifying Source & Target Group Access...</b>\n\n"
+        "<i>Connecting to groups and loading fast cache...</i>",
+        reply_markup=control_kb
+    )
 
     # Intelligently resolve source chat via userbot (with peer cache warm-up) or bot (app)
     src_client, src_chat, src_title, resolve_err = await resolve_source_chat_and_client(userbot, app, src_chat_id)
@@ -5803,8 +5819,9 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
                 else:
                     effective_start = saved_checkpoint
 
-                # Step A: Scan target topic FIRST to know what content is already synced
-                synced_caption_ids, synced_signatures, target_content_count = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id)
+                # Step A: Scan target topic FIRST (fast 200-msg scan if resuming from checkpoint, else full scan)
+                scan_cap = 200 if saved_checkpoint > 0 else 1500
+                synced_caption_ids, synced_signatures, target_content_count = await scan_target_topic_content_ids(app, userbot, tgt_chat_id, tgt_topic_id, max_limit=scan_cap)
                 
                 # A target topic is genuinely EMPTY if there are 0 content messages and 0 media signatures in it on Telegram
                 target_empty = (target_content_count == 0 and len(synced_caption_ids) == 0 and len(synced_signatures) == 0)

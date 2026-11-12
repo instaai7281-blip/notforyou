@@ -65,7 +65,7 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                         pass
                     return existing
                 else:
-                    await existing.start()
+                    await asyncio.wait_for(existing.start(), timeout=12.0)
                     try:
                         from toxic.modules.view_once import attach_view_once_to_client
                         attach_view_once_to_client(existing, user_id)
@@ -147,7 +147,7 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
                     max_concurrent_transmissions=6,
                     sleep_threshold=180
                 )
-                await ub.start()
+                await asyncio.wait_for(ub.start(), timeout=15.0)
 
                 _active_userbots[user_id] = ub
                 if not try_no_updates:
