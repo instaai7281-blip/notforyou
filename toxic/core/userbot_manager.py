@@ -161,14 +161,18 @@ async def get_or_create_userbot(user_id: int, session_string: Optional[str] = No
 
             except errors.AuthKeyDuplicated as akd_err:
                 last_err = akd_err
-                logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED (no_updates={try_no_updates}) for {user_id} on @{bot_name}. Retrying safe isolation mode...")
                 _active_userbots.pop(user_id, None)
                 try:
                     await ub.stop()
                 except Exception:
                     pass
-                await asyncio.sleep(1.0)
-                continue
+                if not try_no_updates:
+                    logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED (no_updates=False) for {user_id} on @{bot_name}. Falling back to passive isolation mode...")
+                    await asyncio.sleep(1.0)
+                    continue
+                else:
+                    logger.warning(f"[UserbotManager] AUTH_KEY_DUPLICATED even in passive mode for {user_id} on @{bot_name}. Session is active elsewhere, skipping startup to prevent flood.")
+                    break
             except (errors.AuthKeyUnregistered, errors.SessionRevoked, errors.UserDeactivated, errors.UserDeactivatedBan) as auth_err:
                 logger.info(f"[UserbotManager] Session expired/revoked ({type(auth_err).__name__}) for {user_id} on @{bot_name}. Purged dead session from DB.")
                 _active_userbots.pop(user_id, None)

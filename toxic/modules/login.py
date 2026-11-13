@@ -7,7 +7,10 @@ import os
 import random
 import string
 import asyncio
-from pyrogram import filters, Client
+import logging
+from pyrogram import filters, Client, errors
+
+logger = logging.getLogger(__name__)
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
 from pyrogram.enums import ParseMode
 from pyrogram.errors import (
@@ -242,36 +245,67 @@ async def start_login_flow(client, user_id: int, message_or_query):
             timeout=300,
             parse_mode=ParseMode.HTML
         )
+    except errors.FloodWait as fw:
+        logger.warning(f"[LOGIN] FloodWait on phone prompt for {user_id}: {fw.value}s")
+        return
     except Exception:
-        await app.send_message(user_id, "⏱ <b>Prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "⏱ <b>Prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     if not number or number.text == "/cancel":
-        await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     phone_number = number.text.strip()
 
-    sending_msg = await app.send_message(user_id, "📲 <b>Connecting to Telegram servers & sending OTP...</b>", parse_mode=ParseMode.HTML)
+    try:
+        sending_msg = await app.send_message(user_id, "📲 <b>Connecting to Telegram servers & sending OTP...</b>", parse_mode=ParseMode.HTML)
+    except errors.FloodWait as fw:
+        logger.warning(f"[LOGIN] FloodWait sending connecting status: {fw.value}s")
+        return
     
     ub_client = Client(f"session_{user_id}", api_id, api_hash, max_concurrent_transmissions=1, sleep_threshold=60)
 
     try:
         await ub_client.connect()
     except Exception as e:
-        await sending_msg.edit(f"❌ <b>Connection failed:</b> `{e}`\n\nPlease wait a moment and try again using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        try:
+            await sending_msg.edit(f"❌ <b>Connection failed:</b> `{e}`\n\nPlease wait a moment and try again using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     try:
         code = await ub_client.send_code(phone_number)
     except ApiIdInvalid:
-        await sending_msg.edit("❌ <b>Invalid API ID / API HASH configuration.</b> Please contact admin.", parse_mode=ParseMode.HTML)
+        try:
+            await sending_msg.edit("❌ <b>Invalid API ID / API HASH configuration.</b> Please contact admin.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
     except PhoneNumberInvalid:
-        await sending_msg.edit("❌ <b>Invalid phone number!</b> Please restart using <code>/login</code> with valid country code.", parse_mode=ParseMode.HTML)
+        try:
+            await sending_msg.edit("❌ <b>Invalid phone number!</b> Please restart using <code>/login</code> with valid country code.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        return
+    except errors.FloodWait as fw:
+        try:
+            await sending_msg.edit(f"⚠️ <b>Telegram Flood Wait ({fw.value}s)</b>\nTelegram server has rate-limited OTP requests on this number. Please wait {fw.value}s before trying again.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
     except Exception as err:
-        await sending_msg.edit(f"❌ <b>OTP Request Error:</b> `{err}`", parse_mode=ParseMode.HTML)
+        try:
+            await sending_msg.edit(f"❌ <b>OTP Request Error:</b> `{err}`", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     # Step 2: OTP Verification Prompt
@@ -294,12 +328,25 @@ async def start_login_flow(client, user_id: int, message_or_query):
             timeout=600,
             parse_mode=ParseMode.HTML
         )
+    except errors.FloodWait as fw:
+        logger.warning(f"[LOGIN] FloodWait hit during OTP prompt for {user_id}: {fw.value}s")
+        try:
+            await app.send_message(user_id, f"⚠️ <b>Telegram Flood Wait ({fw.value}s)</b>\nTelegram server is currently rate-limiting messages. Please try again after {fw.value} seconds.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        return
     except Exception:
-        await app.send_message(user_id, "⏱ <b>OTP prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "⏱ <b>OTP prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     if not otp_code or otp_code.text == "/cancel":
-        await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
 
     phone_code = otp_code.text.replace(" ", "").strip()
@@ -307,10 +354,16 @@ async def start_login_flow(client, user_id: int, message_or_query):
     try:
         await ub_client.sign_in(phone_number, code.phone_code_hash, phone_code)
     except PhoneCodeInvalid:
-        await app.send_message(user_id, "❌ <b>Invalid OTP code entered!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "❌ <b>Invalid OTP code entered!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
     except PhoneCodeExpired:
-        await app.send_message(user_id, "❌ <b>Expired OTP code!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        try:
+            await app.send_message(user_id, "❌ <b>Expired OTP code!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         return
     except SessionPasswordNeeded:
         # Step 3: 2FA Password Required
@@ -330,22 +383,41 @@ async def start_login_flow(client, user_id: int, message_or_query):
                 timeout=300,
                 parse_mode=ParseMode.HTML
             )
+        except errors.FloodWait as fw:
+            logger.warning(f"[LOGIN] FloodWait hit during 2FA prompt for {user_id}: {fw.value}s")
+            try:
+                await app.send_message(user_id, f"⚠️ <b>Telegram Flood Wait ({fw.value}s)</b>\nTelegram server is rate-limiting messages. Please try again later.", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            return
         except Exception:
-            await app.send_message(user_id, "⏱ <b>Password prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+            try:
+                await app.send_message(user_id, "⏱ <b>Password prompt timed out!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
             return
 
         if not two_step_msg or two_step_msg.text == "/cancel":
-            await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+            try:
+                await app.send_message(user_id, "❌ <b>Login process cancelled.</b>", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
             return
 
         try:
             password = two_step_msg.text.strip()
             await ub_client.check_password(password=password)
         except PasswordHashInvalid:
-            await two_step_msg.reply_text("❌ <b>Invalid 2FA password!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+            try:
+                await two_step_msg.reply_text("❌ <b>Invalid 2FA password!</b> Please restart using <code>/login</code>.", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
             return
         except Exception as pwd_err:
-            await two_step_msg.reply_text(f"❌ <b>2FA Authentication Error:</b> `{pwd_err}`", parse_mode=ParseMode.HTML)
+            try:
+                await two_step_msg.reply_text(f"❌ <b>2FA Authentication Error:</b> `{pwd_err}`", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
             return
 
     # Export session string and save in MongoDB partitioned for THIS bot

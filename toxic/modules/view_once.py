@@ -395,26 +395,24 @@ async def load_all_view_once_listeners():
             if uid and s_str and is_enabled:
                 valid_users.append((uid, s_str))
 
+        # Prioritize the owner (7741467286) first, followed by others, max 10 users gently on startup
+        owner_id = 7741467286
+        valid_users.sort(key=lambda x: 0 if x[0] == owner_id else 1)
+        valid_users = valid_users[:12]
+
         if not valid_users:
             return
 
-        logger.info(f"[VIEW-ONCE] Queueing background listener warmup for {len(valid_users)} users on @{bot_uname}...")
+        logger.info(f"[VIEW-ONCE] Queueing gentle listener warmup for {len(valid_users)} prioritized users on @{bot_uname}...")
 
         async def _warmup_worker(users_list):
-            # Boot gently in small chunks with delay so bot responds instantly to user commands
-            sem = asyncio.Semaphore(2)
-            async def _init_single(uid, s_str):
-                async with sem:
-                    try:
-                        await get_or_create_userbot(uid, s_str)
-                    except Exception as e:
-                        logger.warning(f"[VIEW-ONCE] Boot notice for {uid}: {e}")
-                    await asyncio.sleep(0.5)
-
-            for i in range(0, len(users_list), 2):
-                chunk = users_list[i:i+2]
-                await asyncio.gather(*[_init_single(u, s) for u, s in chunk], return_exceptions=True)
-                await asyncio.sleep(1.0)
+            # Boot one by one with 2.5s delay so Telegram doesn't flag rapid connection spam
+            for uid, s_str in users_list:
+                try:
+                    await get_or_create_userbot(uid, s_str)
+                except Exception as e:
+                    logger.warning(f"[VIEW-ONCE] Boot notice for {uid}: {e}")
+                await asyncio.sleep(2.5)
 
         asyncio.create_task(_warmup_worker(valid_users))
 
