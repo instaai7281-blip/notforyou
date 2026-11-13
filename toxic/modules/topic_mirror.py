@@ -21,9 +21,9 @@ import datetime
 import inspect
 from typing import Callable, Optional, Union, Dict, Any, List
 import pyrogram
-from pyrogram import filters, Client, raw, types, enums, StopTransmission
+from pyrogram import filters, Client, raw, types, enums, StopTransmission, errors
 from pyrogram.enums import ParseMode
-from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired
+from pyrogram.errors import FloodWait, RPCError, ChatAdminRequired, ChannelInvalid, ChannelPrivate, FileReferenceExpired, PeerIdInvalid
 try:
     from pyrogram.errors import FloodPremiumWait
 except ImportError:
@@ -6397,19 +6397,28 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
 
     # Attempt 1: Raw MTProto messages.CreateForumTopic via app (Primary & fastest)
     try:
-        peer = await app.resolve_peer(tgt_chat_id)
-        rnd = random.randint(1000000, 9999999)
-        res = await app.invoke(raw.functions.messages.CreateForumTopic(
-            peer=peer,
-            title=styled_title,
-            random_id=rnd,
-            icon_color=safe_color
-        ))
-        new_id = extract_topic_id_from_result(res)
-        if new_id:
-            print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via MTProto")
-            return new_id
-    except errors.FloodWait as fw:
+        try:
+            peer = await app.resolve_peer(tgt_chat_id)
+        except Exception:
+            try:
+                await app.get_chat(tgt_chat_id)
+                peer = await app.resolve_peer(tgt_chat_id)
+            except Exception:
+                peer = None
+
+        if peer:
+            rnd = random.randint(1000000, 9999999)
+            res = await app.invoke(raw.functions.messages.CreateForumTopic(
+                peer=peer,
+                title=styled_title,
+                random_id=rnd,
+                icon_color=safe_color
+            ))
+            new_id = extract_topic_id_from_result(res)
+            if new_id:
+                print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via MTProto")
+                return new_id
+    except (FloodWait, FloodPremiumWait) as fw:
         w_sec = getattr(fw, "value", 10)
         print(f"[TopicMirror] App hit FloodWait {w_sec}s creating topic '{styled_title}'")
         if w_sec <= 25:
@@ -6438,7 +6447,7 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
             new_id = extract_topic_id_from_result(created)
             if new_id:
                 return new_id
-        except errors.FloodWait as fw:
+        except (FloodWait, FloodPremiumWait) as fw:
             w_sec = getattr(fw, "value", 10)
             if w_sec <= 20:
                 await asyncio.sleep(w_sec + 1)
@@ -6454,19 +6463,28 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
     # Attempt 3: Userbot MTProto fallback (Bypasses bot token floodwait completely!)
     if not new_id and userbot:
         try:
-            peer = await userbot.resolve_peer(tgt_chat_id)
-            rnd = random.randint(1000000, 9999999)
-            res = await userbot.invoke(raw.functions.messages.CreateForumTopic(
-                peer=peer,
-                title=styled_title,
-                random_id=rnd,
-                icon_color=safe_color
-            ))
-            new_id = extract_topic_id_from_result(res)
-            if new_id:
-                print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via Userbot MTProto")
-                return new_id
-        except errors.FloodWait as fw:
+            try:
+                peer = await userbot.resolve_peer(tgt_chat_id)
+            except Exception:
+                try:
+                    await userbot.get_chat(tgt_chat_id)
+                    peer = await userbot.resolve_peer(tgt_chat_id)
+                except Exception:
+                    peer = None
+
+            if peer:
+                rnd = random.randint(1000000, 9999999)
+                res = await userbot.invoke(raw.functions.messages.CreateForumTopic(
+                    peer=peer,
+                    title=styled_title,
+                    random_id=rnd,
+                    icon_color=safe_color
+                ))
+                new_id = extract_topic_id_from_result(res)
+                if new_id:
+                    print(f"[TopicMirror] ✅ Created '{styled_title}' (ID: {new_id}) via Userbot MTProto")
+                    return new_id
+        except (FloodWait, FloodPremiumWait) as fw:
             w_sec = getattr(fw, "value", 10)
             if w_sec <= 30:
                 await asyncio.sleep(w_sec + 1)

@@ -875,7 +875,7 @@ async def update_mirror_schedule_last_run(src_chat_id: int, tgt_chat_id: int, ru
 DEFAULT_GROUP_BIO = (
     "Don't DM to anyone ⚠️\n\n"
     "https://telegra.ph/Disclaimer-cum-DMCA-09-13-2\n\n"
-    "Contact: @BerlinxMoney_bot"
+    "Contact: @SALLAR_xbot"
 )
 
 async def get_custom_group_bio() -> str:
@@ -883,9 +883,9 @@ async def get_custom_group_bio() -> str:
     doc = await db.find_one({"_id": "global_group_bio"})
     if doc and doc.get("bio"):
         bio_val = doc["bio"]
-        if "CHOSEN_ONE" in bio_val.upper():
+        if any(k in bio_val for k in ("Berlin", "CHOSEN_ONE")):
             import re
-            bio_val = re.sub(r'@CHOSEN_ONEx_bot', '@BerlinxMoney_bot', bio_val, flags=re.IGNORECASE)
+            bio_val = re.sub(r'(@BerlinxMoney_bot|@CHOSEN_ONEx_bot|BerlinxMoney_bot)', '@SALLAR_xbot', bio_val, flags=re.IGNORECASE)
             await db.update_one({"_id": "global_group_bio"}, {"$set": {"bio": bio_val}})
         return bio_val
     return DEFAULT_GROUP_BIO
