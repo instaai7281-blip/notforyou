@@ -118,16 +118,20 @@ def patch_pyrogram_downloader():
 
             dc_id = file_id.dc_id
 
-            session = Session(
-                self, dc_id,
-                await Auth(self, dc_id, await self.storage.test_mode()).create()
-                if dc_id != await self.storage.dc_id()
-                else await self.storage.auth_key(),
-                await self.storage.test_mode(),
-                is_media=True
-            )
+            if not hasattr(self, "_cached_media_sessions"):
+                self._cached_media_sessions = {}
 
-            try:
+            session = self._cached_media_sessions.get(dc_id)
+            if not session or not getattr(session, "is_connected", False):
+                session = Session(
+                    self, dc_id,
+                    await Auth(self, dc_id, await self.storage.test_mode()).create()
+                    if dc_id != await self.storage.dc_id()
+                    else await self.storage.auth_key(),
+                    await self.storage.test_mode(),
+                    is_media=True
+                )
+
                 await session.start()
 
                 if dc_id != await self.storage.dc_id():
@@ -143,6 +147,10 @@ def patch_pyrogram_downloader():
                             bytes=exported_auth.bytes
                         )
                     )
+
+                self._cached_media_sessions[dc_id] = session
+
+            try:
 
                 r = await _safe_invoke_get_file(
                     session,
@@ -278,10 +286,15 @@ def patch_pyrogram_downloader():
             except (pyrogram.StopTransmission, pyrogram.errors.FloodWait, FloodPremiumWait, pyrogram.errors.FileReferenceExpired):
                 raise
             except Exception as e:
+                # Evict broken media session so it reconnects on next request
+                if hasattr(self, "_cached_media_sessions") and dc_id in self._cached_media_sessions:
+                    self._cached_media_sessions.pop(dc_id, None)
+                try:
+                    await session.stop()
+                except Exception:
+                    pass
                 log.exception(e)
                 raise
-            finally:
-                await session.stop()
 
     Client.get_file = optimized_get_file
     print("[FastPyro] Patched Pyrogram get_file chunk_size to 512KB for zero-floodwait downloads.")

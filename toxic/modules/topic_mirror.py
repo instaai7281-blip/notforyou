@@ -1959,12 +1959,13 @@ async def transfer_single_message(userbot, app, src_chat_id, tgt_chat_id, tgt_to
     if msg.text and not is_media_type_enabled(user_data, "text"):
         return False, "skipped_filter", None
 
-    # ── Helper: log copy to LOG_GROUP ──────────────────────────────
+    # ── Helper: log copy to LOG_GROUP (offloaded to background so extraction is never delayed) ──
     async def _log_msg(sent_m):
         log_chat = get_log_group()
         if log_chat and sent_m:
             try:
-                await (sent_m[0] if isinstance(sent_m, list) else sent_m).copy(log_chat)
+                msg_to_copy = sent_m[0] if isinstance(sent_m, list) else sent_m
+                asyncio.create_task(msg_to_copy.copy(log_chat))
             except Exception:
                 pass
 
@@ -6479,31 +6480,58 @@ async def create_forum_topic_safely(app, userbot, tgt_chat_id: int, styled_title
 def extract_topic_from_caption(text: str):
     """
     Extracts the topic name from message caption / text.
-    Handles both single-line and multi-line patterns where topic name wraps:
+    Handles single-line and multi-line patterns even with leading emojis or tree markers:
+      - 📙 Topic : 0005. FREE PART - A RECODED LECTURE | 0005. બંધારણ Live Class
       - Topic: Course Thumbnail
       - **Topic:** Demo Lecture
-      - Topic: Home ‘n Demo
-        Lectures
+      - ├── 📙 Topic : Economics
       - Folder: Economics
       - Category: Static GK
       - Subject: Current Affairs
+      - Chapter: Indian Constitution
     """
     if not text:
         return None
 
     clean_text = re.sub(r'</?[a-zA-Z0-9]+[^>]*>', '', str(text))
 
-    # 1. Multi-line block matching: Topic: ... until next field (Batch:, Title:, Date:, Index:, etc.) or double newline
-    block_pattern = r'(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\->\u27a4\u2022]\s*(.+?)(?=\n\s*(?:[A-Za-z0-9_\u0a80-\u0aff\(\)]+\s*[:\->\u27a4\u2022]|\n\n|\Z))'
+    # Priority 1: Line-by-line inspection with emoji & tree-prefix tolerance
+    for line in clean_text.splitlines():
+        l_str = line.strip()
+        if not l_str:
+            continue
+        # Strip blockquote, tree branches, markdown stars, bullets
+        l_str = re.sub(r'^[>\-\*\•\│\├\└\─\s]+', '', l_str).strip()
+
+        # Match Topic / Folder / Category / Subject / Sub Topic / Chapter preceded by emojis or start of line
+        m = re.search(
+            r'(?:^|[^\w])(?:Topic(?:\s*Name)?|Sub\s*Topic|Folder|Category|Subject|Chapter)\s*[:\->—\u27a4\u2022]\s*(.+)$',
+            l_str,
+            re.IGNORECASE
+        )
+        if m:
+            val = m.group(1).strip()
+            val = re.sub(r'[\*_`~]+', '', val).strip()
+            val = val.strip("\"'` ")
+            # Strip trailing branding on the same line (e.g. 🖤 Sᴛꪮʟᴇɴ Hᴀᴘᴘɪɴᴇss ⚝)
+            val = re.sub(r'\s*(?:🖤|Sᴛꪮʟᴇɴ|Stolen|Happiness|⚝).*$', '', val, flags=re.IGNORECASE).strip()
+            if val:
+                if len(val) > 128:
+                    val = val[:125] + '...'
+                return val.strip()
+
+    # Priority 2: Multi-line block matching (if topic wrapped onto next line)
+    block_pattern = r'(?:^|[^\w])(?:Topic(?:\s*Name)?|Sub\s*Topic|Folder|Category|Subject|Chapter)\s*[:\->—\u27a4\u2022]\s*(.+?)(?=\n\s*(?:[A-Za-z0-9_\u0a80-\u0aff\(\)]+\s*[:\->—\u27a4\u2022]|\n\n|\Z))'
     m_block = re.search(block_pattern, clean_text, re.IGNORECASE | re.DOTALL)
     if m_block:
         raw_val = m_block.group(1).strip()
         val = re.sub(r'\s+', ' ', raw_val).strip()
         val = re.sub(r'[\*_`~]+', '', val).strip()
         val = val.strip("\"'` ")
+        val = re.sub(r'\s*(?:🖤|Sᴛꪮʟᴇɴ|Stolen|Happiness|⚝).*$', '', val, flags=re.IGNORECASE).strip()
         if val:
             if len(val) > 120:
-                for sep in ['›', '?', '->']:
+                for sep in ['›', '->', '➔']:
                     if sep in val:
                         crumbs = [c.strip() for c in val.split(sep) if c.strip()]
                         if crumbs and len(crumbs[-1]) <= 120:
@@ -6513,21 +6541,6 @@ def extract_topic_from_caption(text: str):
                 val = val[:125] + '...'
             return val.strip()
 
-    # 2. Fallback to single line match
-    for line in clean_text.splitlines():
-        l_str = line.strip()
-        if not l_str:
-            continue
-        l_str = re.sub(r'^[>\-\*\s]+', '', l_str).strip()
-        m = re.match(r'^(?:Topic(?:\s*Name)?|Folder|Category|Subject)\s*[:\->\u27a4\u2022]\s*(.+)$', l_str, re.IGNORECASE)
-        if m:
-            val = m.group(1).strip()
-            val = re.sub(r'[\*_`~]+', '', val).strip()
-            val = val.strip("\"'` ")
-            if val:
-                if len(val) > 128:
-                    val = val[:125] + '...'
-                return val.strip()
     return None
 
 async def run_channel_to_topics_mirror(
