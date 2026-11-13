@@ -604,7 +604,9 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         
         if final_status == "completed":
             target_chat_id = get_target_chat_id(user_id)
-            if target_chat_id and target_chat_id != user_id:
+            user_data = await db.get_data(user_id) or {}
+            boss_enabled = user_data.get("boss_alert", True)
+            if boss_enabled and target_chat_id and target_chat_id != user_id:
                 chat_id = target_chat_id
                 topic_id = None
                 if isinstance(chat_id, str) and '/' in chat_id:
@@ -623,6 +625,27 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         await app.send_message(user_id, f"Critical Error: {e}")
     finally:
         batch_active_loops.pop(user_id, None)
+
+
+@app.on_message(filters.command(["boss", "toggleboss", "bossalert"]))
+async def toggle_boss_alert_command(_, message: Message):
+    """Allows user to toggle the 'Complete Ho Gya Boss' completion message ON/OFF."""
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    user_data = await db.get_data(user_id) or {}
+    current_status = user_data.get("boss_alert", True)
+    new_status = not current_status
+    await db.db.update_one({"_id": user_id}, {"$set": {"boss_alert": new_status}}, upsert=True)
+
+    status_badge = "🟢 TURNED ON (Active)" if new_status else "🔴 TURNED OFF (Silent Mode)"
+    info_text = (
+        f"😎 <b>COMPLETION ALERT SETTING</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚡ <b>Status:</b> <code>{status_badge}</code>\n\n"
+        f"• <b>Notification:</b> {'Batch & Mirror complete hone par target chat me <i>Complete Ho Gya Boss</i> message bheja jayega ✅' if new_status else 'Target chat me koi bhi completion message nahi bheja jayega ❌ (Bilkul Silent)'}\n\n"
+        f"👉 <i>Setting change karne ke liye dubara <code>/boss</code> send karein.</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await message.reply_text(info_text, parse_mode=ParseMode.HTML)
 
 
 

@@ -147,16 +147,67 @@ async def generate_session(client, message: Message):
     session_string = await db.get_user_session(user_id, bot_name=bot_uname, allow_fallback=False)
 
     if session_string:
+        # Retrieve live details of the connected userbot account
+        from toxic.core.userbot_manager import get_active_userbot_sync, get_or_create_userbot
+        ub = get_active_userbot_sync(user_id)
+        if not ub:
+            try:
+                ub = await get_or_create_userbot(user_id, session_string)
+            except Exception:
+                pass
+
+        ub_me = None
+        if ub and getattr(ub, "is_connected", False):
+            try:
+                ub_me = await ub.get_me()
+            except Exception:
+                pass
+
+        user_doc = await db.get_data(user_id) or {}
+        sessions_dict = user_doc.get("sessions") or {}
+
+        if ub_me:
+            acc_name = f"{ub_me.first_name} {ub_me.last_name or ''}".strip()
+            acc_uname = f"@{ub_me.username}" if ub_me.username else "<i>No Username</i>"
+            acc_id = ub_me.id
+            raw_phone = getattr(ub_me, "phone_number", None) or user_doc.get("phone")
+            acc_phone = f"+{raw_phone}" if raw_phone else "<i>Hidden / Protected</i>"
+            acc_type = "Telegram Premium ⭐" if getattr(ub_me, "is_premium", False) else "Standard Account"
+        else:
+            acc_name = "Connected Account"
+            acc_uname = "<i>Active</i>"
+            acc_id = user_id
+            raw_phone = user_doc.get("phone")
+            acc_phone = f"+{raw_phone}" if raw_phone else "<i>Protected Session</i>"
+            acc_type = "Active Session"
+
+        # Check all bots connected for this user
+        other_bots_lines = []
+        if isinstance(sessions_dict, dict):
+            for b_name in sessions_dict.keys():
+                status_icon = "🟢" if b_name == bot_uname else "🤖"
+                is_curr = " (Current Bot)" if b_name == bot_uname else ""
+                other_bots_lines.append(f"{status_icon} <b>@{b_name}</b>{is_curr} ➔ <code>Dedicated Active Session</code>")
+        if not other_bots_lines:
+            other_bots_lines.append(f"🟢 <b>@{bot_uname}</b> ➔ <code>Active Dedicated Session</code>")
+
+        other_bots_block = "\n".join(other_bots_lines)
+
         status_card = (
-            "📱 <b>USERBOT ACCOUNT CONTROL PANEL</b>\n"
+            "📱 <b>USERBOT ACCOUNT DETAILS & CONTROL PANEL</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
-            f"🤖 <b>Bot:</b> <code>@{bot_uname}</code>\n"
-            "⚡ <b>Session Status:</b> <code>CONNECTED & ACTIVE ✅</code>\n"
-            "🛡️ <b>Database Security:</b> <code>Dedicated Bot Session</code>\n\n"
-            "ℹ️ <i>Your Userbot session is active and dedicated for this bot. You can use separate Telegram accounts on each bot!</i>\n\n"
+            f"👤 <b>Connected Account:</b> <code>{acc_name}</code>\n"
+            f"🆔 <b>Userbot Telegram ID:</b> <code>{acc_id}</code>\n"
+            f"📞 <b>Phone Number:</b> <code>{acc_phone}</code>\n"
+            f"🏷️ <b>Username:</b> {acc_uname}\n"
+            f"⭐ <b>Account Type:</b> <code>{acc_type}</code>\n"
+            f"🤖 <b>Operating On:</b> <code>@{bot_uname}</code>\n"
+            f"⚡ <b>Session Status:</b> <code>CONNECTED & ACTIVE ✅</code>\n\n"
+            "🌐 <b>Multi-Bot Sessions Overview:</b>\n"
+            f"{other_bots_block}\n\n"
+            "ℹ️ <i>Each bot operates completely isolated with its own dedicated session. No session conflicts!</i>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Use the control buttons below to manage your account session:"
+            "Manage your account session using the buttons below:"
         )
         await message.reply_text(
             status_card,

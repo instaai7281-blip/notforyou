@@ -4602,55 +4602,58 @@ async def run_single_link_mirror(
             except Exception as pin_err:
                 print(f"[SingleLinkMirror] Pin notice: {pin_err}")
 
-        # Send Completion Message DIRECTLY to target topic inside blockquote
-        elapsed_total = time.time() - start_time
-        completion_msg = (
-            "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
-            f"📁 <b>Total Downloaded:</b> <code>{copied_count}</code> files\n"
-            f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
-            f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
-        )
-        try:
-            target_thread_id = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
-            # 1. Send directly inside the specific target topic thread if applicable
-            if target_thread_id:
+        # Send Completion Message DIRECTLY to target topic inside blockquote if boss_alert is enabled
+        u_pref = await db.get_data(user_id) or {}
+        boss_enabled = u_pref.get("boss_alert", True)
+        if boss_enabled:
+            elapsed_total = time.time() - start_time
+            completion_msg = (
+                "<blockquote><b>✅ 𝗖ꪮ𝗺𝗽𝗹𝗲𝘁𝗲 𝗛ꪮ 𝗚𝘆𝗮 𝗕ꪮ$$ 😎</b>\n\n"
+                f"📁 <b>Total Downloaded:</b> <code>{copied_count}</code> files\n"
+                f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+                f"⏱ <b>Time Taken:</b> <code>{TimeFormatter(int(elapsed_total)*1000)}</code></blockquote>"
+            )
+            try:
+                target_thread_id = None if (tgt_topic_id in (None, 1)) else int(tgt_topic_id)
+                # 1. Send directly inside the specific target topic thread if applicable
+                if target_thread_id:
+                    try:
+                        await app.send_message(
+                            chat_id=tgt_chat_id,
+                            text=completion_msg,
+                            parse_mode=ParseMode.HTML,
+                            reply_to_message_id=target_thread_id
+                        )
+                        print(f"[SingleLinkMirror] Sent completion msg to topic thread {target_thread_id}")
+                    except Exception as t_err:
+                        print(f"[SingleLinkMirror] Topic thread completion send error: {t_err}")
+
+                # 2. Also send ALWAYS into General Topic (Main forum feed) so user never misses completion
+                sent_to_general = False
                 try:
                     await app.send_message(
                         chat_id=tgt_chat_id,
                         text=completion_msg,
                         parse_mode=ParseMode.HTML,
-                        reply_to_message_id=target_thread_id
+                        reply_to_message_id=1
                     )
-                    print(f"[SingleLinkMirror] Sent completion msg to topic thread {target_thread_id}")
-                except Exception as t_err:
-                    print(f"[SingleLinkMirror] Topic thread completion send error: {t_err}")
-
-            # 2. Also send ALWAYS into General Topic (Main forum feed) so user never misses completion
-            sent_to_general = False
-            try:
-                await app.send_message(
-                    chat_id=tgt_chat_id,
-                    text=completion_msg,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=1
-                )
-                sent_to_general = True
-                print(f"[SingleLinkMirror] Sent completion msg to General Topic in {tgt_chat_id}")
-            except Exception:
-                pass
-
-            if not sent_to_general and not target_thread_id:
-                try:
-                    await app.send_message(
-                        chat_id=tgt_chat_id,
-                        text=completion_msg,
-                        parse_mode=ParseMode.HTML
-                    )
-                    print(f"[SingleLinkMirror] Sent completion msg directly to chat {tgt_chat_id}")
+                    sent_to_general = True
+                    print(f"[SingleLinkMirror] Sent completion msg to General Topic in {tgt_chat_id}")
                 except Exception:
                     pass
-        except Exception as send_err:
-            print(f"[SingleLinkMirror] Failed sending completion msg to target: {send_err}")
+
+                if not sent_to_general and not target_thread_id:
+                    try:
+                        await app.send_message(
+                            chat_id=tgt_chat_id,
+                            text=completion_msg,
+                            parse_mode=ParseMode.HTML
+                        )
+                        print(f"[SingleLinkMirror] Sent completion msg directly to chat {tgt_chat_id}")
+                    except Exception:
+                        pass
+            except Exception as send_err:
+                print(f"[SingleLinkMirror] Failed sending completion msg to target: {send_err}")
 
         # Update User Status DM
         final_summary = (
@@ -6205,8 +6208,10 @@ async def run_topic_mirror(user_id: int, src_chat_id: int, tgt_chat_id: int, mir
             except Exception as log_err:
                 print(f"[TopicMirror] Finish log notice: {log_err}")
 
-        # Only send completion card to target group if task was NOT cancelled
-        if not is_cancelled:
+        # Only send completion card to target group if task was NOT cancelled and boss_alert is ON
+        u_pref = await db.get_data(user_id) or {}
+        boss_enabled = u_pref.get("boss_alert", True)
+        if not is_cancelled and boss_enabled:
             # Send Clean Completion Message to Target Forum Group (General Topic only)
             try:
                 elapsed_total = time.time() - start_overall_time
