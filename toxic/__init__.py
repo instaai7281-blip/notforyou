@@ -161,6 +161,10 @@ async def start_telethon_client(client, bot_token, name="Telethon Client (sex)",
                 print(f"⚠️ [{name}] FloodWait in error: sleeping {wait_time}s before retrying...")
                 await asyncio.sleep(wait_time)
                 retry_count += 1
+            elif any(err_token in err_str for err_token in ("500", "RPC_CALL_FAIL", "RpcCallFail", "internal problems", "internal issues")):
+                print(f"⚠️ [{name}] Telegram server 500 RPC_CALL_FAIL ({e}). Sleeping 5s before retrying...")
+                await asyncio.sleep(5)
+                retry_count += 1
             else:
                 print(f"❌ {name} start failed: {e}")
                 return False
@@ -191,6 +195,15 @@ async def start_pyrogram_client(client, name="Pyrogram Client"):
                 print(f"⚠️ [{name}] Telegram server 500 RPC_CALL_FAIL detected ({e})! Retrying in {server_error_retry}s without crashing...")
                 await asyncio.sleep(server_error_retry)
                 server_error_retry = min(server_error_retry + 5, 30)
+                # If Telegram continues returning 500 on auth.ImportBotAuthorization, clear stale local session file if exists
+                if server_error_retry >= 25:
+                    try:
+                        session_file = f"{getattr(client, 'name', 'RestrictBot')}.session"
+                        if os.path.exists(session_file):
+                            print(f"🧹 Removing potentially stale or DC-mismatched session file: {session_file}")
+                            os.remove(session_file)
+                    except Exception as rm_err:
+                        print(f"⚠️ Could not remove session file: {rm_err}")
             else:
                 print(f"❌ [{name}] Startup Error: {e}")
                 raise e
