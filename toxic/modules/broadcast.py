@@ -458,76 +458,161 @@ async def list_chats_cmd(client: Client, message: Message):
     await message.reply_text(text)
 
 
-# ────── Automatic Group Bio Management Commands ──────
+# ────── Automatic Group & Channel Bio Management Commands ──────
 
-@app.on_message(filters.command(["setbio", "updatebio"]))
+async def _execute_bulk_bio_sync(client: Client, status_msg: Message, bio_text: str):
+    """Core executor to update group/channel bio across all linked groups, target groups, and channels."""
+    chat_dict = await get_all_broadcast_chats()
+    if not chat_dict:
+        await status_msg.edit_text("ℹ️ **No linked channels or groups found in database.**\nBot jin jin channels/groups me added hai unhe auto-sync karne ke liye pehle add karein.")
+        return
+
+    chats_list = list(chat_dict.values())
+    total_chats = len(chats_list)
+    success_count = 0
+    fail_count = 0
+    skipped_count = 0
+
+    await status_msg.edit_text(
+        f"⏳ **Syncing new description across {total_chats} channels & groups...**\n"
+        f"<i>Please wait, applying updates safely with flood protection...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    last_update_time = time.time()
+    for idx, c in enumerate(chats_list, 1):
+        c_id = c.get("chat_id")
+        c_title = c.get("title", f"Chat {c_id}")
+        try:
+            try:
+                ch_info = await client.get_chat(c_id)
+                if ch_info and (ch_info.description or "").strip() == bio_text.strip():
+                    skipped_count += 1
+                    continue
+            except Exception:
+                pass
+
+            await client.set_chat_description(c_id, bio_text)
+            success_count += 1
+            await asyncio.sleep(1.2)  # Rate-limit protection
+        except FloodWait as fw:
+            w = int(fw.value) + 1
+            await asyncio.sleep(w)
+            try:
+                await client.set_chat_description(c_id, bio_text)
+                success_count += 1
+            except Exception:
+                fail_count += 1
+        except Exception as err:
+            fail_count += 1
+            print(f"[SYNC BIO] Failed for {c_title} ({c_id}): {err}")
+
+        now = time.time()
+        if (now - last_update_time) >= 4.0 or idx == total_chats:
+            last_update_time = now
+            try:
+                await status_msg.edit_text(
+                    f"⏳ <b>Syncing Description Across All Channels & Groups...</b>\n\n"
+                    f"📊 <b>Progress:</b> <code>{idx}/{total_chats}</code>\n"
+                    f"✅ <b>Updated:</b> <code>{success_count}</code>\n"
+                    f"⏩ <b>Already Same:</b> <code>{skipped_count}</code>\n"
+                    f"❌ <b>Failed / No Permission:</b> <code>{fail_count}</code>\n\n"
+                    f"<i>Current Chat:</i> <code>{c_title}</code>",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    summary_text = (
+        f"🎉 <b>CHANNELS & GROUPS DESCRIPTION SYNC COMPLETED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"✅ <b>Successfully Updated:</b> <code>{success_count}</code>\n"
+        f"⏩ <b>Already Same / Skipped:</b> <code>{skipped_count}</code>\n"
+        f"❌ <b>Failed / No Permission:</b> <code>{fail_count}</code>\n"
+        f"📊 <b>Total Chats Processed:</b> <code>{total_chats}</code>\n\n"
+        f"📝 <b>Applied Description:</b>\n"
+        f"<blockquote>{bio_text}</blockquote>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    try:
+        await status_msg.edit_text(summary_text, parse_mode=ParseMode.HTML)
+    except Exception:
+        await status_msg.edit_text(summary_text)
+
+
+@app.on_message(filters.command(["setbio", "updatebio", "setdesc", "changedesc"]))
 async def set_group_bio_cmd(client: Client, message: Message):
-    """Updates group bio for the current chat or specified chat ID."""
+    """Sets new bio and immediately applies it across ALL channels & groups where bot is added."""
     user_id = message.from_user.id if message.from_user else 0
     if not is_owner(user_id):
         await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
         return
 
-    target_chat_id = message.chat.id
-    if len(message.command) > 1 and message.chat.type == ChatType.PRIVATE:
-        try:
-            target_chat_id = int(message.command[1])
-        except ValueError:
-            await message.reply_text("❌ **Error:** Please provide a valid integer Chat ID.\nUsage: `/setbio -10012345678`")
-            return
+    new_bio = None
+    if message.reply_to_message and (message.reply_to_message.text or message.reply_to_message.caption):
+        new_bio = (message.reply_to_message.text or message.reply_to_message.caption).strip()
+    elif len(message.text.split(None, 1)) > 1:
+        new_bio = message.text.split(None, 1)[1].strip()
 
-    bio_text = await get_custom_group_bio()
-    try:
-        await client.set_chat_description(target_chat_id, bio_text)
-        await message.reply_text(
-            f"✅ **Group Bio Updated Successfully!**\n\n"
-            f"📍 **Chat ID:** `{target_chat_id}`\n\n"
-            f"📝 **Applied Bio:**\n```\n{bio_text}\n```"
+    if not new_bio:
+        current_bio = await get_custom_group_bio()
+        help_text = (
+            "📝 <b>CHANNEL & GROUP BIO / DESCRIPTION MANAGER</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Aap is command se bot jin jin channels aur groups me admin hai, un sabka description <b>1-Click me change</b> kar sakte hain!\n\n"
+            "📌 <b>Active Saved Description:</b>\n"
+            f"<blockquote>{current_bio}</blockquote>\n\n"
+            "💡 <b>Usage Options:</b>\n"
+            "1. <code>/setbio &lt;Aapka naya description text&gt;</code>\n"
+            "2. Kisi bhi text message par reply karke <code>/setbio</code> bhejein.\n\n"
+            "<i>Command bhejte hi ye naya description database me save ho jayega aur sabhi channels & groups me turant apply ho jayega!</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
-    except Exception as e:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Apply Current Bio to All Chats", callback_data="btn_sync_all_bio")]
+        ])
+        await message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    if len(new_bio) > 255:
         await message.reply_text(
-            f"❌ **Failed to update group bio.**\n\n"
-            f"• **Reason:** `{e}`\n"
-            f"• *Make sure the bot is an Administrator with 'Change Group Info' permission in the group.*"
+            f"❌ <b>Description is too long!</b>\n\n"
+            f"Telegram channel & group description limit is <b>255 characters</b> (Your text is {len(new_bio)} chars).\n"
+            f"Please shorten it slightly and try again.",
+            parse_mode=ParseMode.HTML
         )
+        return
+
+    # 1. Save new bio to MongoDB
+    await set_custom_group_bio(new_bio)
+
+    # 2. Immediately execute bulk sync across ALL connected channels and groups
+    status_msg = await message.reply_text("💾 **Saved new description! Starting 1-Click sync across all channels and groups...**")
+    await _execute_bulk_bio_sync(client, status_msg, new_bio)
 
 
 @app.on_message(filters.command(["syncallbio", "updateallbio"]) & filters.private)
 async def sync_all_group_bios_cmd(client: Client, message: Message):
-    """Bulk updates group bio across all linked groups and saved mirror targets."""
+    """Bulk updates group & channel bio across all linked groups and saved mirror targets."""
     user_id = message.from_user.id
     if not is_owner(user_id):
         await message.reply_text("❌ **Access Denied:** Only the bot owner can use this command.")
         return
 
-    status_msg = await message.reply_text("⏳ **Starting automatic bio update across all linked groups...**")
-    
-    db_chats = await get_all_joined_chats()
-    if not db_chats:
-        await status_msg.edit("ℹ️ **No linked groups found in database.** Add groups using `/addchat` or let bot auto-detect them.")
-        return
-
+    status_msg = await message.reply_text("⏳ **Starting automatic bio update across all linked groups & channels...**")
     bio_text = await get_custom_group_bio()
-    success_count = 0
-    fail_count = 0
-    
-    for chat in db_chats:
-        c_id = chat.get("chat_id")
-        try:
-            await client.set_chat_description(c_id, bio_text)
-            success_count += 1
-            await asyncio.sleep(1)  # Rate-limit protection
-        except Exception as err:
-            fail_count += 1
-            print(f"[SYNC BIO] Failed for chat {c_id}: {err}")
+    await _execute_bulk_bio_sync(client, status_msg, bio_text)
 
-    await status_msg.edit(
-        f"🎉 **Group Bio Sync Completed!**\n\n"
-        f"✅ **Successfully Updated:** `{success_count}`\n"
-        f"❌ **Failed / No Permission:** `{fail_count}`\n"
-        f"📊 **Total Chats Processed:** `{len(db_chats)}`\n\n"
-        f"📝 **Applied Bio Content:**\n```\n{bio_text}\n```"
-    )
+
+@app.on_callback_query(filters.regex(r"^btn_sync_all_bio$"))
+async def btn_sync_all_bio_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    if not is_owner(user_id):
+        await callback_query.answer("❌ Access Denied!", show_alert=True)
+        return
+    await callback_query.answer("⚡ Starting 1-Click sync across all channels & groups...", show_alert=False)
+    bio_text = await get_custom_group_bio()
+    await _execute_bulk_bio_sync(client, callback_query.message, bio_text)
 
 
 @app.on_message(filters.command(["custombio"]) & filters.private)
@@ -542,7 +627,7 @@ async def custom_bio_cmd(client: Client, message: Message):
         current_bio = await get_custom_group_bio()
         await message.reply_text(
             f"ℹ️ **Current Group Bio Template:**\n\n```\n{current_bio}\n```\n\n"
-            f"To set a new bio template, use:\n`/custombio <your new bio text>`\n\n"
+            f"To set a new bio template, use:\n`/setbio <your new bio text>`\n\n"
             f"To reset to default, use `/resetbio`"
         )
         return
@@ -553,12 +638,8 @@ async def custom_bio_cmd(client: Client, message: Message):
         return
 
     await set_custom_group_bio(new_bio)
-    await message.reply_text(
-        f"✅ **Custom Group Bio Template Saved!**\n\n"
-        f"All new groups will automatically receive this bio.\n\n"
-        f"📝 **New Bio:**\n```\n{new_bio}\n```\n\n"
-        f"Run `/syncallbio` to apply this new bio to all existing groups immediately!"
-    )
+    status_msg = await message.reply_text("💾 **Saved new template! Syncing across all channels & groups...**")
+    await _execute_bulk_bio_sync(client, status_msg, new_bio)
 
 
 @app.on_message(filters.command(["getbio"]) & filters.private)

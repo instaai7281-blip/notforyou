@@ -168,7 +168,8 @@ async def start_telethon_client(client, bot_token, name="Telethon Client (sex)",
 
 
 async def start_pyrogram_client(client, name="Pyrogram Client"):
-    """Starts Pyrogram client with automated FloodWait handling."""
+    """Starts Pyrogram client with automated FloodWait and 500 RPC_CALL_FAIL resilience."""
+    server_error_retry = 5
     while True:
         try:
             print(f"Starting {name}...")
@@ -186,6 +187,10 @@ async def start_pyrogram_client(client, name="Pyrogram Client"):
                 wait_time = int(wait_match.group(1)) + 5 if wait_match else 60
                 print(f"⚠️ [{name}] FloodWait in error string: waiting {wait_time}s...")
                 await asyncio.sleep(wait_time)
+            elif any(err_token in err_str for err_token in ("500", "RPC_CALL_FAIL", "RpcCallFail", "internal problems", "internal issues")):
+                print(f"⚠️ [{name}] Telegram server 500 RPC_CALL_FAIL detected ({e})! Retrying in {server_error_retry}s without crashing...")
+                await asyncio.sleep(server_error_retry)
+                server_error_retry = min(server_error_retry + 5, 30)
             else:
                 print(f"❌ [{name}] Startup Error: {e}")
                 raise e
