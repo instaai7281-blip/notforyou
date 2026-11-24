@@ -558,13 +558,14 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 elapsed_str = str(timedelta(seconds=int(elapsed_time)))
                 pct = (done / cl) * 100 if cl > 0 else 0
                 bar = _format_batch_bar(pct, 12)
+                clickable_url = url if url.startswith(('http://', 'https://', 'tg://')) else f"https://{url}"
                 
                 try:
                     await pin_msg.edit_text(
                         f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖤𝖷𝖳𝖱𝖠𝖢𝖳𝖨𝖮𝖭 𝖨𝖭 𝖯𝖱𝖮𝖦𝖱𝖤𝖲𝖲** ⚡\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"📊 **Progress:** `[{bar}]` **{pct:.1f}%**\n"
-                        f"🎯 **Target ID:** `{i}` / `{cs + cl - 1}`\n"
+                        f"🎯 **Target ID:** [{i}]({clickable_url}) / `{cs + cl - 1}`\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"✨ **Extracted:** `{success_count} / {cl}`\n"
                         f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
@@ -574,7 +575,8 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                         f"⏱️ **Elapsed:** `{elapsed_str}`  •  ⏳ **ETA:** `{eta_str}`\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"⚡ _Turbo Mode Active • Fast Direct Delivery_",
-                        reply_markup=keyboard
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True
                     )
                 except Exception:
                     pass
