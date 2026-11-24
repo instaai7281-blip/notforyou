@@ -859,17 +859,32 @@ async def _safe_edit_or_send(app_client, chat_id, edit_id, text, **kwargs):
         return None
 
 
-async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: str, i: int = 0, message: Message = None):
+class SilentBatchEdit:
+    """Silent no-op tracker used during batch processing to eliminate chatty status messages and delay."""
+    id = None
+    async def edit(self, *args, **kwargs):
+        return self
+    async def edit_text(self, *args, **kwargs):
+        return self
+    async def delete(self, *args, **kwargs):
+        pass
+
+
+async def get_msg(userbot: TelegramClient, sender: int, edit_id: int, msg_link: str, i: int = 0, message: Message = None, is_batch: bool = False):
     await task_semaphore.acquire()
     try:
-        # If edit_id is None (e.g. in batch mode), create a temporary message to act as edit message
-        edit = None
-        if edit_id is None:
+        # If in batch mode, use silent tracker to completely eliminate status message spam and 2-second sleep delays
+        if is_batch:
+            edit = SilentBatchEdit()
+            edit_id = None
+        elif edit_id is None:
             try:
                 edit = await app.send_message(sender, "Processing batch link... ⏳")
                 edit_id = edit.id if edit else None
             except Exception as e:
                 print(f"Failed to create batch status message: {e}")
+        else:
+            edit = None
 
         # Sanitize the message link
         msg_link = msg_link.split("?single")[0]

@@ -429,24 +429,38 @@ async def prompt_resume_batch(user_id, message):
     await execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
 
 
+def _format_batch_bar(pct: float, length: int = 12) -> str:
+    filled = int(round((pct / 100.0) * length))
+    filled = max(0, min(length, filled))
+    return "▰" * filled + "▱" * (length - filled)
+
+
 async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck):
     can_proceed, response_message = await check_interval(user_id, freecheck)
     if not can_proceed:
         await app.send_message(user_id, response_message)
         return
 
-    join_button = InlineKeyboardButton("Join Channel", url="https://t.me/+7R-7p7jVoz9mM2M1")
-    stop_button = InlineKeyboardButton("🚫 Stop Batch", callback_data=f"stop_batch_{user_id}")
-    keyboard = InlineKeyboardMarkup([[join_button], [stop_button]])
+    join_button = InlineKeyboardButton("📢 Updates Channel", url="https://t.me/+7R-7p7jVoz9mM2M1")
+    stop_button = InlineKeyboardButton("⏹️ Stop Batch", callback_data=f"stop_batch_{user_id}")
+    keyboard = InlineKeyboardMarkup([[stop_button], [join_button]])
     
+    init_bar = "▱" * 12
     pin_msg = await app.send_message(
         user_id,
-        f"🚀 **Batch process started!**\n\n"
-        f"📊 **Progress:** [░░░░░░░░░░] 0%\n"
-        f"✅ **Extracted:** `0/{cl}`\n"
+        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖤𝖷𝖳𝖱𝖠𝖢𝖳𝖨𝖮𝖭 𝖲𝖳𝖠𝖱𝖳𝖤𝖣** ⚡\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 **Progress:** `[{init_bar}]` **0.0%**\n"
+        f"🎯 **Target ID:** `{cs}` / `{cs + cl - 1}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✨ **Extracted:** `0 / {cl}`\n"
         f"⏩ **Skipped:** `0`\n"
         f"❌ **Failed:** `0`\n"
-        f"⏳ **Status:** Initializing...",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🚀 **Speed:** `Calculating...`\n"
+        f"⏱️ **Elapsed:** `00:00:00`  •  ⏳ **ETA:** `Calculating...`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ _Turbo Mode Active • Zero Delay Extraction_",
         reply_markup=keyboard
     )
     try:
@@ -460,7 +474,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
     fail_count = 0
     skipped_count = 0
     start_time_batch = time.time()
-    last_ui_update = start_time_batch
+    last_ui_update = 0
 
     try:
         # Guarantee userbot initialization for user
@@ -488,19 +502,21 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             save_user_data(user_id, "last_batch_url", url)
             
             try:
-                # Process the message with fresh transient status per item
-                res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
+                # Process the message with silent turbo batch mode (zero spam status messages)
+                res = await get_msg(userbot, user_id, None, link, 0, pin_msg, is_batch=True)
                 if res is True:
                     success_count += 1
                 elif res == "skipped":
                     skipped_count += 1
                 else:
                     fail_count += 1
-                await asyncio.sleep(0.3) 
+                # Micro yield to keep asyncio event loop responsive without delay
+                await asyncio.sleep(0.01)
             except FloodWait as e:
-                await asyncio.sleep(e.value + 2)
+                wait_time = int(getattr(e, 'value', getattr(e, 'seconds', 5))) + 1
+                await asyncio.sleep(wait_time)
                 try:
-                    res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
+                    res = await get_msg(userbot, user_id, None, link, 0, pin_msg, is_batch=True)
                     if res is True:
                         success_count += 1
                     elif res == "skipped":
@@ -516,8 +532,8 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                     try:
                         userbot = await initialize_userbot(user_id)
                         if userbot and getattr(userbot, "is_connected", False):
-                            await asyncio.sleep(1)
-                            res = await get_msg(userbot, user_id, None, link, 0, pin_msg)
+                            await asyncio.sleep(0.5)
+                            res = await get_msg(userbot, user_id, None, link, 0, pin_msg, is_batch=True)
                             if res is True:
                                 success_count += 1
                                 reconnected = True
@@ -529,45 +545,49 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 if not reconnected:
                     fail_count += 1
             
-            # Live progress UI update every 3 seconds
+            # Live progress UI update every 1.5 seconds (or immediately on first/last items)
             now = time.time()
             done = success_count + fail_count + skipped_count
-            if (now - last_ui_update > 3.0) or done == cl:
+            if (now - last_ui_update >= 1.5) or done == cl or done == 1:
                 last_ui_update = now
-                elapsed_time = now - start_time_batch
-                avg_time_per_msg = elapsed_time / done if done > 0 else 1.0
+                elapsed_time = max(0.1, now - start_time_batch)
+                speed = done / elapsed_time
                 remaining_msgs = cl - done
-                eta_seconds = max(0, int(remaining_msgs * avg_time_per_msg))
+                eta_seconds = max(0, int(remaining_msgs / speed)) if speed > 0 else 0
                 eta_str = str(timedelta(seconds=eta_seconds))
-                pct = int((done / cl) * 100) if cl > 0 else 0
-                filled = int(pct / 10)
-                bar = "█" * filled + "░" * (10 - filled)
+                elapsed_str = str(timedelta(seconds=int(elapsed_time)))
+                pct = (done / cl) * 100 if cl > 0 else 0
+                bar = _format_batch_bar(pct, 12)
                 
                 try:
                     await pin_msg.edit_text(
-                        f"🚀 **Batch process in progress...**\n\n"
-                        f"📊 **Progress:** [{bar}] {pct}%\n"
-                        f"✅ **Extracted:** `{success_count}/{cl}`\n"
+                        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖤𝖷𝖳𝖱𝖠𝖢𝖳𝖨𝖮𝖭 𝖨𝖭 𝖯𝖱𝖮𝖦𝖱𝖤𝖲𝖲** ⚡\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 **Progress:** `[{bar}]` **{pct:.1f}%**\n"
+                        f"🎯 **Target ID:** `{i}` / `{cs + cl - 1}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✨ **Extracted:** `{success_count} / {cl}`\n"
                         f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
                         f"❌ **Failed:** `{fail_count}`\n"
-                        f"⏳ **ETA:** `{eta_str}`\n"
-                        f"📍 **Current ID:** `{i}`",
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🚀 **Speed:** `{speed:.1f} msgs/sec`\n"
+                        f"⏱️ **Elapsed:** `{elapsed_str}`  •  ⏳ **ETA:** `{eta_str}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚡ _Turbo Mode Active • Fast Direct Delivery_",
                         reply_markup=keyboard
                     )
                 except Exception:
                     pass
 
-        final_status = "completed" if batch_active_loops.get(user_id) else "stopped"
-        
-        # Clean up temporary status message
-        if status_msg:
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
+        final_status = "Completed" if batch_active_loops.get(user_id) else "Stopped"
+        now = time.time()
+        done = success_count + fail_count + skipped_count
+        total_time_str = str(timedelta(seconds=int(now - start_time_batch)))
+        avg_speed = done / max(0.1, now - start_time_batch)
+        full_bar = "▰" * 12 if final_status == "Completed" else _format_batch_bar((done/cl)*100 if cl>0 else 0, 12)
 
         # If successfully completed, save the next URL index for subsequent batches
-        if final_status == "completed":
+        if final_status == "Completed":
             if is_tg_openmessage:
                 next_url = f"{base_url}&message_id={cs + cl}"
             else:
@@ -575,14 +595,22 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             save_user_data(user_id, "last_batch_url", next_url)
             
         await pin_msg.edit_text(
-            f"✅ **Batch {final_status}!**\n\n"
-            f"✨ **Extracted:** `{success_count}`\n"
+            f"🎉 **𝖡𝖠𝖳𝖢𝖧 {final_status.upper()}!** 🎉\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 **Progress:** `[{full_bar}]` **{(done/cl)*100 if cl>0 else 100:.1f}%**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✨ **Total Extracted:** `{success_count}`\n"
             f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
             f"❌ **Failed:** `{fail_count}`\n"
-            f"📊 **Total Scanned:** `{cl}`",
+            f"📦 **Total Scanned:** `{cl}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏱️ **Total Time:** `{total_time_str}`\n"
+            f"⚡ **Average Speed:** `{avg_speed:.1f} msgs/sec`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ _All content delivered safely!_",
             reply_markup=InlineKeyboardMarkup([[join_button]])
         )
-        await app.send_message(user_id, f"Batch process {final_status}! ✨\nExtracted: {success_count} | Skipped: {skipped_count} | Failed: {fail_count}")
+        await app.send_message(user_id, f"🎉 Batch process {final_status.lower()}! ✨\nExtracted: {success_count} | Skipped: {skipped_count} | Failed: {fail_count}")
         if final_status == "completed" and freecheck == 1:
             upgrade_msg = (
                 "⚡ **𝖴𝗉𝗀𝗋𝖺𝖽𝖾 𝗍𝗈 𝖯𝖱𝖮!** ⚡\n"
