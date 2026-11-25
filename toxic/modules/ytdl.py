@@ -557,7 +557,7 @@ async def split_and_upload_file(app, sender, file_path, caption):
                         thumb=part_thumb if part_thumb and os.path.exists(part_thumb) else None,
                         parse_mode=ParseMode.HTML,
                         progress=progress_bar,
-                        progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                        progress_args=("📤 **__Uploading Media...__**", edit, time.time())
                     )
                 except Exception as vid_err:
                     print(f"[YTDL SPLIT] send_video failed: {vid_err}, falling back to send_document")
@@ -568,7 +568,7 @@ async def split_and_upload_file(app, sender, file_path, caption):
                         thumb=part_thumb if part_thumb and os.path.exists(part_thumb) else None,
                         parse_mode=ParseMode.HTML,
                         progress=progress_bar,
-                        progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                        progress_args=("📤 **__Uploading Media...__**", edit, time.time())
                     )
             else:
                 await app.send_document(
@@ -578,7 +578,7 @@ async def split_and_upload_file(app, sender, file_path, caption):
                     thumb=thumb if thumb and os.path.exists(thumb) else None,
                     parse_mode=ParseMode.HTML,
                     progress=progress_bar,
-                    progress_args=("╭─────────────────────╮\n│      **__Pyro Uploader__**\n├─────────────────────", edit, time.time())
+                    progress_args=("📤 **__Uploading Media...__**", edit, time.time())
                 )
 
             try:

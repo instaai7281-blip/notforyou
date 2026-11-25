@@ -206,51 +206,52 @@ async def get_seconds(time_string):
     else:
         return 0
 PROGRESS_BAR = """
-   ┉━┉━┉━┉┉━┉━┉━┉┉━┉━
->*┋ **__Total Size:⚜️__** {2}
->*┋ **__Completed:✅__** {1}
->*┋ **__Progress:💠__** {0}%
->*┋ **__Speed:🚀__** {3}/s
->*┋ **__ETA:⏳__** {4}\n ╚═══━━━─⚝─━━━═══╝\n\n Now You Can Rest...😉
-"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 **Progress:** `[{5}]` **{0}%**
+📦 **Size:** `{1}` / `{2}`
+🚀 **Speed:** `{3}/s`
+⏳ **ETA:** `{4}`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
 async def progress_bar(current, total, ud_type, message, start):
+    # Skip progress updates for silent batch trackers or invalid messages
+    if not message or getattr(message, "id", None) is None:
+        return
 
     now = time.time()
     diff = now - start
     
-    # Update every 5 seconds or on completion to minimize API overhead
+    # Update every 4 seconds or on completion to minimize API overhead
     if not hasattr(progress_bar, "last_updates"):
         progress_bar.last_updates = {}
             
     msg_id = getattr(message, "id", id(message))
     last_update = progress_bar.last_updates.get(msg_id, 0)
 
-    if (now - last_update) >= 5 or current == total:
+    if (now - last_update) >= 4 or current == total:
         progress_bar.last_updates[msg_id] = now
         percentage = current * 100 / total if total > 0 else 0
         speed = current / diff if diff > 0 else 0
         
-        # Avoid division by zero and handle tiny speeds
         if speed > 0:
             time_to_completion = round((total - current) / speed)
-            estimated_total_time = TimeFormatter(milliseconds=time_to_completion * 1000)
+            estimated_total_time = TimeFormatter(milliseconds=time_to_completion * 1000) or "0s"
         else:
             estimated_total_time = "Calculating..."
 
-        progress = "{0}{1}".format(
-            ''.join(["❤️" for i in range(math.floor(percentage / 10))]),
-            ''.join(["🤍" for i in range(10 - math.floor(percentage / 10))]))
+        filled = max(0, min(12, int(round((percentage / 100.0) * 12))))
+        bar = "▰" * filled + "▱" * (12 - filled)
 
-        tmp = progress + PROGRESS_BAR.format( 
-            round(percentage, 2),
-            humanbytes(current),
-            humanbytes(total),
-            humanbytes(speed),
-            estimated_total_time
+        tmp = PROGRESS_BAR.format( 
+            round(percentage, 1),
+            humanbytes(current) or "0 B",
+            humanbytes(total) or "0 B",
+            humanbytes(speed) or "0 B",
+            estimated_total_time,
+            bar
         )
         try:
-            await message.edit(text=f"{ud_type} {tmp}")
+            await message.edit(text=f"{ud_type}{tmp}")
         except Exception:
             pass
 
