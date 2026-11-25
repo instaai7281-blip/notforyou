@@ -1637,22 +1637,23 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
     except Exception as e:
         print(f"App copy failed: {e}")
 
-    # Fallback to userbot if app copy fails (e.g. bot not in public/private channel)
-    if userbot and getattr(userbot, "is_connected", False):
+    # Fallback to userbot (or shared pro client) if app copy fails (e.g. bot not in public/private channel)
+    fallback_ub = userbot if (userbot and getattr(userbot, "is_connected", False)) else get_client()
+    if fallback_ub and getattr(fallback_ub, "is_connected", False):
         try:
             await edit.edit("⚡ **Fast-extracting via userbot...**")
             
             # Resolve chat_id if it's a username string
             if isinstance(chat_id, str) and not chat_id.startswith("-") and not chat_id.isdigit():
                 try:
-                    chat_entity = await userbot.get_chat(chat_id)
+                    chat_entity = await fallback_ub.get_chat(chat_id)
                     resolved_chat_id = chat_entity.id
                 except Exception:
                     resolved_chat_id = chat_id
             else:
                 resolved_chat_id = chat_id
 
-            msg = await userbot.get_messages(resolved_chat_id, message_id)
+            msg = await fallback_ub.get_messages(resolved_chat_id, message_id)
             if not msg or msg.empty or msg.service:
                 return "skipped"
 
@@ -1697,7 +1698,7 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
                     if caption_html:
                         kwargs["caption"] = caption_html
                         kwargs["parse_mode"] = ParseMode.HTML
-                    copied = await userbot.copy_message(
+                    copied = await fallback_ub.copy_message(
                         chat_id=target_chat_id,
                         from_chat_id=resolved_chat_id,
                         message_id=msg.id,
@@ -1711,7 +1712,7 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
                 # 2. Fast LOG_GROUP Bridge: userbot -> LOG_GROUP -> app.copy_message -> Target Topic/PM (0.2s, 0 download, ALL settings applied!)
                 if LOG_GROUP:
                     try:
-                        bridged = await userbot.copy_message(
+                        bridged = await fallback_ub.copy_message(
                             chat_id=LOG_GROUP,
                             from_chat_id=resolved_chat_id,
                             message_id=msg.id
@@ -1742,15 +1743,15 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             os.makedirs(temp_dir, exist_ok=True)
 
             # Join the chat first to resolve username entity and prevent PeerIdInvalid / ChannelPrivate errors
-            if userbot and isinstance(resolved_chat_id, str) and not resolved_chat_id.startswith("-") and not resolved_chat_id.isdigit():
+            if fallback_ub and isinstance(resolved_chat_id, str) and not resolved_chat_id.startswith("-") and not resolved_chat_id.isdigit():
                 try:
-                    await userbot.join_chat(resolved_chat_id)
+                    await fallback_ub.join_chat(resolved_chat_id)
                 except Exception:
                     pass
 
             target_file_path = os.path.join(temp_dir, filename)
             try:
-                file = await userbot.download_media(
+                file = await fallback_ub.download_media(
                     msg,
                     file_name=target_file_path,
                     progress=progress_bar,
@@ -1759,8 +1760,8 @@ async def copy_message_with_chat_id(app, userbot, sender, chat_id, message_id, e
             except FileReferenceExpired:
                 print("[BULK DOWNLOAD] FileReferenceExpired encountered! Refetching fresh message...")
                 try:
-                    msg = await userbot.get_messages(resolved_chat_id, message_id)
-                    file = await userbot.download_media(
+                    msg = await fallback_ub.get_messages(resolved_chat_id, message_id)
+                    file = await fallback_ub.download_media(
                         msg,
                         file_name=target_file_path,
                         progress=progress_bar,

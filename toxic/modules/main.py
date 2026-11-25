@@ -165,6 +165,7 @@ async def single_link(_, message):
         await msg.edit_text(f"Link: `{link}`\n\n**Error:** {str(e)}")
     finally:
         users_loop[user_id] = False
+        batch_active_loops[user_id] = False
         # Userbot is globally managed by userbot_manager; keep alive
         try:
             await msg.delete()
