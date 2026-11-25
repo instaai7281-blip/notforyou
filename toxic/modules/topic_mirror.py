@@ -6920,7 +6920,8 @@ async def run_channel_to_topics_mirror(
         sent_msg_id = None
         for retry in range(1, 4):
             try:
-                userbot = await ensure_userbot_connected(userbot, user_id)
+                if not userbot or not getattr(userbot, "is_connected", False):
+                    userbot = await ensure_userbot_connected(userbot, user_id)
                 is_gen = (tgt_topic_id == 1)
                 success, method, sent_msg_id = await transfer_single_message(
                     userbot=userbot,
@@ -6940,64 +6941,76 @@ async def run_channel_to_topics_mirror(
                 await asyncio.sleep(fw.value + 1)
             except Exception as trans_err:
                 print(f"[C2T] Transfer msg {msg.id} attempt {retry}/3 failed: {trans_err}")
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.0)
 
         if success:
             copied_count += 1
-            await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
-            try:
-                await mirror_db.update_one(
-                    {"_id": f"{src_chat_id}_{tgt_chat_id}"},
-                    {
-                        "$set": {
-                            "last_msg_id": msg.id,
-                            f"topics.{norm_name}": {
-                                "title": detected_topic_name,
-                                "tgt_topic_id": tgt_topic_id,
-                                "last_msg_id": msg.id
-                            },
-                            "updated_at": datetime.datetime.now()
+            if (copied_count % 5 == 0) or idx == total_msgs:
+                await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+                try:
+                    await mirror_db.update_one(
+                        {"_id": f"{src_chat_id}_{tgt_chat_id}"},
+                        {
+                            "$set": {
+                                "last_msg_id": msg.id,
+                                f"topics.{norm_name}": {
+                                    "title": detected_topic_name,
+                                    "tgt_topic_id": tgt_topic_id,
+                                    "last_msg_id": msg.id
+                                },
+                                "updated_at": datetime.datetime.now()
+                            }
                         }
-                    }
-                )
-            except Exception:
-                pass
+                    )
+                except Exception:
+                    pass
         elif method in ("service_skipped", "skipped_filter"):
             skipped_count += 1
-            await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
+            if (skipped_count % 10 == 0) or idx == total_msgs:
+                await db.save_c2t_checkpoint(src_chat_id, tgt_chat_id, msg.id)
         else:
             failed_count += 1
 
-        # Live Progress update (every 4 seconds)
+        # Live Progress update (every 2 seconds)
         now = time.time()
-        if (now - last_edit_time) >= 4.0 or idx == total_msgs:
+        if (now - last_edit_time) >= 2.0 or idx == total_msgs or idx == 1:
             last_edit_time = now
-            pct = int((idx / total_msgs) * 100)
+            pct = (idx / total_msgs) * 100 if total_msgs > 0 else 0
             bar_len = 10
-            filled = int(bar_len * (idx / total_msgs))
+            filled = max(0, min(bar_len, int(round((pct / 100.0) * bar_len))))
             bar = "▰" * filled + "▱" * (bar_len - filled)
 
-            elapsed = now - start_time
-            speed = idx / elapsed if elapsed > 0 else 0
+            elapsed = max(0.1, now - start_time)
+            speed = idx / elapsed
             rem_msgs = total_msgs - idx
-            eta_secs = int(rem_msgs / speed) if speed > 0 else 0
+            eta_secs = max(0, int(rem_msgs / speed)) if speed > 0 else 0
             eta_str = str(datetime.timedelta(seconds=eta_secs))
+            elapsed_str = str(datetime.timedelta(seconds=int(elapsed)))
+            
+            # Build clickable source message link
+            src_str = str(src_chat_id)
+            if src_str.startswith("-100"):
+                post_link = f"https://t.me/c/{src_str[4:]}/{msg.id}"
+            elif src_str.lstrip("-").isdigit():
+                post_link = f"https://t.me/c/{src_str.lstrip('-')}/{msg.id}"
+            else:
+                post_link = f"https://t.me/{src_str.lstrip('@')}/{msg.id}"
 
             progress_card = (
-                f"<blockquote><b>⚡️ 𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 𝗠𝗜𝗥𝗥𝗢𝗥...</b></blockquote>\n\n"
+                f"⚡ <b>𝗖𝗛𝗔𝗡𝗡𝗘𝗟 ➔ 𝗧𝗢𝗣𝗜𝗖𝗦 𝗠𝗜𝗥𝗥𝗢𝗥</b> ⚡\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"📊 <code>[{bar}]</code> <b>{pct:.1f}%</b>\n"
+                f"🎯 <b>Post:</b> <a href='{post_link}'>#{msg.id}</a>  •  🔢 <code>{idx}/{total_msgs}</code>\n"
+                f"━━━━━━━━━━━━━━━\n"
                 f"📁 <b>Topic:</b> <code>{styled_title}</code>\n"
-                f"📥 <b>Target Group:</b> <code>{tgt_title}</code>\n\n"
-                f"📊 <b>Progress:</b> [{bar}] {pct}%\n"
-                f"🔢 <b>Processed:</b> {idx}/{total_msgs} (Msg #{msg.id})\n"
-                f"✨ <b>Topics Created:</b> <code>{created_topics_count}</code>\n"
-                f"🚀 <b>Speed:</b> <code>{speed:.1f} msg/s</code>\n"
-                f"⏳ <b>ETA:</b> <code>{eta_str}</code>\n\n"
-                f"✅ Copied: {copied_count} | ⏩ Skipped: {skipped_count}\n"
-                f"❌ Failed: {failed_count}"
+                f"✨ <b>Topics:</b> <code>{created_topics_count}</code>  •  ✅ <b>Copied:</b> <code>{copied_count}</code>\n"
+                f"⏩ <b>Skip:</b> <code>{skipped_count}</code>  •  ❌ <b>Fail:</b> <code>{failed_count}</code>\n"
+                f"🚀 <code>{speed:.1f}/s</code>  •  ⏱️ <code>{elapsed_str}</code>  •  ⏳ <code>{eta_str}</code>\n"
+                f"━━━━━━━━━━━━━━━"
             )
             if status_msg:
                 try:
-                    await status_msg.edit(progress_card, parse_mode=ParseMode.HTML, reply_markup=control_kb)
+                    await status_msg.edit(progress_card, parse_mode=ParseMode.HTML, reply_markup=control_kb, disable_web_page_preview=True)
                 except Exception:
                     pass
 

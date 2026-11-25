@@ -430,7 +430,7 @@ async def prompt_resume_batch(user_id, message):
     await execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
 
 
-def _format_batch_bar(pct: float, length: int = 12) -> str:
+def _format_batch_bar(pct: float, length: int = 10) -> str:
     filled = int(round((pct / 100.0) * length))
     filled = max(0, min(length, filled))
     return "▰" * filled + "▱" * (length - filled)
@@ -443,25 +443,22 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         return
 
     join_button = InlineKeyboardButton("📢 Updates Channel", url="https://t.me/+7R-7p7jVoz9mM2M1")
-    stop_button = InlineKeyboardButton("⏹️ Stop Batch", callback_data=f"stop_batch_{user_id}")
+    stop_button = InlineKeyboardButton("🛑 Stop / Cancel Batch", callback_data=f"stop_batch_{user_id}")
     keyboard = InlineKeyboardMarkup([[stop_button], [join_button]])
     
-    init_bar = "▱" * 12
+    init_bar = "▱" * 10
     pin_msg = await app.send_message(
         user_id,
-        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖤𝖷𝖳𝖱𝖠𝖢𝖳𝖨𝖮𝖭 𝖲𝖳𝖠𝖱𝖳𝖤𝖣** ⚡\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 **Progress:** `[{init_bar}]` **0.0%**\n"
-        f"🎯 **Target ID:** `{cs}` / `{cs + cl - 1}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖲𝖳𝖠𝖱𝖳𝖤𝖣** ⚡\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📊 `[{init_bar}]` **0.0%**\n"
+        f"🎯 **ID:** `{cs}` / `{cs + cl - 1}`\n"
+        f"━━━━━━━━━━━━━━━\n"
         f"✨ **Extracted:** `0 / {cl}`\n"
-        f"⏩ **Skipped:** `0`\n"
-        f"❌ **Failed:** `0`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🚀 **Speed:** `Calculating...`\n"
-        f"⏱️ **Elapsed:** `00:00:00`  •  ⏳ **ETA:** `Calculating...`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ _Turbo Mode Active • Zero Delay Extraction_",
+        f"⏩ **Skipped:** `0`  •  ❌ **Failed:** `0`\n"
+        f"🚀 **Speed:** `Starting...`\n"
+        f"⏱️ `00:00:00`  •  ⏳ `Calculating...`\n"
+        f"━━━━━━━━━━━━━━━",
         reply_markup=keyboard
     )
     try:
@@ -558,24 +555,20 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
                 eta_str = str(timedelta(seconds=eta_seconds))
                 elapsed_str = str(timedelta(seconds=int(elapsed_time)))
                 pct = (done / cl) * 100 if cl > 0 else 0
-                bar = _format_batch_bar(pct, 12)
+                bar = _format_batch_bar(pct, 10)
                 clickable_url = url if url.startswith(('http://', 'https://', 'tg://')) else f"https://{url}"
                 
                 try:
                     await pin_msg.edit_text(
-                        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖤𝖷𝖳𝖱𝖠𝖢𝖳𝖨𝖮𝖭 𝖨𝖭 𝖯𝖱𝖮𝖦𝖱𝖤𝖲𝖲** ⚡\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📊 **Progress:** `[{bar}]` **{pct:.1f}%**\n"
-                        f"🎯 **Target ID:** [{i}]({clickable_url}) / `{cs + cl - 1}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚡ **𝖡𝖠𝖳𝖢𝖧 𝖨𝖭 𝖯𝖱𝖮𝖦𝖱𝖤𝖲𝖲** ⚡\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"📊 `[{bar}]` **{pct:.1f}%**\n"
+                        f"🎯 **ID:** [{i}]({clickable_url}) / `{cs + cl - 1}`\n"
+                        f"━━━━━━━━━━━━━━━\n"
                         f"✨ **Extracted:** `{success_count} / {cl}`\n"
-                        f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
-                        f"❌ **Failed:** `{fail_count}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🚀 **Speed:** `{speed:.1f} msgs/sec`\n"
-                        f"⏱️ **Elapsed:** `{elapsed_str}`  •  ⏳ **ETA:** `{eta_str}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"⚡ _Turbo Mode Active • Fast Direct Delivery_",
+                        f"⏩ **Skipped:** `{skipped_count}`  •  ❌ **Failed:** `{fail_count}`\n"
+                        f"🚀 `{speed:.1f}/s`  •  ⏱️ `{elapsed_str}`  •  ⏳ `{eta_str}`\n"
+                        f"━━━━━━━━━━━━━━━",
                         reply_markup=keyboard,
                         disable_web_page_preview=True
                     )
@@ -587,7 +580,7 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
         done = success_count + fail_count + skipped_count
         total_time_str = str(timedelta(seconds=int(now - start_time_batch)))
         avg_speed = done / max(0.1, now - start_time_batch)
-        full_bar = "▰" * 12 if final_status == "Completed" else _format_batch_bar((done/cl)*100 if cl>0 else 0, 12)
+        full_bar = "▰" * 10 if final_status == "Completed" else _format_batch_bar((done/cl)*100 if cl>0 else 0, 10)
 
         # If successfully completed, save the next URL index for subsequent batches
         if final_status == "Completed":
@@ -599,18 +592,14 @@ async def execute_batch(user_id, base_url, cs, cl, is_tg_openmessage, freecheck)
             
         await pin_msg.edit_text(
             f"🎉 **𝖡𝖠𝖳𝖢𝖧 {final_status.upper()}!** 🎉\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **Progress:** `[{full_bar}]` **{(done/cl)*100 if cl>0 else 100:.1f}%**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"✨ **Total Extracted:** `{success_count}`\n"
-            f"⏩ **Skipped (Empty/Deleted):** `{skipped_count}`\n"
-            f"❌ **Failed:** `{fail_count}`\n"
-            f"📦 **Total Scanned:** `{cl}`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ **Total Time:** `{total_time_str}`\n"
-            f"⚡ **Average Speed:** `{avg_speed:.1f} msgs/sec`\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"✅ _All content delivered safely!_",
+            f"━━━━━━━━━━━━━━━\n"
+            f"📊 `[{full_bar}]` **{(done/cl)*100 if cl>0 else 100:.1f}%**\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"✨ **Extracted:** `{success_count}`\n"
+            f"⏩ **Skipped:** `{skipped_count}`  •  ❌ **Failed:** `{fail_count}`\n"
+            f"📦 **Scanned:** `{cl}`  •  ⏱️ `{total_time_str}`\n"
+            f"⚡ **Avg Speed:** `{avg_speed:.1f} msgs/sec`\n"
+            f"━━━━━━━━━━━━━━━",
             reply_markup=InlineKeyboardMarkup([[join_button]])
         )
         await app.send_message(user_id, f"🎉 Batch process {final_status.lower()}! ✨\nExtracted: {success_count} | Skipped: {skipped_count} | Failed: {fail_count}")
@@ -703,7 +692,16 @@ async def stop_batch_callback(_, query):
     
     if user_id in batch_active_loops:
         batch_active_loops[user_id] = False
-        await query.answer("Batch process stopping...", show_alert=True)
+        await query.answer("🛑 Batch stopping immediately...", show_alert=True)
+        try:
+            await query.message.edit_text(
+                "🛑 **Stopping Batch Process...**\n"
+                "━━━━━━━━━━━━━━━\n"
+                "⏳ Finishing current item & saving resume checkpoint...",
+                reply_markup=None
+            )
+        except Exception:
+            pass
     else:
         await query.answer("No active batch process found.", show_alert=True)
 

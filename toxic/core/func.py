@@ -206,12 +206,11 @@ async def get_seconds(time_string):
     else:
         return 0
 PROGRESS_BAR = """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 **Progress:** `[{5}]` **{0}%**
-📦 **Size:** `{1}` / `{2}`
-🚀 **Speed:** `{3}/s`
-⏳ **ETA:** `{4}`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━━
+📊 `[{5}]` **{0}%**
+📦 `{1}` / `{2}`
+🚀 `{3}/s`  •  ⏳ `{4}`
+━━━━━━━━━━━━━━━"""
 
 async def progress_bar(current, total, ud_type, message, start):
     # Skip progress updates for silent batch trackers or invalid messages
@@ -239,8 +238,8 @@ async def progress_bar(current, total, ud_type, message, start):
         else:
             estimated_total_time = "Calculating..."
 
-        filled = max(0, min(12, int(round((percentage / 100.0) * 12))))
-        bar = "▰" * filled + "▱" * (12 - filled)
+        filled = max(0, min(10, int(round((percentage / 100.0) * 10))))
+        bar = "▰" * filled + "▱" * (10 - filled)
 
         tmp = PROGRESS_BAR.format( 
             round(percentage, 1),
