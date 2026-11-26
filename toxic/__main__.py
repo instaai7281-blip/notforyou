@@ -312,6 +312,39 @@ async def schedule_mirror_auto_updates():
         await asyncio.sleep(25)  # Check every 25 seconds for precise matching
 
 
+async def telegram_connection_watchdog():
+    """Self-healing watchdog: detects dead TCP sockets / ConnectionResetError loops and auto-recovers without manual redeploy."""
+    import os
+    from toxic import app
+    consecutive_failures = 0
+    await asyncio.sleep(30)  # Grace period after boot
+    while True:
+        try:
+            await asyncio.wait_for(app.get_me(), timeout=15)
+            if consecutive_failures > 0:
+                print("✅ [Watchdog] Telegram connection recovered!")
+            consecutive_failures = 0
+        except Exception as e:
+            consecutive_failures += 1
+            print(f"⚠️ [Watchdog] Health check failed ({consecutive_failures}/2): {e}")
+            if consecutive_failures >= 2:
+                print("🔄 [Watchdog] Telegram socket stuck! Attempting clean reconnect...")
+                try:
+                    await asyncio.wait_for(app.stop(), timeout=10)
+                except Exception:
+                    pass
+                await asyncio.sleep(2)
+                try:
+                    await asyncio.wait_for(app.start(), timeout=20)
+                    print("✅ [Watchdog] Clean reconnect succeeded!")
+                    consecutive_failures = 0
+                    continue
+                except Exception as rec_err:
+                    print(f"❌ [Watchdog] Reconnect failed ({rec_err}). Triggering clean process restart...")
+                    os._exit(1)
+        await asyncio.sleep(45)
+
+
 async def devggn_boot():
     from toxic import restrict_bot
     await restrict_bot()
@@ -366,6 +399,7 @@ Status: Running Successfully...
     except Exception as vo_boot_err:
         print(f"[Boot] Notice starting view-once listeners: {vo_boot_err}")
     asyncio.create_task(optimized_memory_cleanup())
+    asyncio.create_task(telegram_connection_watchdog())
     # All background auto-discovery and scraping disabled on boot for zero idle overhead & instant manual response
     print("Bot ready for manual commands (Auto-background sync disabled on restart)...")
     await idle()

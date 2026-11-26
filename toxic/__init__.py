@@ -67,10 +67,12 @@ except Exception as e:
     print(f"Failed to patch Pyrogram chunk size: {e}")
 
 # Silence internal MTProto connection and ping noise from flooding the console
-logging.getLogger("pyrogram.connection.connection").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.connection.connection").setLevel(logging.ERROR)
+logging.getLogger("pyrogram.connection.transport.tcp.tcp").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.session.auth").setLevel(logging.WARNING)
 logging.getLogger("pyrogram.dispatcher").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.ERROR)
 logging.getLogger("telethon").setLevel(logging.WARNING)
 
 botStartTime = time.time()
@@ -80,10 +82,10 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=32,
+    workers=16,
     parse_mode=ParseMode.MARKDOWN,
     sleep_threshold=120,
-    max_concurrent_transmissions=8
+    max_concurrent_transmissions=4
 )
 
 # Multi-client pool for balancing
